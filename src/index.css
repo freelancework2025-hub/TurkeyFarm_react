@@ -1,0 +1,124 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Source+Sans+3:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 75 8% 92%;
+    --foreground: 60 44% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 60 44% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 60 44% 11%;
+
+    --primary: 32 57% 25%;
+    --primary-foreground: 75 8% 96%;
+
+    --secondary: 64 19% 57%;
+    --secondary-foreground: 60 44% 11%;
+
+    --muted: 75 8% 86%;
+    --muted-foreground: 188 7% 45%;
+
+    --accent: 47 63% 42%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 37 9% 78%;
+    --input: 37 9% 78%;
+    --ring: 32 57% 25%;
+
+    --radius: 0.5rem;
+
+    --gold: 44 68% 47%;
+    --gold-foreground: 60 44% 11%;
+
+    --olive: 58 47% 30%;
+    --olive-foreground: 75 8% 96%;
+
+    --farm-green: 68 41% 43%;
+    --farm-green-foreground: 0 0% 100%;
+
+    --sky: 207 39% 66%;
+    --sky-foreground: 60 44% 11%;
+
+    --info: 204 28% 75%;
+    --info-foreground: 60 44% 11%;
+
+    --sidebar-background: 32 57% 22%;
+    --sidebar-foreground: 75 8% 92%;
+    --sidebar-primary: 44 68% 47%;
+    --sidebar-primary-foreground: 60 44% 11%;
+    --sidebar-accent: 32 57% 30%;
+    --sidebar-accent-foreground: 75 8% 96%;
+    --sidebar-border: 32 40% 28%;
+    --sidebar-ring: 44 68% 47%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-family: 'Source Sans 3', system-ui, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', serif;
+  }
+}
+
+@layer components {
+  .table-farm {
+    @apply w-full min-w-0 text-sm;
+  }
+
+  .table-farm th {
+    @apply bg-primary text-primary-foreground px-3 py-2.5 text-left font-semibold text-xs uppercase tracking-wider;
+  }
+
+  .table-farm td {
+    @apply px-3 py-2.5 border-b border-border;
+  }
+
+  .table-farm tr:nth-child(even) td {
+    @apply bg-muted/40;
+  }
+
+  .table-farm tr:hover td {
+    @apply bg-accent/10;
+  }
+
+  .table-farm input {
+    @apply w-full bg-transparent border-0 border-b border-transparent focus:border-accent outline-none px-1 py-0.5 text-sm;
+  }
+
+  .table-farm input:focus {
+    @apply bg-card;
+  }
+
+  .stat-card {
+    @apply bg-card rounded-lg border border-border p-4 shadow-sm hover:shadow-md transition-shadow;
+  }
+
+  .page-header {
+    @apply mb-6 pb-4 border-b border-border;
+  }
+
+  .page-header h1 {
+    @apply text-2xl font-bold text-foreground;
+  }
+
+  .page-header p {
+    @apply text-muted-foreground mt-1;
+  }
+}
