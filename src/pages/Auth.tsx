@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import farmHero from "@/assets/farm-hero.jpg";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse, LOGIN_ROLES } from "@/lib/api";
@@ -7,7 +7,6 @@ import { Building2, ChevronDown, UserCog } from "lucide-react";
 
 export default function Auth() {
   const navigate = useNavigate();
-  const location = useLocation();
   const { user, login, error, loading } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -50,10 +49,9 @@ export default function Auth() {
 
   useEffect(() => {
     if (!loading && user) {
-      const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/dashboard";
-      navigate(from, { replace: true });
+      navigate("/dashboard", { replace: true });
     }
-  }, [user, loading, navigate, location.state]);
+  }, [user, loading, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,8 +63,7 @@ export default function Auth() {
     }
     try {
       await login(username.trim(), password, selectedRole, requiresFarm ? selectedFarmId : null);
-      const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/dashboard";
-      navigate(from, { replace: true });
+      navigate("/dashboard", { replace: true });
     } catch {
       // error is set in context
     }
@@ -262,11 +259,14 @@ export default function Auth() {
                 </div>
               )}
               
-              {/* All-farms mode message for ADMINISTRATEUR */}
-              {selectedRole === 'ADMINISTRATEUR' && !requiresFarm && (
+              {/* All-farms mode message for roles that can access all farms */}
+              {(selectedRole === 'ADMINISTRATEUR' || selectedRole === 'RESPONSABLE_TECHNIQUE' || selectedRole === 'BACKOFFICE_EMPLOYER') && !requiresFarm && (
                 <div className="p-3 bg-primary/10 rounded-md border border-primary/20">
                   <p className="text-sm text-primary">
-                    <strong>Mode toutes fermes:</strong> En tant qu'Administrateur, vous aurez accès aux données de toutes les fermes.
+                    <strong>Mode toutes fermes:</strong> Vous aurez accès aux données de toutes les fermes.
+                    {selectedRole === 'BACKOFFICE_EMPLOYER' && (
+                      <span className="block mt-1 text-xs text-muted-foreground">(Lecture seule)</span>
+                    )}
                   </p>
                 </div>
               )}
@@ -321,9 +321,10 @@ export default function Auth() {
                 </p>
               )}
               
-              {selectedRole === 'ADMINISTRATEUR' && !requiresFarm && (
+              {(selectedRole === 'ADMINISTRATEUR' || selectedRole === 'RESPONSABLE_TECHNIQUE' || selectedRole === 'BACKOFFICE_EMPLOYER') && !requiresFarm && (
                 <p className="text-xs text-center text-muted-foreground">
                   Vous accéderez aux données de <strong>toutes les fermes</strong>
+                  {selectedRole === 'BACKOFFICE_EMPLOYER' && ' (lecture seule)'}
                 </p>
               )}
             </form>

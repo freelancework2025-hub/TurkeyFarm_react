@@ -101,8 +101,8 @@ export interface RegisterRequest {
  */
 export const LOGIN_ROLES = [
   { value: 'ADMINISTRATEUR', label: 'Administrateur', requiresFarm: false },
-  { value: 'RESPONSABLE_TECHNIQUE', label: 'Responsable Technique', requiresFarm: true },
-  { value: 'BACKOFFICE_EMPLOYER', label: 'Backoffice', requiresFarm: true },
+  { value: 'RESPONSABLE_TECHNIQUE', label: 'Responsable Technique', requiresFarm: false },
+  { value: 'BACKOFFICE_EMPLOYER', label: 'Backoffice', requiresFarm: false },
   { value: 'RESPONSABLE_FERME', label: 'Responsable de Ferme', requiresFarm: true },
 ] as const;
 
@@ -191,6 +191,20 @@ export const api = {
       }),
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/users/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+    /** Upload profile image (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE only). */
+    uploadProfileImage: async (id: number, file: File, token?: string | null): Promise<UserResponse> => {
+      const t = token ?? getStoredToken();
+      const url = `${getApiBase()}/api/users/${id}/profile-image`;
+      const headers: HeadersInit = t ? { Authorization: `Bearer ${t}` } : {};
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(url, { method: "POST", headers, body: formData, credentials: "include" });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(res.status === 401 ? "Unauthorized" : text || `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<UserResponse>;
+    },
   },
   roles: {
     list: (token?: string | null) =>
@@ -200,6 +214,76 @@ export const api = {
     /** List farms (requires authentication) */
     list: (token?: string | null) =>
       apiFetch<FarmResponse[]>("/api/farms", { token: token ?? getStoredToken() }),
+  },
+  /** Effectif mis en place (placement) — optional farmId for Admin/RT to view/create for a specific farm */
+  placements: {
+    list: (farmId?: number | null, token?: string | null) =>
+      apiFetch<PlacementResponse[]>(
+        farmId != null ? `/api/placements?farmId=${farmId}` : "/api/placements",
+        { token: token ?? getStoredToken() }
+      ),
+    createBatch: (body: PlacementRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<PlacementResponse[]>(
+        farmId != null ? `/api/placements/batch?farmId=${farmId}` : "/api/placements/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Reporting journalier (daily report) — optional farmId for Admin/RT/Backoffice to view/create for a specific farm */
+  dailyReports: {
+    list: (farmId?: number | null, token?: string | null) =>
+      apiFetch<DailyReportResponse[]>(
+        farmId != null ? `/api/daily-reports?farmId=${farmId}` : "/api/daily-reports",
+        { token: token ?? getStoredToken() }
+      ),
+    createBatch: (body: DailyReportRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<DailyReportResponse[]>(
+        farmId != null ? `/api/daily-reports/batch?farmId=${farmId}` : "/api/daily-reports/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Sorties Ferme — optional farmId for Admin/RT/Backoffice to view/create for a specific farm */
+  sorties: {
+    list: (farmId?: number | null, token?: string | null) =>
+      apiFetch<SortieResponse[]>(
+        farmId != null ? `/api/sorties?farmId=${farmId}` : "/api/sorties",
+        { token: token ?? getStoredToken() }
+      ),
+    createBatch: (body: SortieRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<SortieResponse[]>(
+        farmId != null ? `/api/sorties/batch?farmId=${farmId}` : "/api/sorties/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/sorties/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Fournisseurs — Prix d'Aliment grid; optional farmId for Admin/RT/Backoffice */
+  fournisseurs: {
+    getGrid: (farmId?: number | null, token?: string | null) =>
+      apiFetch<FournisseurGridResponse>(
+        farmId != null ? `/api/fournisseurs/grid?farmId=${farmId}` : "/api/fournisseurs/grid",
+        { token: token ?? getStoredToken() }
+      ),
+    saveGrid: (body: FournisseurGridRequest, farmId?: number | null, token?: string | null) =>
+      apiFetch<FournisseurGridResponse>(
+        farmId != null ? `/api/fournisseurs/grid?farmId=${farmId}` : "/api/fournisseurs/grid",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
   },
 };
 
@@ -222,6 +306,10 @@ export interface UserResponse {
   displayName?: string;
   email?: string;
   phoneNumber?: string;
+  /** Profile image path (use profile image API to load with auth) */
+  profileImageUrl?: string | null;
+  /** True when user has a profile image (avoids 404 if you only request when true) */
+  hasProfileImage?: boolean;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -239,10 +327,135 @@ export interface UserRequest {
   displayName?: string;
   email?: string;
   phoneNumber?: string;
+  profileImageUrl?: string | null;
   enabled: boolean;
   roleNames?: string[];
   /** @deprecated Use farmIds for multiple farm assignment */
   farmId?: number | null;
   /** Farm IDs to assign (for RESPONSABLE_FERME: required, for others: optional) */
   farmIds?: number[] | null;
+}
+
+/** Effectif mis en place — request (farm is set from JWT on backend) */
+export interface PlacementRequest {
+  lot: string;
+  placementDate: string;
+  building: string;
+  sex: string;
+  initialCount: number;
+}
+
+export interface PlacementResponse {
+  id: number;
+  farmId: number;
+  lot: string;
+  placementDate: string;
+  building: string;
+  sex: string;
+  initialCount: number;
+  createdAt: string;
+}
+
+/** Reporting journalier — request (farm is set from JWT on backend) */
+export interface DailyReportRequest {
+  reportDate: string;
+  ageJour?: number | null;
+  semaine?: number | null;
+  building: string;
+  designation: string;
+  nbr: number;
+  waterL?: number | null;
+  tempMin?: number | null;
+  tempMax?: number | null;
+  traitement?: string | null;
+  verified: boolean;
+}
+
+export interface DailyReportResponse {
+  id: number;
+  farmId: number;
+  reportDate: string;
+  ageJour?: number | null;
+  semaine?: number | null;
+  building: string;
+  designation: string;
+  nbr: number;
+  waterL?: number | null;
+  tempMin?: number | null;
+  tempMax?: number | null;
+  traitement?: string | null;
+  verified: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Sorties Ferme — request (farm from JWT or optional farmId for Admin/RT) */
+export interface SortieRequest {
+  date?: string | null;
+  semaine?: number | null;
+  lot?: string | null;
+  client?: string | null;
+  num_bl?: string | null;
+  type?: string | null;
+  designation?: string | null;
+  nbre_dinde?: number | null;
+  qte_brute_kg?: number | null;
+  prix_kg?: number | null;
+  montant_ttc?: number | null;
+}
+
+export interface SortieResponse {
+  id: number;
+  farmId: number;
+  date: string;
+  semaine?: number | null;
+  lot?: string | null;
+  client?: string | null;
+  num_bl?: string | null;
+  type?: string | null;
+  designation?: string | null;
+  nbre_dinde?: number | null;
+  qte_brute_kg?: number | null;
+  prix_kg?: number | null;
+  montant_ttc?: number | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Fournisseurs — Prix d'Aliment grid */
+export interface FournisseurItemResponse {
+  id: number;
+  name: string;
+}
+
+export interface AlimentPriceRowResponse {
+  fournisseurId: number;
+  designation: string;
+  price_kg?: number | null;
+}
+
+export interface FournisseurGridResponse {
+  fournisseurs: FournisseurItemResponse[];
+  designations: string[];
+  prices: AlimentPriceRowResponse[];
+}
+
+export interface FournisseurItemRequest {
+  id?: number | null;
+  name: string;
+}
+
+export interface AlimentPriceCellRequest {
+  fournisseur_index: number;
+  designation_index: number;
+  /** Omit or null for empty cells so they stay empty until user fills and saves */
+  price_kg: number | null;
+}
+
+export interface FournisseurGridRequest {
+  fournisseurs: FournisseurItemRequest[];
+  designations: string[];
+  prices: AlimentPriceCellRequest[];
 }

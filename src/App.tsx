@@ -11,6 +11,7 @@ import ReportingJournalier from "./pages/ReportingJournalier";
 import SortiesFerme from "./pages/SortiesFerme";
 import Fournisseurs from "./pages/Fournisseurs";
 import Utilisateurs from "./pages/Utilisateurs";
+import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -67,6 +68,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Utilisateurs />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/profil"
+              element={
+                <ProtectedRoute>
+                  <Profile />
                 </ProtectedRoute>
               }
             />

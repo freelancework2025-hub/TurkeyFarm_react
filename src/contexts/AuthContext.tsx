@@ -94,6 +94,12 @@ type AuthContextValue = AuthState & {
    */
   hasFullAccess: boolean;
   
+  /**
+   * True if user can access all farms (ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, or BACKOFFICE_EMPLOYER).
+   * These roles can view data from any farm without being assigned to it.
+   */
+  canAccessAllFarms: boolean;
+  
   /** 
    * True if user is read-only (BACKOFFICE_EMPLOYER).
    * Cannot create, update, or delete any data.
@@ -356,6 +362,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Read-only: BACKOFFICE_EMPLOYER
    */
   const isReadOnly = isBackofficeEmployer;
+  
+  /**
+   * Can access all farms: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, BACKOFFICE_EMPLOYER
+   * These roles can view data from any farm without being assigned to it.
+   */
+  const canAccessAllFarms = hasFullAccess || isBackofficeEmployer;
 
   // Selected farm from session (primary)
   const selectedFarmId = state.selectedFarm?.id ?? null;
@@ -381,6 +393,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canUpdate,
       canDelete,
       hasFullAccess,
+      canAccessAllFarms,
       isReadOnly,
       isResponsableFerme,
       isBackofficeEmployer,
@@ -389,7 +402,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }),
     [
       state, login, logout, isUserManager, selectedFarmId, selectedFarmName, farmId, farmName,
-      canCreate, canUpdate, canDelete, hasFullAccess, isReadOnly,
+      canCreate, canUpdate, canDelete, hasFullAccess, canAccessAllFarms, isReadOnly,
       isResponsableFerme, isBackofficeEmployer, isAdministrateur, isResponsableTechnique
     ]
   );

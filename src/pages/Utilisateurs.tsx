@@ -2,8 +2,9 @@ import AppLayout from "@/components/layout/AppLayout";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type UserResponse, type UserRequest, type RoleResponse, type FarmResponse } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { Plus, Pencil, Trash2, ShieldAlert } from "lucide-react";
+import { useRef, useState } from "react";
+import { Plus, Pencil, Trash2, ShieldAlert, Camera, Loader2, User } from "lucide-react";
+import { UserAvatar } from "@/components/UserAvatar";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -50,11 +51,11 @@ const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: "BACKOFFICE_EMPLOYER", label: "Employé Back-office" },
 ];
 
-function useUsers(isUserManager: boolean, user: { id: number } | null) {
+function useUsers(isUserManager: boolean, user: { id: number } | null, authLoading: boolean) {
   return useQuery({
     queryKey: ["users", user?.id],
     queryFn: () => api.users.list(),
-    enabled: !!user && isUserManager,
+    enabled: !authLoading && !!user && isUserManager,
   });
 }
 
@@ -76,16 +77,21 @@ function useFarms(user: { id: number } | null, isUserManager: boolean) {
 }
 
 export default function Utilisateurs() {
-  const { user, isUserManager, isAdmin } = useAuth();
+  const { user, isUserManager, isAdmin, loading: authLoading } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { data: users = [], isLoading, error } = useUsers(isUserManager, user);
+  const { data: users = [], isLoading, error } = useUsers(isUserManager, user, authLoading);
   useRoles(user);
   const { data: farms = [], isLoading: farmsLoading, error: farmsError, refetch: refetchFarms } = useFarms(user, isUserManager);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<UserResponse | null>(null);
+  const [profileImageRefreshKey, setProfileImageRefreshKey] = useState(0);
+  const profileFileInputRef = useRef<HTMLInputElement>(null);
+  const createProfileFileRef = useRef<File | null>(null);
+  const [createProfilePreview, setCreateProfilePreview] = useState<string | null>(null);
+  const [uploadingProfile, setUploadingProfile] = useState(false);
   const [form, setForm] = useState<UserRequest & { password?: string; selectedFarmIds?: number[] }>({
     username: "",
     password: "",
@@ -101,6 +107,8 @@ export default function Utilisateurs() {
 
   const resetForm = () => {
     setEditingUser(null);
+    createProfileFileRef.current = null;
+    setCreateProfilePreview(null);
     setForm({
       username: "",
       password: "",
@@ -119,9 +127,20 @@ export default function Utilisateurs() {
 
   const createMutation = useMutation({
     mutationFn: (body: UserRequest) => api.users.create(body),
-    onSuccess: () => {
+    onSuccess: async (newUser) => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
-      toast({ title: "Utilisateur créé" });
+      const file = createProfileFileRef.current;
+      if (file && newUser?.id) {
+        try {
+          await api.users.uploadProfileImage(newUser.id, file);
+          toast({ title: "Utilisateur créé avec photo" });
+        } catch (err) {
+          toast({ title: "Utilisateur créé", description: "La photo n'a pas pu être enregistrée.", variant: "destructive" });
+        }
+        createProfileFileRef.current = null;
+      } else {
+        toast({ title: "Utilisateur créé" });
+      }
       setDialogOpen(false);
       resetForm();
     },
@@ -254,6 +273,7 @@ export default function Utilisateurs() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-12">Photo</TableHead>
                 <TableHead>Identifiant</TableHead>
                 <TableHead>Nom</TableHead>
                 <TableHead>Email</TableHead>
@@ -274,6 +294,9 @@ export default function Utilisateurs() {
                 
                 return (
                   <TableRow key={u.id}>
+                    <TableCell>
+                      <UserAvatar userId={u.id} hasProfileImage={u.hasProfileImage} size="sm" />
+                    </TableCell>
                     <TableCell className="font-medium">{u.username}</TableCell>
                     <TableCell>{u.displayName ?? "—"}</TableCell>
                     <TableCell>{u.email ?? "—"}</TableCell>
@@ -330,6 +353,98 @@ export default function Utilisateurs() {
           </DialogHeader>
           <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
             <div className="overflow-y-auto flex-1 min-h-0 px-6 py-2 space-y-4">
+            {isUserManager && (
+              <div className="flex items-center gap-4 pb-2 border-b border-border">
+                {editingUser ? (
+                  <>
+                    <UserAvatar userId={editingUser.id} hasProfileImage={editingUser.hasProfileImage} refreshKey={profileImageRefreshKey} size="lg" />
+                    <div>
+                      <p className="text-sm font-medium">Photo de profil</p>
+                      <input
+                        ref={profileFileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file || !editingUser) return;
+                          setUploadingProfile(true);
+                          try {
+                            await api.users.uploadProfileImage(editingUser.id, file);
+                            setProfileImageRefreshKey((k) => k + 1);
+                            queryClient.invalidateQueries({ queryKey: ["users"] });
+                            toast({ title: "Photo mise à jour" });
+                          } catch (err) {
+                            toast({
+                              title: "Erreur",
+                              description: err instanceof Error ? err.message : "Impossible de mettre à jour la photo.",
+                              variant: "destructive",
+                            });
+                          } finally {
+                            setUploadingProfile(false);
+                            e.target.value = "";
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => profileFileInputRef.current?.click()}
+                        disabled={uploadingProfile}
+                      >
+                        {uploadingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+                        {" "}Changer la photo
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-12 h-12 rounded-full overflow-hidden bg-muted border border-border flex items-center justify-center shrink-0">
+                      {createProfilePreview ? (
+                        <img src={createProfilePreview} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <User className="w-6 h-6 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Photo de profil (optionnel)</p>
+                      <input
+                        ref={profileFileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          createProfileFileRef.current = file ?? null;
+                          if (file) {
+                            const url = URL.createObjectURL(file);
+                            setCreateProfilePreview((prev) => {
+                              if (prev) URL.revokeObjectURL(prev);
+                              return url;
+                            });
+                          } else {
+                            setCreateProfilePreview((prev) => {
+                              if (prev) URL.revokeObjectURL(prev);
+                              return null;
+                            });
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => profileFileInputRef.current?.click()}
+                      >
+                        <Camera className="w-4 h-4" />
+                        {" "}{createProfilePreview ? "Changer la photo" : "Ajouter une photo"}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <div>
               <Label>Identifiant (ou laisser vide pour utiliser l’email)</Label>
               <Input

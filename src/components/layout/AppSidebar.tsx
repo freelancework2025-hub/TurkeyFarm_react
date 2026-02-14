@@ -3,10 +3,11 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   LayoutDashboard,
-  FileText,
+  Wallet,
+  ClipboardList,
   TruckIcon,
-  PackageOpen,
   Users,
+  User,
   ChevronDown,
   ChevronRight,
   LogOut,
@@ -23,10 +24,9 @@ const NAV_SECTIONS = [
     path: "/dashboard",
   },
   {
-    label: "Entrées Ferme",
-    icon: FileText,
+    label: "Suivi charge",
+    icon: Wallet,
     children: [
-      { label: "Reporting Journalier", path: "/reporting-journalier" },
       { label: "Livraisons Aliment", path: "/livraisons-aliment" },
       { label: "Produits Vétérinaires", path: "/produits-veterinaires" },
       { label: "Produits Hygiène", path: "/produits-hygiene" },
@@ -35,23 +35,33 @@ const NAV_SECTIONS = [
       { label: "Main d'Œuvre", path: "/main-oeuvre" },
       { label: "Livraisons Gaz", path: "/livraisons-gaz" },
       { label: "Dépenses Divers", path: "/depenses-divers" },
+      { label: "Fournisseurs", path: "/fournisseurs" },
+    ],
+  },
+  {
+    label: "Suivi technique",
+    icon: ClipboardList,
+    children: [
+      { label: "Reporting Journalier", path: "/reporting-journalier" },
       { label: "Suivi Technique Hebdo", path: "/suivi-technique" },
     ],
   },
   {
-    label: "Sorties Ferme",
+    label: "Suivi de sortie",
     icon: TruckIcon,
-    path: "/sorties-ferme",
-  },
-  {
-    label: "Fournisseurs",
-    icon: PackageOpen,
-    path: "/fournisseurs",
+    children: [
+      { label: "Sorties Ferme", path: "/sorties-ferme" },
+    ],
   },
   {
     label: "Gestion Utilisateurs",
     icon: Users,
     path: "/utilisateurs",
+  },
+  {
+    label: "Profil",
+    icon: User,
+    path: "/profil",
   },
 ];
 
@@ -59,7 +69,7 @@ export default function AppSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout, isUserManager } = useAuth();
-  const [openSections, setOpenSections] = useState<string[]>(["Entrées Ferme"]);
+  const [openSections, setOpenSections] = useState<string[]>(["Suivi charge", "Suivi technique", "Suivi de sortie"]);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
