@@ -8,6 +8,7 @@ import {
   TruckIcon,
   Users,
   User,
+  UserCircle2,
   ChevronDown,
   ChevronRight,
   LogOut,
@@ -16,6 +17,16 @@ import {
   PanelLeftClose,
   PanelLeft,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const NAV_SECTIONS = [
   {
@@ -68,17 +79,25 @@ const NAV_SECTIONS = [
 export default function AppSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { logout, isUserManager } = useAuth();
+  const { logout, isUserManager, hasFullAccess, isBackofficeEmployer } = useAuth();
+  const showEmployesLink = hasFullAccess || isBackofficeEmployer;
   const [openSections, setOpenSections] = useState<string[]>(["Suivi charge", "Suivi technique", "Suivi de sortie"]);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
 
   const navSections = NAV_SECTIONS.filter(
     (s) => s.path !== "/utilisateurs" || isUserManager
   );
 
-  const handleLogout = () => {
+  const openLogoutDialog = () => {
+    setMobileOpen(false);
+    setLogoutDialogOpen(true);
+  };
+
+  const confirmLogout = () => {
     logout();
+    setLogoutDialogOpen(false);
     navigate("/auth", { replace: true });
   };
 
@@ -198,11 +217,32 @@ export default function AppSidebar() {
         })}
       </nav>
 
+      {/* Bottom links: Liste des employés (Admin / RT / Backoffice only) */}
+      {showEmployesLink && (
+        <div className={`flex-shrink-0 border-t border-sidebar-border ${collapsed ? "px-2 py-2" : "px-3 py-2"}`}>
+          <Link
+            to="/employes"
+            onClick={() => setMobileOpen(false)}
+            className={`flex items-center gap-3 rounded-md text-sm font-medium transition-colors ${
+              collapsed ? "justify-center px-2 py-2" : "px-3 py-2"
+            } ${
+              location.pathname === "/employes"
+                ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+            }`}
+            title={collapsed ? "Liste des employés" : undefined}
+          >
+            <UserCircle2 className="w-4 h-4 shrink-0" />
+            {!collapsed && <span>Liste des employés</span>}
+          </Link>
+        </div>
+      )}
+
       {/* Footer - fixed at bottom so nav can scroll (zoom > 90%) */}
       <div className={`flex-shrink-0 py-4 border-t border-sidebar-border ${collapsed ? "px-2" : "px-3"}`}>
         <button
           type="button"
-          onClick={handleLogout}
+          onClick={openLogoutDialog}
           className={`w-full flex items-center gap-3 rounded-md text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50 transition-colors ${collapsed ? "justify-center px-2 py-2" : "px-3 py-2"}`}
           title={collapsed ? "Déconnexion" : undefined}
         >
@@ -239,6 +279,25 @@ export default function AppSidebar() {
       >
         {sidebarContent}
       </aside>
+
+      {/* Logout confirmation */}
+      <AlertDialog open={logoutDialogOpen} onOpenChange={setLogoutDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Déconnexion</AlertDialogTitle>
+            <AlertDialogDescription>
+              Voulez-vous vraiment vous déconnecter ? Vous devrez vous reconnecter pour accéder à l&apos;application.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <Button variant="default" onClick={confirmLogout} className="gap-2">
+              <LogOut className="w-4 h-4" />
+              Déconnexion
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Plus, Save, Tag, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse, type SortieResponse } from "@/lib/api";
@@ -56,8 +57,10 @@ interface SortieRow {
 export default function SortiesFerme() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
+  const lotParam = searchParams.get("lot") ?? "";
   const selectedFarmId = farmIdParam ? parseInt(farmIdParam, 10) : null;
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
+  const hasLotInUrl = lotParam.trim() !== "";
 
   const {
     isAdministrateur,
@@ -68,12 +71,15 @@ export default function SortiesFerme() {
     canCreate,
     canUpdate,
     canDelete,
+    selectedFarmId: authSelectedFarmId,
   } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
-  const pageFarmId = isValidFarmId ? selectedFarmId : undefined;
+  const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
   const [farms, setFarms] = useState<FarmResponse[]>([]);
   const [farmsLoading, setFarmsLoading] = useState(showFarmSelector);
+  const [lots, setLots] = useState<string[]>([]);
+  const [lotsLoading, setLotsLoading] = useState(false);
   const [rows, setRows] = useState<SortieRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -90,17 +96,27 @@ export default function SortiesFerme() {
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
 
+  useEffect(() => {
+    if (showFarmSelector || !pageFarmId || hasLotInUrl) return;
+    setLotsLoading(true);
+    api.farms
+      .lots(pageFarmId)
+      .then((list) => setLots(list ?? []))
+      .catch(() => setLots([]))
+      .finally(() => setLotsLoading(false));
+  }, [showFarmSelector, pageFarmId, hasLotInUrl]);
+
   const selectFarm = useCallback(
     (id: number) => setSearchParams({ farmId: String(id) }),
     [setSearchParams]
   );
   const clearFarmSelection = useCallback(() => setSearchParams({}), [setSearchParams]);
 
-  const emptyRow = (): SortieRow => ({
+  const emptyRow = (lotPreFill?: string): SortieRow => ({
     id: crypto.randomUUID(),
     semaine: "",
     date: today,
-    lot: "",
+    lot: lotPreFill ?? "",
     client: "",
     num_bl: "",
     type: TYPES[0],
@@ -112,10 +128,10 @@ export default function SortiesFerme() {
   });
 
   const loadSorties = useCallback(async () => {
-    if (showFarmSelector) return;
+    if (showFarmSelector || !hasLotInUrl) return;
     setLoading(true);
     try {
-      const list = await api.sorties.list(pageFarmId ?? undefined);
+      const list = await api.sorties.list({ farmId: pageFarmId ?? undefined, lot: lotParam.trim() || undefined });
       const mapped: SortieRow[] = list.map((r: SortieResponse) => ({
         id: crypto.randomUUID(),
         serverId: r.id,
@@ -131,18 +147,18 @@ export default function SortiesFerme() {
         prix_kg: r.prix_kg != null ? String(r.prix_kg) : "",
         montant_ttc: r.montant_ttc != null ? String(r.montant_ttc) : "",
       }));
-      setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, emptyRow()] : [emptyRow()]));
+      setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, emptyRow(lotParam.trim())] : [emptyRow(lotParam.trim())]));
     } catch (e) {
       toast({
         title: "Erreur",
         description: e instanceof Error ? e.message : "Impossible de charger les sorties.",
         variant: "destructive",
       });
-      setRows(canCreate ? [emptyRow()] : []);
+      setRows(canCreate ? [emptyRow(lotParam.trim())] : []);
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, isReadOnly, canCreate, toast]);
+  }, [showFarmSelector, pageFarmId, hasLotInUrl, lotParam, isReadOnly, canCreate, toast]);
 
   useEffect(() => {
     loadSorties();
@@ -150,7 +166,7 @@ export default function SortiesFerme() {
 
   const addRow = () => {
     if (!canCreate) return;
-    setRows((prev) => [...prev, emptyRow()]);
+    setRows((prev) => [...prev, emptyRow(lotParam.trim())]);
   };
 
   const removeRow = (id: string) => {
@@ -293,6 +309,32 @@ export default function SortiesFerme() {
             </button>
           )}
 
+          {!hasLotInUrl ? (
+            <LotSelectorView
+              existingLots={lots}
+              loading={lotsLoading}
+              onSelectLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
+              onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
+              canCreate={canCreate}
+              title="Choisir un lot — Sorties Ferme"
+              emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
+            />
+          ) : (
+            <>
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <Tag className="w-4 h-4 text-muted-foreground" />
+              Lot : <strong>{lotParam}</strong>
+            </span>
+            <button
+              type="button"
+              onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de lot
+            </button>
+          </div>
+
           <div className="space-y-6 w-full min-w-0">
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border">
@@ -423,6 +465,8 @@ export default function SortiesFerme() {
               </div>
             </div>
           </div>
+            </>
+          )}
         </>
       )}
     </AppLayout>

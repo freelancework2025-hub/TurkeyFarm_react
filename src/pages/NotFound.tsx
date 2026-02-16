@@ -1,4 +1,4 @@
-import { useLocation } from "react-router-dom";
+import { useLocation, Navigate } from "react-router-dom";
 import { useEffect } from "react";
 
 const NotFound = () => {
@@ -7,6 +7,12 @@ const NotFound = () => {
   useEffect(() => {
     console.error("404 Error: User attempted to access non-existent route:", location.pathname);
   }, [location.pathname]);
+
+  // If URL has a trailing slash, redirect to the same path without it (React Router path="/x" doesn't match "/x/")
+  if (location.pathname.length > 1 && location.pathname.endsWith("/")) {
+    const withoutSlash = location.pathname.replace(/\/+$/, "");
+    return <Navigate to={withoutSlash + (location.search || "")} replace />;
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted">

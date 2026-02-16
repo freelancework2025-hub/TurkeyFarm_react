@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Building2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import LotSelectorView from "@/components/lot/LotSelectorView";
 import EffectifMisEnPlace from "@/components/reporting/EffectifMisEnPlace";
 import DailyReportTable from "@/components/reporting/DailyReportTable";
 import SavedDaysOverview from "@/components/reporting/SavedDaysOverview";
@@ -11,15 +12,19 @@ import { api, type FarmResponse } from "@/lib/api";
 export default function ReportingJournalier() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
+  const lotParam = searchParams.get("lot") ?? "";
   const selectedFarmId = farmIdParam ? parseInt(farmIdParam, 10) : null;
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
+  const hasLotInUrl = lotParam.trim() !== "";
 
-  const { isAdministrateur, isResponsableTechnique, isBackofficeEmployer, canAccessAllFarms, isReadOnly } = useAuth();
+  const { isAdministrateur, isResponsableTechnique, isBackofficeEmployer, canAccessAllFarms, isReadOnly, selectedFarmId: authSelectedFarmId } = useAuth();
   // Admin, Responsable technique and Backoffice: see farm list first; on click, only that farm's data is shown.
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
 
   const [farms, setFarms] = useState<FarmResponse[]>([]);
   const [farmsLoading, setFarmsLoading] = useState(showFarmSelector);
+  const [lots, setLots] = useState<string[]>([]);
+  const [lotsLoading, setLotsLoading] = useState(false);
 
   const [viewMode, setViewMode] = useState<"overview" | "form">("overview");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -35,6 +40,18 @@ export default function ReportingJournalier() {
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
+
+  const reportingFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
+
+  useEffect(() => {
+    if (showFarmSelector || !reportingFarmId || hasLotInUrl) return;
+    setLotsLoading(true);
+    api.farms
+      .lots(reportingFarmId)
+      .then((list) => setLots(list ?? []))
+      .catch(() => setLots([]))
+      .finally(() => setLotsLoading(false));
+  }, [showFarmSelector, reportingFarmId, hasLotInUrl]);
 
   const selectFarm = useCallback(
     (id: number) => {
@@ -61,8 +78,6 @@ export default function ReportingJournalier() {
     setViewMode("overview");
     setSelectedDate(null);
   };
-
-  const reportingFarmId = isValidFarmId ? selectedFarmId : undefined;
 
   return (
     <AppLayout>
@@ -127,6 +142,29 @@ export default function ReportingJournalier() {
             </button>
           )}
 
+          {!hasLotInUrl ? (
+            <LotSelectorView
+              existingLots={lots}
+              loading={lotsLoading}
+              onSelectLot={(lot) => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot })}
+              onNewLot={(lot) => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot })}
+              canCreate={!isReadOnly}
+              title="Choisir un lot — Reporting Journalier"
+              emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
+            />
+          ) : (
+            <>
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <span className="text-sm font-medium">Lot : <strong>{lotParam}</strong></span>
+            <button
+              type="button"
+              onClick={() => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId) } : {})}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de lot
+            </button>
+          </div>
+
           {viewMode === "overview" ? (
             <div className="space-y-6">
               <SavedDaysOverview
@@ -152,6 +190,8 @@ export default function ReportingJournalier() {
                 farmId={reportingFarmId}
               />
             </div>
+          )}
+            </>
           )}
         </>
       )}

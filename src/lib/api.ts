@@ -214,6 +214,9 @@ export const api = {
     /** List farms (requires authentication) */
     list: (token?: string | null) =>
       apiFetch<FarmResponse[]>("/api/farms", { token: token ?? getStoredToken() }),
+    /** List distinct lot numbers for a farm (from placements). Used for lot selector boxes. */
+    lots: (farmId: number, token?: string | null) =>
+      apiFetch<string[]>(`/api/farms/${farmId}/lots`, { token: token ?? getStoredToken() }),
   },
   /** Effectif mis en place (placement) — optional farmId for Admin/RT to view/create for a specific farm */
   placements: {
@@ -249,13 +252,18 @@ export const api = {
         }
       ),
   },
-  /** Sorties Ferme — optional farmId for Admin/RT/Backoffice to view/create for a specific farm */
+  /** Sorties Ferme — optional farmId and lot for filtering */
   sorties: {
-    list: (farmId?: number | null, token?: string | null) =>
-      apiFetch<SortieResponse[]>(
-        farmId != null ? `/api/sorties?farmId=${farmId}` : "/api/sorties",
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<SortieResponse[]>(
+        qs ? `/api/sorties?${qs}` : "/api/sorties",
         { token: token ?? getStoredToken() }
-      ),
+      );
+    },
     createBatch: (body: SortieRequest[], farmId?: number | null, token?: string | null) =>
       apiFetch<SortieResponse[]>(
         farmId != null ? `/api/sorties/batch?farmId=${farmId}` : "/api/sorties/batch",
@@ -284,6 +292,400 @@ export const api = {
           token: token ?? getStoredToken(),
         }
       ),
+  },
+  /** Livraisons Aliment — optional farmId, lot, sem for filtering */
+  livraisonsAliment: {
+    list: (params?: { farmId?: number | null; lot?: string | null; sem?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      if (params?.sem != null && params.sem !== "") search.set("sem", params.sem);
+      const qs = search.toString();
+      return apiFetch<LivraisonAlimentResponse[]>(
+        qs ? `/api/livraisons-aliment?${qs}` : "/api/livraisons-aliment",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<LivraisonAlimentResponse>(`/api/livraisons-aliment/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: LivraisonAlimentRequest, token?: string | null) =>
+      apiFetch<LivraisonAlimentResponse>("/api/livraisons-aliment", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: LivraisonAlimentRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<LivraisonAlimentResponse[]>(
+        farmId != null ? `/api/livraisons-aliment/batch?farmId=${farmId}` : "/api/livraisons-aliment/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: LivraisonAlimentRequest, token?: string | null) =>
+      apiFetch<LivraisonAlimentResponse>(`/api/livraisons-aliment/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/livraisons-aliment/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Livraisons Produits Vétérinaires — optional farmId, lot for filtering */
+  livraisonsProduitsVeterinaires: {
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<LivraisonProduitVeterinaireResponse[]>(
+        qs ? `/api/livraisons-produits-veterinaires?${qs}` : "/api/livraisons-produits-veterinaires",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<LivraisonProduitVeterinaireResponse>(`/api/livraisons-produits-veterinaires/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: LivraisonProduitVeterinaireRequest, token?: string | null) =>
+      apiFetch<LivraisonProduitVeterinaireResponse>("/api/livraisons-produits-veterinaires", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: LivraisonProduitVeterinaireRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<LivraisonProduitVeterinaireResponse[]>(
+        farmId != null ? `/api/livraisons-produits-veterinaires/batch?farmId=${farmId}` : "/api/livraisons-produits-veterinaires/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: LivraisonProduitVeterinaireRequest, token?: string | null) =>
+      apiFetch<LivraisonProduitVeterinaireResponse>(`/api/livraisons-produits-veterinaires/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/livraisons-produits-veterinaires/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Livraisons Produits Hygiène — optional farmId, lot for filtering */
+  livraisonsProduitsHygiene: {
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<LivraisonProduitHygieneResponse[]>(
+        qs ? `/api/livraisons-produits-hygiene?${qs}` : "/api/livraisons-produits-hygiene",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<LivraisonProduitHygieneResponse>(`/api/livraisons-produits-hygiene/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: LivraisonProduitHygieneRequest, token?: string | null) =>
+      apiFetch<LivraisonProduitHygieneResponse>("/api/livraisons-produits-hygiene", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: LivraisonProduitHygieneRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<LivraisonProduitHygieneResponse[]>(
+        farmId != null ? `/api/livraisons-produits-hygiene/batch?farmId=${farmId}` : "/api/livraisons-produits-hygiene/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: LivraisonProduitHygieneRequest, token?: string | null) =>
+      apiFetch<LivraisonProduitHygieneResponse>(`/api/livraisons-produits-hygiene/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/livraisons-produits-hygiene/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Vide sanitaire Hygiène (Produits Hygiène) — one record per farm/lot; only qte, prixPerUnit, montant */
+  videSanitaire: {
+    get: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<VideSanitaireResponse | null>(
+        qs ? `/api/vide-sanitaire-hygiene?${qs}` : "/api/vide-sanitaire-hygiene",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    put: (body: VideSanitaireRequest, farmId?: number | null, token?: string | null) =>
+      apiFetch<VideSanitaireResponse>(
+        farmId != null ? `/api/vide-sanitaire-hygiene?farmId=${farmId}` : "/api/vide-sanitaire-hygiene",
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Livraisons Paille — optional farmId, lot for filtering */
+  livraisonsPaille: {
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<LivraisonPailleResponse[]>(
+        qs ? `/api/livraisons-paille?${qs}` : "/api/livraisons-paille",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<LivraisonPailleResponse>(`/api/livraisons-paille/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: LivraisonPailleRequest, token?: string | null) =>
+      apiFetch<LivraisonPailleResponse>("/api/livraisons-paille", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: LivraisonPailleRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<LivraisonPailleResponse[]>(
+        farmId != null ? `/api/livraisons-paille/batch?farmId=${farmId}` : "/api/livraisons-paille/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: LivraisonPailleRequest, token?: string | null) =>
+      apiFetch<LivraisonPailleResponse>(`/api/livraisons-paille/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/livraisons-paille/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Vide sanitaire Paille — one record per farm/lot */
+  videSanitairePaille: {
+    get: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<VideSanitairePailleResponse | null>(
+        qs ? `/api/vide-sanitaire-paille?${qs}` : "/api/vide-sanitaire-paille",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    put: (body: VideSanitairePailleRequest, farmId?: number | null, token?: string | null) =>
+      apiFetch<VideSanitairePailleResponse>(
+        farmId != null ? `/api/vide-sanitaire-paille?farmId=${farmId}` : "/api/vide-sanitaire-paille",
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Livraisons Électricité — optional farmId, lot for filtering */
+  livraisonsElectricite: {
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<LivraisonElectriciteResponse[]>(
+        qs ? `/api/livraisons-electricite?${qs}` : "/api/livraisons-electricite",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<LivraisonElectriciteResponse>(`/api/livraisons-electricite/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: LivraisonElectriciteRequest, token?: string | null) =>
+      apiFetch<LivraisonElectriciteResponse>("/api/livraisons-electricite", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: LivraisonElectriciteRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<LivraisonElectriciteResponse[]>(
+        farmId != null ? `/api/livraisons-electricite/batch?farmId=${farmId}` : "/api/livraisons-electricite/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: LivraisonElectriciteRequest, token?: string | null) =>
+      apiFetch<LivraisonElectriciteResponse>(`/api/livraisons-electricite/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/livraisons-electricite/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Livraisons Gaz — optional farmId, lot for filtering */
+  livraisonsGaz: {
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<LivraisonGazResponse[]>(
+        qs ? `/api/livraisons-gaz?${qs}` : "/api/livraisons-gaz",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<LivraisonGazResponse>(`/api/livraisons-gaz/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: LivraisonGazRequest, token?: string | null) =>
+      apiFetch<LivraisonGazResponse>("/api/livraisons-gaz", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: LivraisonGazRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<LivraisonGazResponse[]>(
+        farmId != null ? `/api/livraisons-gaz/batch?farmId=${farmId}` : "/api/livraisons-gaz/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: LivraisonGazRequest, token?: string | null) =>
+      apiFetch<LivraisonGazResponse>(`/api/livraisons-gaz/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/livraisons-gaz/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Vide sanitaire Gaz — one record per farm/lot */
+  videSanitaireGaz: {
+    get: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<VideSanitaireGazResponse | null>(
+        qs ? `/api/vide-sanitaire-gaz?${qs}` : "/api/vide-sanitaire-gaz",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    put: (body: VideSanitaireGazRequest, farmId?: number | null, token?: string | null) =>
+      apiFetch<VideSanitaireGazResponse>(
+        farmId != null ? `/api/vide-sanitaire-gaz?farmId=${farmId}` : "/api/vide-sanitaire-gaz",
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Main d'œuvre — optional farmId, lot for filtering */
+  mainOeuvre: {
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<MainOeuvreResponse[]>(
+        qs ? `/api/main-oeuvre?${qs}` : "/api/main-oeuvre",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<MainOeuvreResponse>(`/api/main-oeuvre/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: MainOeuvreRequest, token?: string | null) =>
+      apiFetch<MainOeuvreResponse>("/api/main-oeuvre", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: MainOeuvreRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<MainOeuvreResponse[]>(
+        farmId != null ? `/api/main-oeuvre/batch?farmId=${farmId}` : "/api/main-oeuvre/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: MainOeuvreRequest, token?: string | null) =>
+      apiFetch<MainOeuvreResponse>(`/api/main-oeuvre/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/main-oeuvre/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Dépenses divers — optional farmId, lot for filtering */
+  depensesDivers: {
+    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      const qs = search.toString();
+      return apiFetch<DepenseDiversResponse[]>(
+        qs ? `/api/depenses-divers?${qs}` : "/api/depenses-divers",
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<DepenseDiversResponse>(`/api/depenses-divers/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: DepenseDiversRequest, token?: string | null) =>
+      apiFetch<DepenseDiversResponse>("/api/depenses-divers", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: DepenseDiversRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<DepenseDiversResponse[]>(
+        farmId != null ? `/api/depenses-divers/batch?farmId=${farmId}` : "/api/depenses-divers/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    update: (id: number, body: DepenseDiversRequest, token?: string | null) =>
+      apiFetch<DepenseDiversResponse>(`/api/depenses-divers/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/depenses-divers/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Liste des employés — global list, not scoped by farm */
+  employers: {
+    list: (token?: string | null) =>
+      apiFetch<EmployerResponse[]>("/api/employers", {
+        token: token ?? getStoredToken(),
+      }),
+    get: (id: number, token?: string | null) =>
+      apiFetch<EmployerResponse>(`/api/employers/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: EmployerRequest, token?: string | null) =>
+      apiFetch<EmployerResponse>("/api/employers", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    update: (id: number, body: EmployerRequest, token?: string | null) =>
+      apiFetch<EmployerResponse>(`/api/employers/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/employers/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
   },
 };
 
@@ -458,4 +860,389 @@ export interface FournisseurGridRequest {
   fournisseurs: FournisseurItemRequest[];
   designations: string[];
   prices: AlimentPriceCellRequest[];
+}
+
+/** Livraisons Aliment — request (farm from JWT or optional farmId for Admin/RT) */
+export interface LivraisonAlimentRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date: string;
+  age?: number | null;
+  sem?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  maleQty?: number | null;
+  femaleQty?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  kgPerBag?: number | null;
+  kgConsumed?: number | null;
+  stockBeforeKg?: number | null;
+  movementType?: string | null;
+  notes?: string | null;
+}
+
+export interface LivraisonAlimentResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date: string;
+  age?: number | null;
+  sem?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  maleQty?: number | null;
+  femaleQty?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  kgPerBag?: number | null;
+  kgReceived?: number | null;
+  kgConsumed?: number | null;
+  stockBeforeKg?: number | null;
+  stockAfterKg?: number | null;
+  movementType?: string | null;
+  notes?: string | null;
+  createdBy?: number | null;
+  verifiedBy?: number | null;
+  verifiedAt?: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Livraisons Produits Vétérinaires — request (farm from JWT or optional farmId for Admin/RT) */
+export interface LivraisonProduitVeterinaireRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  ug?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+}
+
+export interface LivraisonProduitVeterinaireResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  ug?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Livraisons Produits Hygiène — request (farm from JWT or optional farmId for Admin/RT) */
+export interface LivraisonProduitHygieneRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  numeroBR?: string | null;
+  male?: number | null;
+  femelle?: number | null;
+}
+
+export interface LivraisonProduitHygieneResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  numeroBR?: string | null;
+  male?: number | null;
+  femelle?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Vide sanitaire (Produits Hygiène) — only qte, prixPerUnit; montant calculated server-side */
+export interface VideSanitaireRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+}
+
+export interface VideSanitaireResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+}
+
+/** Livraisons Paille — request */
+export interface LivraisonPailleRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+}
+
+export interface LivraisonPailleResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Vide sanitaire Paille — one record per farm/lot */
+export interface VideSanitairePailleRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+}
+
+export interface VideSanitairePailleResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+}
+
+/** Livraisons Électricité — request (farm from JWT or optional farmId for Admin/RT) */
+export interface LivraisonElectriciteRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  numeroBR?: string | null;
+  male?: number | null;
+  femelle?: number | null;
+}
+
+export interface LivraisonElectriciteResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  numeroBR?: string | null;
+  male?: number | null;
+  femelle?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Livraisons Gaz — request (farm from JWT or optional farmId for Admin/RT) */
+export interface LivraisonGazRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  numeroBR?: string | null;
+  male?: number | null;
+  femelle?: number | null;
+}
+
+export interface LivraisonGazResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  numeroBR?: string | null;
+  male?: number | null;
+  femelle?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Vide sanitaire Gaz — one record per farm/lot */
+export interface VideSanitaireGazRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+}
+
+export interface VideSanitaireGazResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+}
+
+/** Main d'œuvre — request (farm from JWT or optional farmId for Admin/RT) */
+export interface MainOeuvreRequest {
+  farmId?: number | null;
+  employerId?: number | null;
+  /** true = 1 jour, false = 1/2 demijour */
+  fullDay?: boolean | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  nbMo?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  observation?: string | null;
+}
+
+export interface MainOeuvreResponse {
+  id: number;
+  farmId: number;
+  employerId?: number | null;
+  employerNom?: string | null;
+  employerPrenom?: string | null;
+  /** true = 1 jour, false = 1/2 demijour */
+  fullDay?: boolean | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  nbMo?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  observation?: string | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Dépenses divers — request (farm from JWT or optional farmId for Admin/RT) */
+export interface DepenseDiversRequest {
+  farmId?: number | null;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+}
+
+export interface DepenseDiversResponse {
+  id: number;
+  farmId: number;
+  lot?: string | null;
+  date: string;
+  age?: string | null;
+  designation?: string | null;
+  supplier?: string | null;
+  deliveryNoteNumber?: string | null;
+  qte?: number | null;
+  prixPerUnit?: number | null;
+  montant?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Liste des employés — request (global list, not tied to farm) */
+export interface EmployerRequest {
+  nom: string;
+  prenom: string;
+  salaire?: number | null;
+}
+
+export interface EmployerResponse {
+  id: number;
+  nom: string;
+  prenom: string;
+  salaire?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
