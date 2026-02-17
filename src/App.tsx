@@ -104,7 +104,14 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route path="/livraisons-paille/" element={<Navigate to="/livraisons-paille" replace />} />
+            <Route
+              path="/livraisons-paille/"
+              element={
+                <ProtectedRoute>
+                  <LivraisonsPaille />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/electricite"
               element={
@@ -129,7 +136,14 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route path="/main-oeuvre/" element={<Navigate to="/main-oeuvre" replace />} />
+            <Route
+              path="/main-oeuvre/"
+              element={
+                <ProtectedRoute>
+                  <MainOeuvre />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/depenses-divers"
               element={
@@ -138,7 +152,14 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route path="/depenses-divers/" element={<Navigate to="/depenses-divers" replace />} />
+            <Route
+              path="/depenses-divers/"
+              element={
+                <ProtectedRoute>
+                  <DepensesDivers />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/employes"
               element={
