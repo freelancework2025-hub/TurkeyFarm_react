@@ -8,6 +8,8 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import ReportingJournalier from "./pages/ReportingJournalier";
+import SuiviTechniqueHebdomadaire from "./pages/SuiviTechniqueHebdomadaire";
+import ResumeProductionHebdoPage from "./pages/ResumeProductionHebdoPage";
 import SortiesFerme from "./pages/SortiesFerme";
 import Fournisseurs from "./pages/Fournisseurs";
 import LivraisonsAliment from "./pages/LivraisonsAliment";
@@ -53,6 +55,22 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <ReportingJournalier />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/suivi-technique-hebdomadaire"
+              element={
+                <ProtectedRoute>
+                  <SuiviTechniqueHebdomadaire />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/suivi-technique-hebdomadaire/resume-production"
+              element={
+                <ProtectedRoute>
+                  <ResumeProductionHebdoPage />
                 </ProtectedRoute>
               }
             />

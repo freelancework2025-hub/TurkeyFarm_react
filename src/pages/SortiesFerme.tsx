@@ -5,7 +5,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse, type SortieResponse } from "@/lib/api";
+import { api, type FarmResponse, type SortieRequest, type SortieResponse } from "@/lib/api";
 
 /**
  * Permission matrix (same as Reporting Journalier):
@@ -202,38 +202,52 @@ export default function SortiesFerme() {
     );
   };
 
+  const rowToRequest = (r: SortieRow): SortieRequest => ({
+    date: r.date || null,
+    semaine: r.semaine.trim() !== "" ? parseInt(r.semaine, 10) : null,
+    lot: r.lot || null,
+    client: r.client || null,
+    num_bl: r.num_bl || null,
+    type: r.type || null,
+    designation: r.designation || null,
+    nbre_dinde: r.nbre_dinde.trim() !== "" ? parseInt(r.nbre_dinde, 10) : null,
+    qte_brute_kg: r.qte_brute_kg.trim() !== "" ? parseFloat(r.qte_brute_kg) : null,
+    prix_kg: r.prix_kg.trim() !== "" ? parseFloat(r.prix_kg) : null,
+    montant_ttc: r.montant_ttc.trim() !== "" ? parseFloat(r.montant_ttc) : null,
+  });
+
   const handleSave = async () => {
-    if (!canCreate) {
-      toast({ title: "Non autorisé", description: "Vous ne pouvez pas créer de données.", variant: "destructive" });
+    if (!canCreate && !canUpdate) {
+      toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer les données.", variant: "destructive" });
       return;
     }
-    const toSend = rows
-      .filter((r) => r.serverId == null)
-      .map((r) => ({
-        date: r.date || null,
-        semaine: r.semaine.trim() !== "" ? parseInt(r.semaine, 10) : null,
-        lot: r.lot || null,
-        client: r.client || null,
-        num_bl: r.num_bl || null,
-        type: r.type || null,
-        designation: r.designation || null,
-        nbre_dinde: r.nbre_dinde.trim() !== "" ? parseInt(r.nbre_dinde, 10) : null,
-        qte_brute_kg: r.qte_brute_kg.trim() !== "" ? parseFloat(r.qte_brute_kg) : null,
-        prix_kg: r.prix_kg.trim() !== "" ? parseFloat(r.prix_kg) : null,
-        montant_ttc: r.montant_ttc.trim() !== "" ? parseFloat(r.montant_ttc) : null,
-      }));
-    if (toSend.length === 0) {
+    const toCreate = canCreate
+      ? rows.filter((r) => r.serverId == null).map((r) => rowToRequest(r))
+      : [];
+    const toUpdate = canUpdate ? rows.filter((r) => r.serverId != null) : [];
+
+    if (toCreate.length === 0 && toUpdate.length === 0) {
       toast({
         title: "Aucune ligne à enregistrer",
-        description: "Ajoutez au moins une ligne nouvelle (non encore enregistrée).",
+        description: "Ajoutez au moins une ligne nouvelle ou modifiez une ligne existante.",
         variant: "destructive",
       });
       return;
     }
     setSaving(true);
     try {
-      await api.sorties.createBatch(toSend, pageFarmId ?? undefined);
-      toast({ title: "Sorties enregistrées", description: `${toSend.length} ligne(s) enregistrée(s).` });
+      if (toUpdate.length > 0) {
+        await Promise.all(toUpdate.map((r) => api.sorties.update(r.serverId!, rowToRequest(r))));
+      }
+      if (toCreate.length > 0) {
+        await api.sorties.createBatch(toCreate, pageFarmId ?? undefined);
+      }
+      const createdCount = toCreate.length;
+      const updatedCount = toUpdate.length;
+      const parts: string[] = [];
+      if (createdCount > 0) parts.push(`${createdCount} nouvelle(s) ligne(s)`);
+      if (updatedCount > 0) parts.push(`${updatedCount} ligne(s) modifiée(s)`);
+      toast({ title: "Sorties enregistrées", description: parts.join(". ") });
       loadSorties();
     } catch (e) {
       toast({
@@ -341,20 +355,21 @@ export default function SortiesFerme() {
                 <h2 className="text-lg font-display font-bold text-foreground">
                   Tableau des Sorties
                 </h2>
-                {canCreate && (
+                {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={addRow}
-                      disabled={!canCreate}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-                    >
-                      <Plus className="w-4 h-4" /> Ligne
-                    </button>
+                    {canCreate && (
+                      <button
+                        type="button"
+                        onClick={addRow}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
+                      >
+                        <Plus className="w-4 h-4" /> Ligne
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={!canCreate || saving || loading}
+                      disabled={saving || loading}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}

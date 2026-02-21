@@ -54,7 +54,7 @@ const NAV_SECTIONS = [
     icon: ClipboardList,
     children: [
       { label: "Reporting Journalier", path: "/reporting-journalier" },
-      { label: "Suivi Technique Hebdo", path: "/suivi-technique" },
+      { label: "Suivi Technique Hebdo", path: "/suivi-technique-hebdomadaire" },
     ],
   },
   {

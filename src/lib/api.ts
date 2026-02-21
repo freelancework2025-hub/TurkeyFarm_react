@@ -273,6 +273,12 @@ export const api = {
           token: token ?? getStoredToken(),
         }
       ),
+    update: (id: number, body: SortieRequest, token?: string | null) =>
+      apiFetch<SortieResponse>(`/api/sorties/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/sorties/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
   },
@@ -686,6 +692,237 @@ export const api = {
       }),
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/employers/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
+  /** Suivi Technique Setup — initial configuration per lot/sex */
+  suiviTechniqueSetup: {
+    list: (params: { farmId: number; lot?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      if (params.lot != null && params.lot !== "") search.set("lot", params.lot);
+      return apiFetch<SuiviTechniqueSetupResponse[]>(
+        `/api/suivi-technique-setup?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    /** Get setup for (farm, lot, sex, batiment). Returns null when none exists (e.g. after "Ajouter l'autre sexe" — form stays empty for the new sex). */
+    getBySex: async (
+      params: { farmId: number; lot: string; sex: string; batiment: string },
+      token?: string | null
+    ): Promise<SuiviTechniqueSetupResponse | null> => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("sex", params.sex);
+      search.set("batiment", params.batiment);
+      const t = token ?? getStoredToken();
+      const url = `${getApiBase()}/api/suivi-technique-setup/by-sex?${search.toString()}`;
+      const res = await fetch(url, {
+        headers: { "Content-Type": "application/json", ...authHeader(null, t) },
+        credentials: "include",
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(res.status === 401 ? "Unauthorized" : text || `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<SuiviTechniqueSetupResponse>;
+    },
+    save: (body: SuiviTechniqueSetupRequest, farmId: number, token?: string | null) =>
+      apiFetch<SuiviTechniqueSetupResponse>(
+        `/api/suivi-technique-setup?farmId=${farmId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    delete: (params: { farmId: number; lot: string; sex: string; batiment: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("sex", params.sex);
+      search.set("batiment", params.batiment);
+      return apiFetch<void>(`/api/suivi-technique-setup?${search.toString()}`, { method: "DELETE", token: token ?? getStoredToken() });
+    },
+    /** Get list of sexes that have setup records for a specific farm, lot, and batiment. */
+    getConfiguredSexes: (params: { farmId: number; lot: string; batiment: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("batiment", params.batiment);
+      return apiFetch<string[]>(
+        `/api/suivi-technique-setup/sexes?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    /** Delete all suivi data for a sex (setup, hebdo, production, consumption, performances) in the given batiment. */
+    deleteAllDataForSex: (params: { farmId: number; lot: string; batiment: string; sex: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("batiment", params.batiment);
+      search.set("sex", params.sex);
+      return apiFetch<void>(`/api/suivi-technique-setup/all-data-for-sex?${search.toString()}`, {
+        method: "DELETE",
+        token: token ?? getStoredToken(),
+      });
+    },
+  },
+  /** Suivi Technique Hebdo — daily tracking data for weekly reports */
+  suiviTechniqueHebdo: {
+    list: (params: { farmId: number; lot?: string | null; sex?: string | null; batiment?: string | null; semaine?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      if (params.lot != null && params.lot !== "") search.set("lot", params.lot);
+      if (params.sex != null && params.sex !== "") search.set("sex", params.sex);
+      if (params.batiment != null && params.batiment !== "") search.set("batiment", params.batiment);
+      if (params.semaine != null && params.semaine !== "") search.set("semaine", params.semaine);
+      return apiFetch<SuiviTechniqueHebdoResponse[]>(
+        `/api/suivi-technique-hebdo?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    saveBatch: (body: SuiviTechniqueHebdoRequest[], farmId: number, token?: string | null) =>
+      apiFetch<SuiviTechniqueHebdoResponse[]>(
+        `/api/suivi-technique-hebdo/batch?farmId=${farmId}`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    save: (body: SuiviTechniqueHebdoRequest, farmId: number, token?: string | null) =>
+      apiFetch<SuiviTechniqueHebdoResponse>(
+        `/api/suivi-technique-hebdo?farmId=${farmId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/suivi-technique-hebdo/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+    getWeeklySummary: (params: { farmId: number; lot: string; sex: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("sex", params.sex);
+      return apiFetch<WeeklySummary[]>(
+        `/api/suivi-technique-hebdo/weekly-summary?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+  },
+  /** Suivi de Production Hebdomadaire — REPORT (previous week total), VENTE, CONSO, AUTRE, TOTAL. Lot → Semaine → Batiment. */
+  suiviProductionHebdo: {
+    get: (params: { farmId: number; lot: string; semaine: string; sex: string; batiment?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
+      search.set("sex", params.sex);
+      if (params.batiment != null && params.batiment !== "") search.set("batiment", params.batiment);
+      return apiFetch<SuiviProductionHebdoResponse>(
+        `/api/suivi-production-hebdo?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    save: (body: SuiviProductionHebdoRequest, farmId: number, token?: string | null) =>
+      apiFetch<SuiviProductionHebdoResponse>(
+        `/api/suivi-production-hebdo?farmId=${farmId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Suivi de Consommation Hebdomadaire — conso aliment semaine (saisie), cumul, indice eau/aliment, conso kg/j (computed). Lot → Semaine → Batiment. */
+  suiviConsommationHebdo: {
+    get: (params: { farmId: number; lot: string; semaine: string; sex: string; batiment?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
+      search.set("sex", params.sex);
+      if (params.batiment != null && params.batiment !== "") search.set("batiment", params.batiment);
+      return apiFetch<SuiviConsommationHebdoResponse>(
+        `/api/suivi-consommation-hebdo?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    save: (body: SuiviConsommationHebdoRequest, farmId: number, token?: string | null) =>
+      apiFetch<SuiviConsommationHebdoResponse>(
+        `/api/suivi-consommation-hebdo?farmId=${farmId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Suivi de PERFORMANCES Hebdomadaire — REEL per lot/batiment, NORME shared per farm/semaine/sex. Écarts computed (reel - norme). */
+  suiviPerformancesHebdo: {
+    get: (params: { farmId: number; lot: string; semaine: string; sex: string; batiment?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
+      search.set("sex", params.sex);
+      if (params.batiment != null && params.batiment !== "") search.set("batiment", params.batiment);
+      return apiFetch<SuiviPerformancesHebdoResponse>(
+        `/api/suivi-performances-hebdo?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    /** Save REEL values only. NORME is managed separately via performanceNorme.save(). */
+    save: (body: SuiviPerformancesHebdoRequest, farmId: number, token?: string | null) =>
+      apiFetch<SuiviPerformancesHebdoResponse>(
+        `/api/suivi-performances-hebdo?farmId=${farmId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Performance NORME — shared reference values per (farm, semaine, sex). Applies to ALL lots and batiments. */
+  performanceNorme: {
+    get: (params: { farmId: number; semaine: string; sex: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("semaine", params.semaine);
+      search.set("sex", params.sex);
+      return apiFetch<PerformanceNormeResponse>(
+        `/api/performance-norme?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    /** Save NORME values. Only ADMINISTRATEUR and RESPONSABLE_TECHNIQUE can do this. */
+    save: (body: PerformanceNormeRequest, farmId: number, token?: string | null) =>
+      apiFetch<PerformanceNormeResponse>(
+        `/api/performance-norme?farmId=${farmId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+  },
+  /** Suivi de Stock — computed: effectif restant fin de semaine, poids vif produit (kg), stock aliment */
+  suiviStock: {
+    get: (params: { farmId?: number | null; lot: string; semaine: string; sex: string; batiment?: string | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params.farmId != null) search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
+      search.set("sex", params.sex);
+      if (params.batiment != null && params.batiment.trim() !== "") search.set("batiment", params.batiment);
+      return apiFetch<SuiviStockResponse>(
+        `/api/suivi-stock?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
   },
 };
 
@@ -1242,6 +1479,243 @@ export interface EmployerResponse {
   nom: string;
   prenom: string;
   salaire?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Suivi Technique Setup — request (initial configuration per lot/sex) */
+export interface SuiviTechniqueSetupRequest {
+  farmId?: number | null;
+  lot: string;
+  sex: string;
+  typeElevage?: string | null;
+  origineFournisseur?: string | null;
+  dateEclosion?: string | null;
+  heureMiseEnPlace?: string | null;
+  dateMiseEnPlace?: string | null;
+  souche?: string | null;
+  effectifMisEnPlace?: number | null;
+  batiment?: string | null;
+}
+
+export interface SuiviTechniqueSetupResponse {
+  id: number;
+  farmId: number;
+  lot: string;
+  sex: string;
+  typeElevage?: string | null;
+  origineFournisseur?: string | null;
+  dateEclosion?: string | null;
+  heureMiseEnPlace?: string | null;
+  dateMiseEnPlace?: string | null;
+  souche?: string | null;
+  effectifMisEnPlace?: number | null;
+  batiment?: string | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Suivi Technique Hebdo — request (daily tracking data for weekly reports) */
+export interface SuiviTechniqueHebdoRequest {
+  farmId?: number | null;
+  lot: string;
+  sex: string;
+  batiment?: string | null;
+  semaine?: string | null;
+  effectifDepart?: number | null;
+  recordDate: string;
+  ageJour?: number | null;
+  mortaliteNbre?: number | null;
+  consoEauL?: number | null;
+  tempMin?: number | null;
+  tempMax?: number | null;
+  vaccination?: string | null;
+  traitement?: string | null;
+  observation?: string | null;
+}
+
+export interface SuiviTechniqueHebdoResponse {
+  id: number;
+  farmId: number;
+  lot: string;
+  sex: string;
+  batiment?: string | null;
+  semaine?: string | null;
+  effectifDepart?: number | null;
+  recordDate: string;
+  ageJour?: number | null;
+  mortaliteNbre?: number | null;
+  mortalitePct?: number | null;
+  mortaliteCumul?: number | null;
+  mortaliteCumulPct?: number | null;
+  consoEauL?: number | null;
+  tempMin?: number | null;
+  tempMax?: number | null;
+  vaccination?: string | null;
+  traitement?: string | null;
+  observation?: string | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Weekly summary for Suivi Technique */
+export interface WeeklySummary {
+  semaine: string;
+  totalMortality: number;
+  totalWater: number;
+}
+
+/** Suivi de Production Hebdo — request (vente, conso, autre only; report set by backend) */
+export interface SuiviProductionHebdoRequest {
+  farmId?: number | null;
+  lot: string;
+  semaine: string;
+  sex: string;
+  batiment?: string | null;
+  venteNbre?: number | null;
+  ventePoids?: number | null;
+  consoNbre?: number | null;
+  consoPoids?: number | null;
+  autreNbre?: number | null;
+  autrePoids?: number | null;
+}
+
+/** Suivi de Production Hebdo — response (report = previous week total, total = computed) */
+export interface SuiviProductionHebdoResponse {
+  id?: number;
+  farmId: number;
+  lot: string;
+  semaine: string;
+  sex: string;
+  batiment?: string | null;
+  reportNbre?: number | null;
+  reportPoids?: number | null;
+  venteNbre?: number | null;
+  ventePoids?: number | null;
+  consoNbre?: number | null;
+  consoPoids?: number | null;
+  autreNbre?: number | null;
+  autrePoids?: number | null;
+  totalNbre?: number | null;
+  totalPoids?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Suivi de Consommation Hebdo — request (consommation aliment semaine only) */
+export interface SuiviConsommationHebdoRequest {
+  farmId?: number | null;
+  lot: string;
+  semaine: string;
+  sex: string;
+  batiment?: string | null;
+  consommationAlimentKg?: number | null;
+}
+
+/** Suivi de Consommation Hebdo — response (cumul, totalEau, indice, conso kg/j computed) */
+export interface SuiviConsommationHebdoResponse {
+  id?: number;
+  farmId: number;
+  lot: string;
+  semaine: string;
+  sex: string;
+  batiment?: string | null;
+  consommationAlimentSemaine?: number | null;
+  cumulAlimentConsomme?: number | null;
+  totalEauSemaineL?: number | null;
+  indiceEauAliment?: number | null;
+  consoAlimentKgParJour?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Suivi de PERFORMANCES Hebdo — request (REEL + NORME; NORME applied only if user has update permission) */
+export interface SuiviPerformancesHebdoRequest {
+  farmId?: number | null;
+  lot: string;
+  semaine: string;
+  sex: string;
+  batiment?: string | null;
+  poidsMoyenReel?: number | null;
+  homogeneiteReel?: number | null;
+  indiceConsommationReel?: number | null;
+  gmqReel?: number | null;
+  viabiliteReel?: number | null;
+  poidsMoyenNorme?: number | null;
+  homogeneiteNorme?: number | null;
+  indiceConsommationNorme?: number | null;
+  gmqNorme?: number | null;
+  viabiliteNorme?: number | null;
+}
+
+/** Suivi de PERFORMANCES Hebdo — response (Écarts computed: reel - norme) */
+export interface SuiviPerformancesHebdoResponse {
+  id?: number;
+  farmId: number;
+  lot: string;
+  semaine: string;
+  sex: string;
+  batiment?: string | null;
+  poidsMoyenReel?: number | null;
+  homogeneiteReel?: number | null;
+  indiceConsommationReel?: number | null;
+  gmqReel?: number | null;
+  viabiliteReel?: number | null;
+  poidsMoyenNorme?: number | null;
+  homogeneiteNorme?: number | null;
+  indiceConsommationNorme?: number | null;
+  gmqNorme?: number | null;
+  viabiliteNorme?: number | null;
+  poidsMoyenEcart?: number | null;
+  homogeneiteEcart?: number | null;
+  indiceConsommationEcart?: number | null;
+  gmqEcart?: number | null;
+  viabiliteEcart?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Suivi de Stock — computed response (effectif restant, poids vif produit kg, stock aliment) */
+export interface SuiviStockResponse {
+  farmId: number;
+  lot: string;
+  semaine: string;
+  sex: string;
+  /** Batiment (optional). When provided, stock is batiment-specific; otherwise aggregated across all batiments. */
+  batiment?: string | null;
+  effectifRestantFinSemaine?: number | null;
+  poidsVifProduitKg?: number | null;
+  stockAliment?: number | null;
+}
+
+/** Performance NORME — request (shared norms per farm/semaine/sex). Only ADMINISTRATEUR/RESPONSABLE_TECHNIQUE can save. */
+export interface PerformanceNormeRequest {
+  semaine: string;
+  sex: string;
+  poidsMoyenNorme?: number | null;
+  homogeneiteNorme?: number | null;
+  indiceConsommationNorme?: number | null;
+  gmqNorme?: number | null;
+  viabiliteNorme?: number | null;
+}
+
+/** Performance NORME — response (shared norms per farm/semaine/sex). All users can read. */
+export interface PerformanceNormeResponse {
+  id?: number;
+  farmId: number;
+  semaine: string;
+  sex: string;
+  poidsMoyenNorme?: number | null;
+  homogeneiteNorme?: number | null;
+  indiceConsommationNorme?: number | null;
+  gmqNorme?: number | null;
+  viabiliteNorme?: number | null;
   version?: number;
   createdAt?: string;
   updatedAt?: string;

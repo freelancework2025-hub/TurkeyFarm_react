@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Plus, Save, Tag, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Plus, Save, Calendar, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
@@ -14,11 +14,14 @@ import {
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS ÉLECTRICITÉ
- * Same permission matrix as Livraisons Aliment: canCreate for add/save, canUpdate for saved rows, canDelete for delete.
- * Columns: date, age, designation, fournisseur, qte, prix, montant, N°BR, male, femelle.
- * Grouping by week (age): rows grouped by age (S1, S2, S3, …) in numeric order; empty/"—" at end.
- * Per-week: total (qte, prix, montant, male, femelle) and cumul (running total).
+ * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
+ * Each semaine has its own table; TOTAL = current semaine, CUMUL = previous semaines + current.
+ * Same permission matrix: canCreate for add/save, canUpdate for saved rows, canDelete for delete.
+ * Columns: date, age (semaine), designation, fournisseur, qte, prix, montant, N°BR, male, femelle.
  */
+
+const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+const MIN_TABLE_ROWS = 7;
 
 interface ElectriciteRow {
   id: string;
@@ -44,24 +47,35 @@ function fromNum(n: number | null | undefined): string {
   return n != null ? String(n) : "";
 }
 
-/** Row index 1-based: lines 1–7 → S1, 8–14 → S2, etc. */
-function rowIndexToAge(rowIndex1Based: number): string {
-  const semNum = Math.ceil(rowIndex1Based / 7);
-  return `S${semNum}`;
-}
-
 function addOneDay(isoDate: string): string {
   const d = new Date(isoDate + "T12:00:00");
   d.setDate(d.getDate() + 1);
   return d.toISOString().split("T")[0];
 }
 
+/** Sort semaines: S1, S2, ... S24, then custom (e.g. S25). */
+function sortSemaines(sems: string[]): string[] {
+  return [...sems].sort((a, b) => {
+    const numA = parseInt(a.replace(/^S(\d+)$/i, "$1"), 10);
+    const numB = parseInt(b.replace(/^S(\d+)$/i, "$1"), 10);
+    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+    if (!Number.isNaN(numA)) return -1;
+    if (!Number.isNaN(numB)) return 1;
+    return a.localeCompare(b);
+  });
+}
+
 export default function Electricite() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
   const lotParam = searchParams.get("lot") ?? "";
+  const semaineParam = searchParams.get("semaine") ?? "";
   const selectedFarmId = farmIdParam ? parseInt(farmIdParam, 10) : null;
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
+  const hasLotInUrl = lotParam.trim() !== "";
+  const trimmedSemaine = semaineParam.trim();
+  const hasSemaineInUrl = trimmedSemaine !== "";
+  const selectedSemaine = trimmedSemaine;
 
   const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
@@ -75,12 +89,9 @@ export default function Electricite() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [newSemaineInput, setNewSemaineInput] = useState("");
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
-
-  const hasLotInUrl = lotParam.trim() !== "";
-  const hasSavedData = rows.some((r) => r.serverId != null);
-  const lotReadOnly = hasSavedData;
 
   useEffect(() => {
     if (!showFarmSelector) return;
@@ -108,10 +119,28 @@ export default function Electricite() {
   );
   const clearFarmSelection = useCallback(() => setSearchParams({}), [setSearchParams]);
 
-  const emptyRow = (): ElectriciteRow => ({
+  const clearSemaineSelection = useCallback(() => {
+    const next: Record<string, string> = {};
+    if (selectedFarmId != null) next.farmId = String(selectedFarmId);
+    if (lotFilter.trim()) next.lot = lotFilter.trim();
+    setSearchParams(next);
+  }, [selectedFarmId, lotFilter, setSearchParams]);
+
+  const selectSemaine = useCallback(
+    (semaine: string) => {
+      const next: Record<string, string> = {};
+      if (selectedFarmId != null) next.farmId = String(selectedFarmId);
+      if (lotFilter.trim()) next.lot = lotFilter.trim();
+      next.semaine = semaine;
+      setSearchParams(next);
+    },
+    [selectedFarmId, lotFilter, setSearchParams]
+  );
+
+  const emptyRow = (age?: string): ElectriciteRow => ({
     id: crypto.randomUUID(),
     date: today,
-    age: "",
+    age: age ?? "",
     designation: "",
     supplier: "",
     qte: "",
@@ -144,27 +173,18 @@ export default function Electricite() {
         male: fromNum(r.male),
         femelle: fromNum(r.femelle),
       }));
-      if (isReadOnly) {
-        setRows(mapped);
-      } else {
-        const nextRowIndex = mapped.length + 1;
-        const age = rowIndexToAge(nextRowIndex);
-        const lastDate = mapped.length > 0 ? mapped[mapped.length - 1].date : null;
-        const nextDate = lastDate && lastDate.trim() !== "" ? addOneDay(lastDate) : today;
-        const newRow = { ...emptyRow(), date: nextDate, age };
-        setRows(mapped.length ? [...mapped, newRow] : [newRow]);
-      }
+      setRows(mapped);
     } catch (e) {
       toast({
         title: "Erreur",
         description: e instanceof Error ? e.message : "Impossible de charger les livraisons.",
         variant: "destructive",
       });
-      setRows(canCreate ? [emptyRow()] : []);
+      setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, isReadOnly, canCreate, toast]);
+  }, [showFarmSelector, pageFarmId, lotFilter, toast]);
 
   useEffect(() => {
     loadMovements();
@@ -178,22 +198,30 @@ export default function Electricite() {
     const params: Record<string, string> = {};
     if (selectedFarmId != null) params.farmId = String(selectedFarmId);
     if (lotFilter.trim()) params.lot = lotFilter.trim();
+    if (hasSemaineInUrl && trimmedSemaine) params.semaine = trimmedSemaine;
     setSearchParams(params, { replace: true });
-  }, [selectedFarmId, lotFilter, setSearchParams]);
+  }, [selectedFarmId, lotFilter, hasSemaineInUrl, trimmedSemaine, setSearchParams]);
+
+  useEffect(() => {
+    if (!hasSemaineInUrl || !selectedSemaine) return;
+    const forSem = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    if (forSem.length >= MIN_TABLE_ROWS) return;
+    const toAdd = MIN_TABLE_ROWS - forSem.length;
+    setRows((prev) => [...prev, ...Array.from({ length: toAdd }, () => emptyRow(selectedSemaine))]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length]);
 
   const addRow = () => {
-    if (!canCreate) return;
-    const nextRowIndex = rows.length + 1;
-    const age = rowIndexToAge(nextRowIndex);
-    const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;
-    const nextDate =
-      lastRow?.date?.trim() !== "" ? addOneDay(lastRow.date) : today;
-    const newRow = { ...emptyRow(), date: nextDate, age };
+    if (!canCreate || !selectedSemaine) return;
+    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
+    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
+    const newRow = { ...emptyRow(selectedSemaine), date: nextDate };
     setRows((prev) => [...prev, newRow]);
   };
 
   const removeRow = (id: string) => {
-    if (rows.length <= 1) return;
+    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
     if (row?.serverId != null && !canDelete) return;
     if (row?.serverId != null) {
@@ -229,8 +257,32 @@ export default function Electricite() {
     );
   };
 
+  const rowToRequest = (r: ElectriciteRow): LivraisonElectriciteRequest => {
+    const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const prix = toNum(r.prixPerUnit);
+    const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte != null && prix >= 0 ? qte * prix : null);
+    const male = r.male.trim() !== "" ? toNum(r.male) : null;
+    const femelle = r.femelle.trim() !== "" ? toNum(r.femelle) : null;
+    return {
+      farmId: pageFarmId ?? undefined,
+      lot: lotFilter.trim() || null,
+      date: r.date || today,
+      age: r.age.trim() || null,
+      designation: r.designation.trim() || null,
+      supplier: r.supplier.trim() || null,
+      qte: qte ?? null,
+      prixPerUnit: prix > 0 ? prix : null,
+      montant: montant != null && montant >= 0 ? montant : null,
+      numeroBR: r.numeroBR.trim() || null,
+      male: male != null && male >= 0 ? Math.round(male) : null,
+      femelle: femelle != null && femelle >= 0 ? Math.round(femelle) : null,
+    };
+  };
+
   const handleSave = async () => {
-    if (!canCreate) {
+    const canSaveNew = canCreate;
+    const canSaveExisting = canUpdate;
+    if (!canSaveNew && !canSaveExisting) {
       toast({
         title: "Non autorisé",
         description: "Vous ne pouvez pas enregistrer les données.",
@@ -238,54 +290,46 @@ export default function Electricite() {
       });
       return;
     }
-    if (!lotFilter.trim()) {
+    if (!lotFilter.trim() || !selectedSemaine) {
       toast({
-        title: "Lot requis",
-        description: "Indiquez le numéro de lot en haut de la page avant d'enregistrer.",
+        title: "Lot et semaine requis",
+        description: "Indiquez le lot et la semaine avant d'enregistrer.",
         variant: "destructive",
       });
       return;
     }
-    const toSend: LivraisonElectriciteRequest[] = rows
-      .filter((r) => r.serverId == null)
-      .filter((r) => r.date.trim() !== "")
-      .map((r) => {
-        const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
-        const prix = toNum(r.prixPerUnit);
-        const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte != null && prix >= 0 ? qte * prix : null);
-        const male = r.male.trim() !== "" ? toNum(r.male) : null;
-        const femelle = r.femelle.trim() !== "" ? toNum(r.femelle) : null;
-        return {
-          farmId: pageFarmId ?? undefined,
-          lot: lotFilter.trim() || null,
-          date: r.date || today,
-          age: r.age.trim() || null,
-          designation: r.designation.trim() || null,
-          supplier: r.supplier.trim() || null,
-          qte: qte ?? null,
-          prixPerUnit: prix > 0 ? prix : null,
-          montant: montant != null && montant >= 0 ? montant : null,
-          numeroBR: r.numeroBR.trim() || null,
-          male: male != null && male >= 0 ? Math.round(male) : null,
-          femelle: femelle != null && femelle >= 0 ? Math.round(femelle) : null,
-        };
-      })
-      .filter((r) => r.date != null);
+    const forSem = (r: ElectriciteRow) => (r.age || "").trim() === selectedSemaine;
+    const toCreate: LivraisonElectriciteRequest[] = canSaveNew
+      ? rows.filter((r) => forSem(r) && r.serverId == null).filter((r) => r.date.trim() !== "").map((r) => rowToRequest(r)).filter((r) => r.date != null)
+      : [];
+    const toUpdate = canSaveExisting
+      ? rows.filter((r) => forSem(r) && r.serverId != null && r.date.trim() !== "")
+      : [];
 
-    if (toSend.length === 0) {
+    if (toCreate.length === 0 && toUpdate.length === 0) {
       toast({
         title: "Aucune ligne à enregistrer",
-        description: "Remplissez au moins la date pour une ligne nouvelle.",
+        description: "Remplissez au moins la date pour une ligne nouvelle ou modifiez une ligne existante.",
         variant: "destructive",
       });
       return;
     }
     setSaving(true);
     try {
-      await api.livraisonsElectricite.createBatch(toSend, pageFarmId ?? undefined);
+      if (toUpdate.length > 0) {
+        await Promise.all(toUpdate.map((r) => api.livraisonsElectricite.update(r.serverId!, rowToRequest(r))));
+      }
+      if (toCreate.length > 0) {
+        await api.livraisonsElectricite.createBatch(toCreate, pageFarmId ?? undefined);
+      }
+      const createdCount = toCreate.length;
+      const updatedCount = toUpdate.length;
+      const parts: string[] = [];
+      if (createdCount > 0) parts.push(`${createdCount} nouvelle(s) ligne(s)`);
+      if (updatedCount > 0) parts.push(`${updatedCount} ligne(s) modifiée(s)`);
       toast({
         title: "Livraisons enregistrées",
-        description: `${toSend.length} ligne(s) enregistrée(s).`,
+        description: parts.join(". "),
       });
       loadMovements();
     } catch (e) {
@@ -299,73 +343,36 @@ export default function Electricite() {
     }
   };
 
-  const ageOrder = (() => {
-    const ages = new Set(rows.map((r) => r.age.trim() || "—").filter((s) => s !== "—"));
-    return Array.from(ages).sort((a, b) => {
-      const numA = parseInt(a.replace("S", ""), 10);
-      const numB = parseInt(b.replace("S", ""), 10);
-      if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-      return a.localeCompare(b);
-    });
+  const currentRows = selectedSemaine ? rows.filter((r) => (r.age || "").trim() === selectedSemaine) : [];
+  const weekTotal = (() => {
+    const t = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
+    for (const r of currentRows) {
+      t.qte += toNum(r.qte);
+      t.prix += toNum(r.prixPerUnit);
+      t.montant += toNum(r.montant);
+      t.male += toNum(r.male);
+      t.femelle += toNum(r.femelle);
+    }
+    return t;
   })();
-
-  interface WeekBlock {
-    age: string;
-    rows: ElectriciteRow[];
-    total: { qte: number; prix: number; montant: number; male: number; femelle: number };
-    cumul: { qte: number; prix: number; montant: number; male: number; femelle: number };
-  }
-
-  const blocksWithTotals: WeekBlock[] = [];
-  let runningCumul = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
-
-  for (const age of ageOrder) {
-    const weekRows = rows.filter((r) => (r.age.trim() || "—") === age);
-    const total = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
-    for (const r of weekRows) {
-      total.qte += toNum(r.qte);
-      total.prix += toNum(r.prixPerUnit);
-      total.montant += toNum(r.montant);
-      total.male += toNum(r.male);
-      total.femelle += toNum(r.femelle);
+  const cumulForSelectedSemaine = (() => {
+    const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
+    const semOrder = sortSemaines([...ages]);
+    const idx = semOrder.indexOf(selectedSemaine);
+    const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
+    const running = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
+    for (const sem of semsUpTo) {
+      const weekRows = rows.filter((r) => (r.age || "").trim() === sem);
+      for (const r of weekRows) {
+        running.qte += toNum(r.qte);
+        running.prix += toNum(r.prixPerUnit);
+        running.montant += toNum(r.montant);
+        running.male += toNum(r.male);
+        running.femelle += toNum(r.femelle);
+      }
     }
-    runningCumul = {
-      qte: runningCumul.qte + total.qte,
-      prix: runningCumul.prix + total.prix,
-      montant: runningCumul.montant + total.montant,
-      male: runningCumul.male + total.male,
-      femelle: runningCumul.femelle + total.femelle,
-    };
-    blocksWithTotals.push({ age, rows: weekRows, total, cumul: { ...runningCumul } });
-  }
-
-  const rowsWithoutAge = rows.filter((r) => {
-    const s = r.age.trim() || "—";
-    return s === "—" || !ageOrder.includes(s);
-  });
-  if (rowsWithoutAge.length > 0) {
-    const total = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
-    for (const r of rowsWithoutAge) {
-      total.qte += toNum(r.qte);
-      total.prix += toNum(r.prixPerUnit);
-      total.montant += toNum(r.montant);
-      total.male += toNum(r.male);
-      total.femelle += toNum(r.femelle);
-    }
-    runningCumul = {
-      qte: runningCumul.qte + total.qte,
-      prix: runningCumul.prix + total.prix,
-      montant: runningCumul.montant + total.montant,
-      male: runningCumul.male + total.male,
-      femelle: runningCumul.femelle + total.femelle,
-    };
-    blocksWithTotals.push({
-      age: "—",
-      rows: rowsWithoutAge,
-      total,
-      cumul: { ...runningCumul },
-    });
-  }
+    return running;
+  })();
 
   const colCount = 11; // date, age, designation, fournisseur, qte, prix, montant, N°BR, male, femelle, actions
 
@@ -440,6 +447,72 @@ export default function Electricite() {
             title="Choisir un lot — Livraisons Électricité"
           />
         </>
+      ) : !hasSemaineInUrl ? (
+        <div className="space-y-6">
+          {canAccessAllFarms && isValidFarmId && (
+            <button
+              type="button"
+              onClick={clearFarmSelection}
+              className="mb-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Changer de ferme
+            </button>
+          )}
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <span className="text-sm font-medium">Lot : <strong>{lotParam}</strong></span>
+            <button
+              type="button"
+              onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de lot
+            </button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Choisissez une semaine pour consulter et gérer les livraisons électricité.
+          </p>
+          <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-3">
+            {SEMAINES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => selectSemaine(s)}
+                className="flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group"
+              >
+                <Calendar className="w-5 h-5 shrink-0 text-muted-foreground group-hover:text-primary" />
+                <span className="font-semibold text-foreground">{s}</span>
+              </button>
+            ))}
+          </div>
+          <div className="pt-4 border-t border-border">
+            <p className="text-sm font-medium text-foreground mb-2">Ou ajouter une nouvelle semaine</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={newSemaineInput}
+                onChange={(e) => setNewSemaineInput(e.target.value)}
+                placeholder="ex. S25, S26..."
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const value = newSemaineInput.trim();
+                  if (value) {
+                    selectSemaine(value);
+                    setNewSemaineInput("");
+                  }
+                }}
+                disabled={!newSemaineInput.trim()}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <Plus className="w-4 h-4" />
+                Ajouter
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
         <>
           {canAccessAllFarms && isValidFarmId && (
@@ -452,32 +525,24 @@ export default function Electricite() {
               Changer de ferme
             </button>
           )}
-          <div className="space-y-4 mb-4">
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <Tag className="w-4 h-4 text-muted-foreground" />
-                <span>LOT N°</span>
-                <input
-                  type="text"
-                  value={lotFilter}
-                  onChange={(e) => setLotFilter(e.target.value)}
-                  placeholder="—"
-                  disabled={lotReadOnly}
-                  readOnly={lotReadOnly}
-                  className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-32 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-70 disabled:cursor-not-allowed"
-                />
-              </label>
-              {lotReadOnly && (
-                <span className="text-xs text-muted-foreground">(non modifiable après enregistrement)</span>
-              )}
-              <button
-                type="button"
-                onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
-                className="text-sm text-muted-foreground hover:text-foreground underline"
-              >
-                Changer de lot
-              </button>
-            </div>
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <span className="text-sm font-medium">Lot : <strong>{lotParam}</strong></span>
+            <button
+              type="button"
+              onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de lot
+            </button>
+            <span className="text-muted-foreground">|</span>
+            <span className="text-sm font-medium">Semaine : <strong>{selectedSemaine}</strong></span>
+            <button
+              type="button"
+              onClick={clearSemaineSelection}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de semaine
+            </button>
           </div>
 
           <div className="space-y-6 w-full min-w-0">
@@ -486,15 +551,17 @@ export default function Electricite() {
                 <h2 className="text-lg font-display font-bold text-foreground">
                   Livraisons électricité
                 </h2>
-                {canCreate && (
+                {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={addRow}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                    >
-                      <Plus className="w-4 h-4" /> Ligne
-                    </button>
+                    {canCreate && (
+                      <button
+                        type="button"
+                        onClick={addRow}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
+                      >
+                        <Plus className="w-4 h-4" /> Ligne
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleSave}
@@ -533,143 +600,144 @@ export default function Electricite() {
                       </tr>
                     ) : (
                       <>
-                        {blocksWithTotals.map((block) => (
-                          <React.Fragment key={block.age}>
-                            {block.rows.map((row) => {
-                              const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
-                              const showDelete = row.serverId != null ? canDelete : canCreate;
-                              return (
-                                <tr key={row.id}>
-                                  <td>
-                                    <input
-                                      type="date"
-                                      value={row.date}
-                                      onChange={(e) => updateRow(row.id, "date", e.target.value)}
-                                      disabled={rowReadOnly}
-                                    />
-                                  </td>
-                                  <td>
-                                    <input
-                                      type="text"
-                                      value={row.age}
-                                      onChange={(e) => updateRow(row.id, "age", e.target.value)}
-                                      placeholder="S1"
-                                      disabled={rowReadOnly}
-                                      className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                    />
-                                  </td>
-                                  <td>
-                                    <input
-                                      type="text"
-                                      value={row.designation}
-                                      onChange={(e) => updateRow(row.id, "designation", e.target.value)}
-                                      placeholder="—"
-                                      disabled={rowReadOnly}
-                                      className="min-w-[160px] bg-transparent border-0 outline-none text-sm"
-                                    />
-                                  </td>
-                                  <td>
-                                    <input
-                                      type="text"
-                                      value={row.supplier}
-                                      onChange={(e) => updateRow(row.id, "supplier", e.target.value)}
-                                      placeholder="—"
-                                      disabled={rowReadOnly}
-                                      className="min-w-[100px] bg-transparent border-0 outline-none text-sm"
-                                    />
-                                  </td>
-                                  <td>
-                                    <input
-                                      type="number"
-                                      value={row.qte}
-                                      onChange={(e) => updateRow(row.id, "qte", e.target.value)}
-                                      placeholder="—"
-                                      min={0}
-                                      disabled={rowReadOnly}
-                                    />
-                                  </td>
-                                  <td>
-                                    <input
-                                      type="number"
-                                      value={row.prixPerUnit}
-                                      onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
-                                      placeholder="—"
-                                      step="0.01"
-                                      min={0}
-                                      disabled={rowReadOnly}
-                                    />
-                                  </td>
-                                  <td className="font-semibold text-sm">{row.montant || "—"}</td>
-                                  <td>
-                                    <input
-                                      type="text"
-                                      value={row.numeroBR}
-                                      onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
-                                      placeholder="—"
-                                      disabled={rowReadOnly}
-                                      className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                    />
-                                  </td>
-                                  <td>
-                                    <input
-                                      type="number"
-                                      value={row.male}
-                                      onChange={(e) => updateRow(row.id, "male", e.target.value)}
-                                      placeholder="0"
-                                      min={0}
-                                      disabled={rowReadOnly}
-                                    />
-                                  </td>
-                                  <td>
-                                    <input
-                                      type="number"
-                                      value={row.femelle}
-                                      onChange={(e) => updateRow(row.id, "femelle", e.target.value)}
-                                      placeholder="0"
-                                      min={0}
-                                      disabled={rowReadOnly}
-                                    />
-                                  </td>
-                                  <td>
-                                    {showDelete && (
-                                      <button
-                                        onClick={() => removeRow(row.id)}
-                                        className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                        disabled={rows.length <= 1}
-                                      >
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                        {currentRows.map((row) => {
+                          const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
+                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                          return (
+                            <tr key={row.id}>
+                              <td>
+                                <input
+                                  type="date"
+                                  value={row.date}
+                                  onChange={(e) => updateRow(row.id, "date", e.target.value)}
+                                  disabled={rowReadOnly}
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.age}
+                                  onChange={(e) => updateRow(row.id, "age", e.target.value)}
+                                  placeholder={selectedSemaine}
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.designation}
+                                  onChange={(e) => updateRow(row.id, "designation", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="min-w-[160px] bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.supplier}
+                                  onChange={(e) => updateRow(row.id, "supplier", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="min-w-[100px] bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  value={row.qte}
+                                  onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                  placeholder="—"
+                                  min={0}
+                                  disabled={rowReadOnly}
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  value={row.prixPerUnit}
+                                  onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                  placeholder="—"
+                                  step="0.01"
+                                  min={0}
+                                  disabled={rowReadOnly}
+                                />
+                              </td>
+                              <td className="font-semibold text-sm">{row.montant || "—"}</td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.numeroBR}
+                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  value={row.male}
+                                  onChange={(e) => updateRow(row.id, "male", e.target.value)}
+                                  placeholder="0"
+                                  min={0}
+                                  disabled={rowReadOnly}
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  value={row.femelle}
+                                  onChange={(e) => updateRow(row.id, "femelle", e.target.value)}
+                                  placeholder="0"
+                                  min={0}
+                                  disabled={rowReadOnly}
+                                />
+                              </td>
+                              <td>
+                                {showDelete && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeRow(row.id)}
+                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {currentRows.length > 0 && (
+                          <>
                             <tr className="bg-muted/60">
                               <td colSpan={4} className="text-sm font-medium text-muted-foreground">
-                                {block.age === "—" ? "TOTAL" : `TOTAL ${block.age}`}
+                                TOTAL {selectedSemaine}
                               </td>
-                              <td>{block.total.qte}</td>
-                              <td>{block.total.prix.toFixed(2)}</td>
-                              <td>{block.total.montant.toFixed(2)}</td>
+                              <td>{weekTotal.qte}</td>
+                              <td>{weekTotal.prix.toFixed(2)}</td>
+                              <td>{weekTotal.montant.toFixed(2)}</td>
                               <td>—</td>
-                              <td>{block.total.male}</td>
-                              <td>{block.total.femelle}</td>
+                              <td>{weekTotal.male}</td>
+                              <td>{weekTotal.femelle}</td>
                               <td></td>
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={4} className="text-sm font-medium text-muted-foreground">
                                 CUMUL
                               </td>
-                              <td>{block.cumul.qte}</td>
-                              <td>{block.cumul.prix.toFixed(2)}</td>
-                              <td>{block.cumul.montant.toFixed(2)}</td>
+                              <td>{cumulForSelectedSemaine.qte}</td>
+                              <td>{cumulForSelectedSemaine.prix.toFixed(2)}</td>
+                              <td>{cumulForSelectedSemaine.montant.toFixed(2)}</td>
                               <td>—</td>
-                              <td>{block.cumul.male}</td>
-                              <td>{block.cumul.femelle}</td>
+                              <td>{cumulForSelectedSemaine.male}</td>
+                              <td>{cumulForSelectedSemaine.femelle}</td>
                               <td></td>
                             </tr>
-                          </React.Fragment>
-                        ))}
+                          </>
+                        )}
                       </>
                     )}
                   </tbody>

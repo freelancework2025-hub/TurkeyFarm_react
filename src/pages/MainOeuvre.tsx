@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Loader2, Plus, Save, Tag, Trash2 } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
@@ -15,14 +15,19 @@ import {
 
 /**
  * MAIN D'ŒUVRE
- * Table: Date, Employé (nom complet from employers DB), Temps de travail (1 jour or 1/2 demijour).
- * Permissions: canCreate for add/save, canUpdate for saved rows, canDelete for delete; isReadOnly = consultation seule.
+ * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
+ * Each semaine has its own table; TOTAL = jours for current semaine, CUMUL = running jours.
+ * Table: Date, Semaine (age), Employé, Temps (1 jour or 1/2 demijour). Permissions: canCreate/canUpdate/canDelete.
  */
+
+const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+const MIN_TABLE_ROWS = 7;
 
 interface MainOeuvreRow {
   id: string;
   serverId?: number;
   date: string;
+  age: string;
   employerId: number | null;
   employerNom: string;
   employerPrenom: string;
@@ -47,12 +52,34 @@ function formatTemps(fullDay: boolean | null | undefined): string {
   return fullDay === true ? "1" : fullDay === false ? "1/2" : "—";
 }
 
+/** Jours for one row: 1 if fullDay, 0.5 otherwise */
+function rowJours(fullDay: boolean): number {
+  return fullDay ? 1 : 0.5;
+}
+
+/** Sort semaines: S1, S2, ... S24, then custom (e.g. S25). */
+function sortSemaines(sems: string[]): string[] {
+  return [...sems].sort((a, b) => {
+    const numA = parseInt(a.replace(/^S(\d+)$/i, "$1"), 10);
+    const numB = parseInt(b.replace(/^S(\d+)$/i, "$1"), 10);
+    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+    if (!Number.isNaN(numA)) return -1;
+    if (!Number.isNaN(numB)) return 1;
+    return a.localeCompare(b);
+  });
+}
+
 export default function MainOeuvre() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
   const lotParam = searchParams.get("lot") ?? "";
+  const semaineParam = searchParams.get("semaine") ?? "";
   const selectedFarmId = farmIdParam ? parseInt(farmIdParam, 10) : null;
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
+  const hasLotInUrl = lotParam.trim() !== "";
+  const trimmedSemaine = semaineParam.trim();
+  const hasSemaineInUrl = trimmedSemaine !== "";
+  const selectedSemaine = trimmedSemaine;
 
   const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
@@ -68,12 +95,9 @@ export default function MainOeuvre() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [newSemaineInput, setNewSemaineInput] = useState("");
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
-
-  const hasLotInUrl = lotParam.trim() !== "";
-  const hasSavedData = rows.some((r) => r.serverId != null);
-  const lotReadOnly = hasSavedData;
 
   useEffect(() => {
     if (!showFarmSelector) return;
@@ -111,9 +135,28 @@ export default function MainOeuvre() {
   );
   const clearFarmSelection = useCallback(() => setSearchParams({}), [setSearchParams]);
 
-  const emptyRow = (): MainOeuvreRow => ({
+  const clearSemaineSelection = useCallback(() => {
+    const next: Record<string, string> = {};
+    if (selectedFarmId != null) next.farmId = String(selectedFarmId);
+    if (lotFilter.trim()) next.lot = lotFilter.trim();
+    setSearchParams(next);
+  }, [selectedFarmId, lotFilter, setSearchParams]);
+
+  const selectSemaine = useCallback(
+    (semaine: string) => {
+      const next: Record<string, string> = {};
+      if (selectedFarmId != null) next.farmId = String(selectedFarmId);
+      if (lotFilter.trim()) next.lot = lotFilter.trim();
+      next.semaine = semaine;
+      setSearchParams(next);
+    },
+    [selectedFarmId, lotFilter, setSearchParams]
+  );
+
+  const emptyRow = (age?: string): MainOeuvreRow => ({
     id: crypto.randomUUID(),
     date: today,
+    age: age ?? "",
     employerId: null,
     employerNom: "",
     employerPrenom: "",
@@ -132,30 +175,24 @@ export default function MainOeuvre() {
         id: crypto.randomUUID(),
         serverId: r.id,
         date: r.date ?? today,
+        age: r.age ?? "",
         employerId: r.employerId ?? null,
         employerNom: r.employerNom ?? "",
         employerPrenom: r.employerPrenom ?? "",
         fullDay: r.fullDay ?? true,
       }));
-      if (isReadOnly) {
-        setRows(mapped);
-      } else {
-        const lastDate = mapped.length > 0 ? mapped[mapped.length - 1].date : null;
-        const nextDate = lastDate && lastDate.trim() !== "" ? addOneDay(lastDate) : today;
-        const newRow: MainOeuvreRow = { ...emptyRow(), date: nextDate };
-        setRows(mapped.length ? [...mapped, newRow] : [newRow]);
-      }
+      setRows(mapped);
     } catch (e) {
       toast({
         title: "Erreur",
         description: e instanceof Error ? e.message : "Impossible de charger la main d'œuvre.",
         variant: "destructive",
       });
-      setRows(canCreate ? [emptyRow()] : []);
+      setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, isReadOnly, canCreate, toast, today]);
+  }, [showFarmSelector, pageFarmId, lotFilter, toast, today]);
 
   useEffect(() => {
     loadMovements();
@@ -169,18 +206,30 @@ export default function MainOeuvre() {
     const params: Record<string, string> = {};
     if (selectedFarmId != null) params.farmId = String(selectedFarmId);
     if (lotFilter.trim()) params.lot = lotFilter.trim();
+    if (hasSemaineInUrl && trimmedSemaine) params.semaine = trimmedSemaine;
     setSearchParams(params, { replace: true });
-  }, [selectedFarmId, lotFilter, setSearchParams]);
+  }, [selectedFarmId, lotFilter, hasSemaineInUrl, trimmedSemaine, setSearchParams]);
+
+  useEffect(() => {
+    if (!hasSemaineInUrl || !selectedSemaine) return;
+    const forSem = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    if (forSem.length >= MIN_TABLE_ROWS) return;
+    const toAdd = MIN_TABLE_ROWS - forSem.length;
+    setRows((prev) => [...prev, ...Array.from({ length: toAdd }, () => emptyRow(selectedSemaine))]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length]);
 
   const addRow = () => {
-    if (!canCreate) return;
-    const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;
-    const nextDate = lastRow?.date?.trim() !== "" ? addOneDay(lastRow.date) : today;
-    const newRow: MainOeuvreRow = { ...emptyRow(), date: nextDate };
+    if (!canCreate || !selectedSemaine) return;
+    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
+    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
+    const newRow: MainOeuvreRow = { ...emptyRow(selectedSemaine), date: nextDate };
     setRows((prev) => [...prev, newRow]);
   };
 
   const removeRow = (id: string) => {
+    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
     if (row?.serverId != null && !canDelete) return;
     if (row?.serverId != null) {
@@ -221,8 +270,19 @@ export default function MainOeuvre() {
     );
   };
 
+  const rowToRequest = (r: MainOeuvreRow): MainOeuvreRequest => ({
+    farmId: pageFarmId ?? undefined,
+    lot: lotFilter.trim() || null,
+    date: r.date || today,
+    age: r.age?.trim() || null,
+    employerId: r.employerId ?? undefined,
+    fullDay: r.fullDay,
+  });
+
   const handleSave = async () => {
-    if (!canCreate) {
+    const canSaveNew = canCreate;
+    const canSaveExisting = canUpdate;
+    if (!canSaveNew && !canSaveExisting) {
       toast({
         title: "Non autorisé",
         description: "Vous ne pouvez pas enregistrer les données.",
@@ -230,29 +290,29 @@ export default function MainOeuvre() {
       });
       return;
     }
-    if (!lotFilter.trim()) {
+    if (!lotFilter.trim() || !selectedSemaine) {
       toast({
-        title: "Lot requis",
-        description: "Indiquez le numéro de lot en haut de la page avant d'enregistrer.",
+        title: "Lot et semaine requis",
+        description: "Indiquez le lot et la semaine avant d'enregistrer.",
         variant: "destructive",
       });
       return;
     }
-    const toSend: MainOeuvreRequest[] = rows
-      .filter((r) => r.serverId == null)
-      .filter((r) => r.date.trim() !== "" && r.employerId != null)
-      .map((r) => ({
-        farmId: pageFarmId ?? undefined,
-        lot: lotFilter.trim() || null,
-        date: r.date || today,
-        employerId: r.employerId ?? undefined,
-        fullDay: r.fullDay,
-      }));
+    const forSem = (r: MainOeuvreRow) => (r.age || "").trim() === selectedSemaine;
+    const toCreate: MainOeuvreRequest[] = canSaveNew
+      ? rows
+          .filter((r) => forSem(r) && r.serverId == null)
+          .filter((r) => r.date.trim() !== "" && r.employerId != null)
+          .map((r) => rowToRequest(r))
+      : [];
+    const toUpdate = canSaveExisting
+      ? rows.filter((r) => forSem(r) && r.serverId != null && r.date.trim() !== "" && r.employerId != null)
+      : [];
 
-    if (toSend.length === 0) {
+    if (toCreate.length === 0 && toUpdate.length === 0) {
       toast({
         title: "Aucune ligne à enregistrer",
-        description: "Remplissez la date et choisissez un employé pour chaque ligne nouvelle.",
+        description: "Remplissez la date et choisissez un employé pour chaque ligne nouvelle ou modifiez une ligne existante.",
         variant: "destructive",
       });
       return;
@@ -260,10 +320,20 @@ export default function MainOeuvre() {
 
     setSaving(true);
     try {
-      await api.mainOeuvre.createBatch(toSend, pageFarmId ?? undefined);
+      if (toUpdate.length > 0) {
+        await Promise.all(toUpdate.map((r) => api.mainOeuvre.update(r.serverId!, rowToRequest(r))));
+      }
+      if (toCreate.length > 0) {
+        await api.mainOeuvre.createBatch(toCreate, pageFarmId ?? undefined);
+      }
+      const createdCount = toCreate.length;
+      const updatedCount = toUpdate.length;
+      const parts: string[] = [];
+      if (createdCount > 0) parts.push(`${createdCount} nouvelle(s) ligne(s)`);
+      if (updatedCount > 0) parts.push(`${updatedCount} ligne(s) modifiée(s)`);
       toast({
         title: "Enregistrement effectué",
-        description: `${toSend.length} ligne(s) enregistrée(s).`,
+        description: parts.join(". "),
       });
       loadMovements();
     } catch (e) {
@@ -277,7 +347,21 @@ export default function MainOeuvre() {
     }
   };
 
-  const colCount = 4; // date, employé, temps, actions
+  const currentRows = selectedSemaine ? rows.filter((r) => (r.age || "").trim() === selectedSemaine) : [];
+  const weekTotalJours = currentRows.reduce((sum, r) => sum + rowJours(r.fullDay), 0);
+  const cumulJours = (() => {
+    const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
+    const semOrder = sortSemaines([...ages]);
+    const idx = semOrder.indexOf(selectedSemaine);
+    const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
+    return semsUpTo.reduce(
+      (sum, sem) =>
+        sum + rows.filter((r) => (r.age || "").trim() === sem).reduce((s, r) => s + rowJours(r.fullDay), 0),
+      0
+    );
+  })();
+
+  const colCount = 5; // date, semaine (age), employé, temps, actions
 
   return (
     <AppLayout>
@@ -357,6 +441,72 @@ export default function MainOeuvre() {
             title="Choisir un lot — Main d'œuvre"
           />
         </>
+      ) : !hasSemaineInUrl ? (
+        <div className="space-y-6">
+          {canAccessAllFarms && isValidFarmId && (
+            <button
+              type="button"
+              onClick={clearFarmSelection}
+              className="mb-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Changer de ferme
+            </button>
+          )}
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <span className="text-sm font-medium">Lot : <strong>{lotParam}</strong></span>
+            <button
+              type="button"
+              onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de lot
+            </button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Choisissez une semaine pour consulter et gérer la main d&apos;œuvre.
+          </p>
+          <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-3">
+            {SEMAINES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => selectSemaine(s)}
+                className="flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group"
+              >
+                <Calendar className="w-5 h-5 shrink-0 text-muted-foreground group-hover:text-primary" />
+                <span className="font-semibold text-foreground">{s}</span>
+              </button>
+            ))}
+          </div>
+          <div className="pt-4 border-t border-border">
+            <p className="text-sm font-medium text-foreground mb-2">Ou ajouter une nouvelle semaine</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={newSemaineInput}
+                onChange={(e) => setNewSemaineInput(e.target.value)}
+                placeholder="ex. S25, S26..."
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const value = newSemaineInput.trim();
+                  if (value) {
+                    selectSemaine(value);
+                    setNewSemaineInput("");
+                  }
+                }}
+                disabled={!newSemaineInput.trim()}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <Plus className="w-4 h-4" />
+                Ajouter
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
         <>
           {canAccessAllFarms && isValidFarmId && (
@@ -369,47 +519,41 @@ export default function MainOeuvre() {
               Changer de ferme
             </button>
           )}
-          <div className="space-y-4 mb-4">
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <Tag className="w-4 h-4 text-muted-foreground" />
-                <span>LOT N°</span>
-                <input
-                  type="text"
-                  value={lotFilter}
-                  onChange={(e) => setLotFilter(e.target.value)}
-                  placeholder="—"
-                  disabled={lotReadOnly}
-                  readOnly={lotReadOnly}
-                  className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-32 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-70 disabled:cursor-not-allowed"
-                />
-              </label>
-              {lotReadOnly && (
-                <span className="text-xs text-muted-foreground">(non modifiable après enregistrement)</span>
-              )}
-              <button
-                type="button"
-                onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
-                className="text-sm text-muted-foreground hover:text-foreground underline"
-              >
-                Changer de lot
-              </button>
-            </div>
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <span className="text-sm font-medium">Lot : <strong>{lotParam}</strong></span>
+            <button
+              type="button"
+              onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de lot
+            </button>
+            <span className="text-muted-foreground">|</span>
+            <span className="text-sm font-medium">Semaine : <strong>{selectedSemaine}</strong></span>
+            <button
+              type="button"
+              onClick={clearSemaineSelection}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de semaine
+            </button>
           </div>
 
           <div className="space-y-6 w-full min-w-0">
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <h2 className="text-lg font-display font-bold text-foreground">Main d&apos;œuvre</h2>
-                {canCreate && (
+                {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={addRow}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                    >
-                      <Plus className="w-4 h-4" /> Ligne
-                    </button>
+                    {canCreate && (
+                      <button
+                        type="button"
+                        onClick={addRow}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
+                      >
+                        <Plus className="w-4 h-4" /> Ligne
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleSave}
@@ -427,6 +571,7 @@ export default function MainOeuvre() {
                   <thead>
                     <tr>
                       <th className="min-w-[120px]">Date</th>
+                      <th className="min-w-[70px]">Semaine</th>
                       <th className="min-w-[200px]">Employé (nom complet)</th>
                       <th className="min-w-[140px]">Temps de travail</th>
                       <th className="w-10"></th>
@@ -441,7 +586,7 @@ export default function MainOeuvre() {
                       </tr>
                     ) : (
                       <>
-                        {rows.map((row) => {
+                        {currentRows.map((row) => {
                           const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           return (
@@ -453,6 +598,16 @@ export default function MainOeuvre() {
                                   onChange={(e) => updateRow(row.id, "date", e.target.value)}
                                   disabled={rowReadOnly}
                                   className="bg-transparent border-0 outline-none text-sm w-full"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.age}
+                                  onChange={(e) => updateRow(row.id, "age", e.target.value)}
+                                  placeholder={selectedSemaine}
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
                               <td>
@@ -501,6 +656,7 @@ export default function MainOeuvre() {
                                     type="button"
                                     onClick={() => removeRow(row.id)}
                                     className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
@@ -509,12 +665,32 @@ export default function MainOeuvre() {
                             </tr>
                           );
                         })}
-                        {rows.length === 0 && !loading && (
+                        {currentRows.length === 0 && !loading && (
                           <tr>
                             <td colSpan={colCount} className="p-8 text-center text-muted-foreground">
                               Aucune entrée. {canCreate && "Ajoutez une ligne pour commencer."}
                             </td>
                           </tr>
+                        )}
+                        {currentRows.length > 0 && (
+                          <>
+                            <tr className="bg-muted/60">
+                              <td colSpan={2} className="text-sm font-medium text-muted-foreground">
+                                TOTAL {selectedSemaine} (jours)
+                              </td>
+                              <td>—</td>
+                              <td className="font-semibold text-sm">{weekTotalJours}</td>
+                              <td></td>
+                            </tr>
+                            <tr className="bg-muted/50">
+                              <td colSpan={2} className="text-sm font-medium text-muted-foreground">
+                                CUMUL (jours)
+                              </td>
+                              <td>—</td>
+                              <td className="font-semibold text-sm">{cumulJours}</td>
+                              <td></td>
+                            </tr>
+                          </>
                         )}
                       </>
                     )}
