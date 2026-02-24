@@ -234,6 +234,16 @@ export const api = {
           token: token ?? getStoredToken(),
         }
       ),
+    /** Replace all placements for the farm (delete existing then create). Use when saving after row deletions to avoid duplicates. Requires farm scope. */
+    replaceBatch: (body: PlacementRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<PlacementResponse[]>(
+        farmId != null ? `/api/placements/replace?farmId=${farmId}` : "/api/placements/replace",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
   },
   /** Reporting journalier (daily report) — optional farmId for Admin/RT/Backoffice to view/create for a specific farm */
   dailyReports: {
@@ -251,13 +261,24 @@ export const api = {
           token: token ?? getStoredToken(),
         }
       ),
+    /** Replace all reports for a date (delete existing then create). Use when saving after row deletions to avoid duplicates. */
+    replaceBatch: (reportDate: string, body: DailyReportRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<DailyReportResponse[]>(
+        `/api/daily-reports/replace?reportDate=${encodeURIComponent(reportDate)}${farmId != null ? `&farmId=${farmId}` : ""}`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
   },
-  /** Sorties Ferme — optional farmId and lot for filtering */
+  /** Sorties Ferme — optional farmId, lot and semaine for filtering */
   sorties: {
-    list: (params?: { farmId?: number | null; lot?: string | null }, token?: string | null) => {
+    list: (params?: { farmId?: number | null; lot?: string | null; semaine?: number | null }, token?: string | null) => {
       const search = new URLSearchParams();
       if (params?.farmId != null) search.set("farmId", String(params.farmId));
       if (params?.lot != null && params.lot !== "") search.set("lot", params.lot);
+      if (params?.semaine != null) search.set("semaine", String(params.semaine));
       const qs = search.toString();
       return apiFetch<SortieResponse[]>(
         qs ? `/api/sorties?${qs}` : "/api/sorties",
@@ -851,6 +872,17 @@ export const api = {
         { token: token ?? getStoredToken() }
       );
     },
+    getResumeSummary: (params: { farmId: number; lot: string; semaine: string; batiments: string[] }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
+      if (params.batiments?.length) search.set("batiments", params.batiments.join(","));
+      return apiFetch<ConsoResumeSummary>(
+        `/api/suivi-consommation-hebdo/resume-summary?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
     save: (body: SuiviConsommationHebdoRequest, farmId: number, token?: string | null) =>
       apiFetch<SuiviConsommationHebdoResponse>(
         `/api/suivi-consommation-hebdo?farmId=${farmId}`,
@@ -909,7 +941,7 @@ export const api = {
         }
       ),
   },
-  /** Suivi de Stock — computed: effectif restant fin de semaine, poids vif produit (kg), stock aliment */
+  /** Suivi de Stock — effectif restant, poids vif produit (kg), stock aliment (user-entered when batiment set) */
   suiviStock: {
     get: (params: { farmId?: number | null; lot: string; semaine: string; sex: string; batiment?: string | null }, token?: string | null) => {
       const search = new URLSearchParams();
@@ -923,6 +955,44 @@ export const api = {
         { token: token ?? getStoredToken() }
       );
     },
+    saveStockAliment: (
+      params: { farmId?: number | null; lot: string; semaine: string; sex: string; batiment?: string | null },
+      body: SaveStockAlimentRequest,
+      token?: string | null
+    ) => {
+      const search = new URLSearchParams();
+      if (params.farmId != null) search.set("farmId", String(params.farmId));
+      return apiFetch<SuiviStockResponse>(
+        `/api/suivi-stock/stock-aliment?${search.toString()}`,
+        { method: "PUT", body: JSON.stringify(body), token: token ?? getStoredToken() }
+      );
+    },
+  },
+  /** Suivi Coût Hebdomadaire — Prix de revient (e.g. AMORTISSEMENT). List: all; save: responsable technique only. */
+  suiviCoutHebdo: {
+    list: (params: { farmId: number; lot: string; semaine: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
+      return apiFetch<SuiviCoutHebdoResponse[]>(
+        `/api/suivi-cout-hebdo?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    save: (
+      body: SuiviCoutHebdoRequest,
+      params: { farmId: number; lot: string; semaine: string },
+      token?: string | null
+    ) =>
+      apiFetch<SuiviCoutHebdoResponse>(
+        `/api/suivi-cout-hebdo?farmId=${params.farmId}&lot=${encodeURIComponent(params.lot)}&semaine=${encodeURIComponent(params.semaine)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
   },
 };
 
@@ -1471,6 +1541,7 @@ export interface DepenseDiversResponse {
 export interface EmployerRequest {
   nom: string;
   prenom: string;
+  numeroEmploye?: string | null;
   salaire?: number | null;
 }
 
@@ -1478,6 +1549,7 @@ export interface EmployerResponse {
   id: number;
   nom: string;
   prenom: string;
+  numeroEmploye?: string | null;
   salaire?: number | null;
   version?: number;
   createdAt?: string;
@@ -1634,6 +1706,12 @@ export interface SuiviConsommationHebdoResponse {
   updatedAt?: string;
 }
 
+/** Resume page consumption summary — CONSOMME ALIMENT (semaine) and CUMUL from DB, only (batiment, sex) with stock saved */
+export interface ConsoResumeSummary {
+  consoAlimentSemaineSum?: number | null;
+  cumulAlimentConsommeSum?: number | null;
+}
+
 /** Suivi de PERFORMANCES Hebdo — request (REEL + NORME; NORME applied only if user has update permission) */
 export interface SuiviPerformancesHebdoRequest {
   farmId?: number | null;
@@ -1681,7 +1759,7 @@ export interface SuiviPerformancesHebdoResponse {
   updatedAt?: string;
 }
 
-/** Suivi de Stock — computed response (effectif restant, poids vif produit kg, stock aliment) */
+/** Suivi de Stock — effectif restant, poids vif produit kg, stock aliment (user-entered when batiment set) */
 export interface SuiviStockResponse {
   farmId: number;
   lot: string;
@@ -1692,6 +1770,37 @@ export interface SuiviStockResponse {
   effectifRestantFinSemaine?: number | null;
   poidsVifProduitKg?: number | null;
   stockAliment?: number | null;
+  /** When batiment is set: true if a stock record already exists (saved). Used to enforce RESPONSABLE_FERME create-only: can save once, cannot modify after. */
+  stockAlimentRecordExists?: boolean | null;
+}
+
+/** Request to save user-entered stock aliment (consumption is then computed: Stock_prev + Livraisons - Stock). */
+export interface SaveStockAlimentRequest {
+  lot: string;
+  semaine: string;
+  sex: string;
+  batiment?: string | null;
+  stockAlimentKg?: number | null;
+}
+
+/** Suivi Coût Hebdo — one cost line (e.g. AMORTISSEMENT) for Prix de revient. */
+export interface SuiviCoutHebdoResponse {
+  id: number;
+  farmId: number;
+  lot: string;
+  semaine: string;
+  designation: string;
+  valeurS1?: number | null;
+  cumul?: number | null;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SuiviCoutHebdoRequest {
+  designation: string;
+  valeurS1?: number | null;
+  cumul?: number | null;
 }
 
 /** Performance NORME — request (shared norms per farm/semaine/sex). Only ADMINISTRATEUR/RESPONSABLE_TECHNIQUE can save. */

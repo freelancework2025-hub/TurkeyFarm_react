@@ -95,6 +95,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Mâle"
             batiment={batiment}
             onSaveSuccess={onRefreshStock}
+            refreshKey={stockRefreshKey}
           />
           <ConsumptionTrackingTable
             farmId={farmId}
@@ -103,6 +104,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Mâle"
             batiment={batiment}
             onSaveSuccess={onRefreshStock}
+            refreshKey={stockRefreshKey}
           />
           <PerformanceTrackingTable
             farmId={farmId}
@@ -110,6 +112,7 @@ export default function SuiviTechniqueBatimentContent({
             semaine={semaine}
             sex="Mâle"
             batiment={batiment}
+            refreshKey={stockRefreshKey}
           />
           <StockTrackingTable
             farmId={farmId}
@@ -118,6 +121,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Mâle"
             batiment={batiment}
             refreshKey={stockRefreshKey}
+            onSaveSuccess={onRefreshStock}
           />
         </div>
       )}
@@ -150,6 +154,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Femelle"
             batiment={batiment}
             onSaveSuccess={onRefreshStock}
+            refreshKey={stockRefreshKey}
           />
           <ConsumptionTrackingTable
             farmId={farmId}
@@ -158,6 +163,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Femelle"
             batiment={batiment}
             onSaveSuccess={onRefreshStock}
+            refreshKey={stockRefreshKey}
           />
           <PerformanceTrackingTable
             farmId={farmId}
@@ -165,6 +171,7 @@ export default function SuiviTechniqueBatimentContent({
             semaine={semaine}
             sex="Femelle"
             batiment={batiment}
+            refreshKey={stockRefreshKey}
           />
           <StockTrackingTable
             farmId={farmId}
@@ -173,6 +180,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Femelle"
             batiment={batiment}
             refreshKey={stockRefreshKey}
+            onSaveSuccess={onRefreshStock}
           />
         </div>
       )}

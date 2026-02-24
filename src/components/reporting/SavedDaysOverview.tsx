@@ -4,11 +4,6 @@ import { api, type DailyReportResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 
-const MOIS = [
-  "janvier", "février", "mars", "avril", "mai", "juin",
-  "juillet", "août", "septembre", "octobre", "novembre", "décembre",
-];
-
 /** Format YYYY-MM-DD → dd/mm/yyyy */
 function formatDateDMY(iso: string): string {
   const [y, m, d] = iso.split("-");
@@ -17,52 +12,46 @@ function formatDateDMY(iso: string): string {
   return `${day}/${month}/${y}`;
 }
 
-/** Week of month (1–5): day 1–7 → S1, 8–14 → S2, etc. */
-function weekOfMonth(iso: string): number {
-  const d = new Date(iso + "T12:00:00");
-  return Math.ceil(d.getDate() / 7);
-}
-
-function monthYear(iso: string): { month: number; year: number } {
-  const d = new Date(iso + "T12:00:00");
-  return { month: d.getMonth(), year: d.getFullYear() };
+/** Date range for a week: "dd/mm – dd/mm/yyyy" (first day – last day) */
+function formatWeekDateRange(dates: string[]): string {
+  if (dates.length === 0) return "";
+  const sorted = [...dates].sort();
+  const first = formatDateDMY(sorted[0]!);
+  const last = formatDateDMY(sorted[sorted.length - 1]!);
+  if (first === last) return first;
+  const [d1, m1, y1] = first.split("/");
+  const [d2, m2, y2] = last.split("/");
+  return `${d1}/${m1} – ${d2}/${m2}/${y2}`;
 }
 
 type DayItem = { type: "day"; date: string };
-type WeekItem = { type: "week"; label: string; dates: string[] };
+type WeekItem = { type: "week"; weekKey: string; label: string; dateRange: string; dates: string[] };
 
+/**
+ * Group saved days into semaine boxes: each consecutive block of 7 days (newest first) becomes S1, S2, etc.
+ */
 function buildOverviewItems(uniqueDates: string[]): (DayItem | WeekItem)[] {
   if (uniqueDates.length === 0) return [];
-  const byWeek = new Map<string, string[]>();
-  for (const date of uniqueDates) {
-    const { month, year } = monthYear(date);
-    const w = weekOfMonth(date);
-    const key = `${year}-${month}-${w}`;
-    if (!byWeek.has(key)) byWeek.set(key, []);
-    byWeek.get(key)!.push(date);
-  }
+  const sorted = [...uniqueDates].sort((a, b) => b.localeCompare(a));
   const items: (DayItem | WeekItem)[] = [];
-  for (const [key, weekDates] of byWeek.entries()) {
-    const sorted = [...weekDates].sort();
-    if (sorted.length === 7) {
-      const [first] = sorted;
-      const { month, year } = monthYear(first!);
-      const w = weekOfMonth(first!);
-      const monthName = MOIS[month];
+  let semaineIndex = 0;
+  for (let i = 0; i < sorted.length; i += 7) {
+    const chunk = sorted.slice(i, i + 7);
+    if (chunk.length === 7) {
+      semaineIndex += 1;
+      const weekKey = `semaine-${semaineIndex}-${chunk[0]}`;
       items.push({
         type: "week",
-        label: `S${w} de ${monthName} ${year}`,
-        dates: sorted,
+        weekKey,
+        label: `S${semaineIndex}`,
+        dateRange: formatWeekDateRange(chunk),
+        dates: [...chunk].sort(),
       });
     } else {
-      for (const date of sorted) items.push({ type: "day", date });
+      for (const date of chunk) items.push({ type: "day", date });
     }
   }
-  return items.sort((a, b) => {
-    const dateA = a.type === "day" ? a.date : a.dates[0]!;
-    const dateB = b.type === "day" ? b.date : b.dates[0]!;
-    return dateB.localeCompare(dateA);
-  });
+  return items;
 }
 
 interface SavedDaysOverviewProps {
@@ -101,11 +90,11 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId }: 
     load();
   }, [load]);
 
-  const toggleWeek = (label: string) => {
+  const toggleWeek = (weekKey: string) => {
     setExpandedWeeks((prev) => {
       const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
+      if (next.has(weekKey)) next.delete(weekKey);
+      else next.add(weekKey);
       return next;
     });
   };
@@ -131,7 +120,7 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId }: 
               Jours enregistrés
             </h2>
             <p className="text-xs text-muted-foreground">
-              Cliquez sur un jour pour consulter ou modifier le rapport. Les semaines complètes (7 jours) sont regroupées.
+              Cliquez sur une semaine (S1, S2…) pour afficher les 7 jours, puis sur un jour pour ouvrir le rapport.
             </p>
           </div>
         </div>
@@ -169,25 +158,28 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId }: 
                   </button>
                 );
               }
-              const isExpanded = expandedWeeks.has(item.label);
+              const isExpanded = expandedWeeks.has(item.weekKey);
               return (
-                <div key={item.label} className="flex flex-col gap-2">
+                <div key={item.weekKey} className="flex flex-col gap-2">
                   <button
                     type="button"
-                    onClick={() => toggleWeek(item.label)}
-                    className="flex items-center gap-2 px-4 py-3 rounded-lg border border-border bg-muted/40 hover:bg-muted/60 text-sm font-medium text-foreground transition-colors"
+                    onClick={() => toggleWeek(item.weekKey)}
+                    className="flex flex-col items-start gap-0.5 px-4 py-3 rounded-lg border-2 border-border bg-muted/40 hover:bg-muted/60 hover:border-primary/50 text-left transition-colors min-w-[140px]"
                   >
-                    {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                    <span>{item.label}</span>
+                    <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      {isExpanded ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+                      {item.label}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{item.dateRange}</span>
                   </button>
                   {isExpanded && (
-                    <div className="flex flex-wrap gap-2 pl-6">
+                    <div className="flex flex-wrap gap-2 pl-2">
                       {item.dates.map((date) => (
                         <button
                           key={date}
                           type="button"
                           onClick={() => onSelectDay(date)}
-                          className="px-3 py-2 rounded-md border border-border bg-background hover:bg-muted/60 text-sm text-foreground"
+                          className="px-3 py-2 rounded-lg border border-border bg-background hover:bg-primary/10 hover:border-primary/50 text-sm font-medium text-foreground transition-colors"
                         >
                           {formatDateDMY(date)}
                         </button>

@@ -10,6 +10,7 @@ import Dashboard from "./pages/Dashboard";
 import ReportingJournalier from "./pages/ReportingJournalier";
 import SuiviTechniqueHebdomadaire from "./pages/SuiviTechniqueHebdomadaire";
 import ResumeProductionHebdoPage from "./pages/ResumeProductionHebdoPage";
+import ResumeCoutsHebdoPage from "./pages/ResumeCoutsHebdoPage";
 import SortiesFerme from "./pages/SortiesFerme";
 import Fournisseurs from "./pages/Fournisseurs";
 import LivraisonsAliment from "./pages/LivraisonsAliment";
@@ -71,6 +72,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <ResumeProductionHebdoPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/suivi-technique-hebdomadaire/resume-couts"
+              element={
+                <ProtectedRoute>
+                  <ResumeCoutsHebdoPage />
                 </ProtectedRoute>
               }
             />

@@ -121,7 +121,11 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
     }
     setSaving(true);
     try {
-      await api.placements.createBatch(toSend, farmId ?? undefined);
+      if (farmId != null) {
+        await api.placements.replaceBatch(toSend, farmId ?? undefined);
+      } else {
+        await api.placements.createBatch(toSend, farmId ?? undefined);
+      }
       toast({ title: "Effectifs enregistrés", description: `${toSend.length} ligne(s) enregistrée(s).` });
       await load();
     } catch (e) {
@@ -190,7 +194,6 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
         <table className="table-farm">
           <thead>
             <tr>
-              <th>Lot</th>
               <th>Date Mise en Place</th>
               <th>Bâtiment</th>
               <th>Sexe</th>
@@ -204,16 +207,6 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
               const readOnly = isReadOnly || (saved && !canUpdate);
               return (
                 <tr key={row.id}>
-                  <td>
-                    <input
-                      type="number"
-                      value={row.lot}
-                      onChange={(e) => updateRow(row.id, "lot", e.target.value)}
-                      min="1"
-                      readOnly={readOnly}
-                      className={readOnly ? "bg-muted/50 cursor-not-allowed" : ""}
-                    />
-                  </td>
                   <td>
                     <input
                       type="date"
@@ -275,7 +268,7 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
           </tbody>
           <tfoot>
             <tr className="bg-muted/60">
-              <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
+              <td colSpan={3} className="text-right font-semibold text-sm px-3 py-2">
                 Total Mâle / Femelle :
               </td>
               <td className="px-3 py-2 font-bold text-sm">
@@ -284,7 +277,7 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
               {!isReadOnly && canDelete ? <td></td> : null}
             </tr>
             <tr className="bg-muted/60">
-              <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
+              <td colSpan={3} className="text-right font-semibold text-sm px-3 py-2">
                 Total Général :
               </td>
               <td className="px-3 py-2 font-bold text-sm text-accent">

@@ -30,6 +30,8 @@ interface ProductionTrackingTableProps {
   batiment?: string;
   /** Called after production is saved so parent can refresh stock. */
   onSaveSuccess?: () => void;
+  /** When this key changes, production data is refetched so derived values stay in sync. */
+  refreshKey?: number;
 }
 
 /** Normalize NB (integer) input: strip leading zeros so "041" → "41" */
@@ -50,7 +52,7 @@ function normalizePoidsInput(value: string): string {
   return Number.isInteger(n) ? String(Math.round(n)) : String(n);
 }
 
-export default function ProductionTrackingTable({ farmId, lot, semaine, sex, batiment, onSaveSuccess }: ProductionTrackingTableProps) {
+export default function ProductionTrackingTable({ farmId, lot, semaine, sex, batiment, onSaveSuccess, refreshKey }: ProductionTrackingTableProps) {
   const { isReadOnly, canCreate, canUpdate } = useAuth();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -87,9 +89,10 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
     }
   }, [farmId, lot, semaine, sex, batiment, toast]);
 
+  // Refetch when refreshKey changes so derived values stay in sync without page refresh.
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   // REPORT = total from previous week (from API). TOTAL = REPORT + VENTE + CONSO + AUTRE (same as backend).
   const reportNbre = typeof data?.reportNbre === "number" ? data.reportNbre : (data?.reportNbre != null ? Number(data.reportNbre) : 0);

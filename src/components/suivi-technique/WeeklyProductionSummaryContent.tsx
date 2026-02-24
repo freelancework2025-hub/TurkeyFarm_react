@@ -6,7 +6,10 @@ import {
   type SuiviTechniqueHebdoResponse,
   type SuiviProductionHebdoResponse,
   type SuiviStockResponse,
+  type SuiviConsommationHebdoResponse,
+  type ConsoResumeSummary,
 } from "@/lib/api";
+import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumePerformanceTrackingTable";
 
 const SEXES = ["Mâle", "Femelle"] as const;
 
@@ -38,6 +41,9 @@ export default function WeeklyProductionSummaryContent({
   const [hebdoLists, setHebdoLists] = useState<Map<string, SuiviTechniqueHebdoResponse[]>>(new Map());
   const [productionByKey, setProductionByKey] = useState<Map<string, SuiviProductionHebdoResponse | null>>(new Map());
   const [stockByKey, setStockByKey] = useState<Map<string, SuiviStockResponse | null>>(new Map());
+  const [consumptionByKey, setConsumptionByKey] = useState<Map<string, SuiviConsommationHebdoResponse | null>>(new Map());
+  const [resumeConsoSummary, setResumeConsoSummary] = useState<ConsoResumeSummary | null>(null);
+  const [livraisonsAlimentList, setLivraisonsAlimentList] = useState<Awaited<ReturnType<typeof api.livraisonsAliment.list>>>([]);
 
   const key = (batiment: string, sex: string) => `${batiment}|${sex}`;
 
@@ -52,6 +58,7 @@ export default function WeeklyProductionSummaryContent({
     const hebdoPromises: Promise<void>[] = [];
     const productionPromises: Promise<void>[] = [];
     const stockPromises: Promise<void>[] = [];
+    const consumptionPromises: Promise<void>[] = [];
 
     for (const batiment of allBatiments) {
       for (const sex of SEXES) {
@@ -79,10 +86,26 @@ export default function WeeklyProductionSummaryContent({
             .then((r) => setStockByKey((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
             .catch(() => setStockByKey((prev) => new Map(prev).set(key(batiment, sex), null)))
         );
+        consumptionPromises.push(
+          api.suiviConsommationHebdo
+            .get({ farmId, lot, semaine, sex, batiment })
+            .then((r) => setConsumptionByKey((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
+            .catch(() => setConsumptionByKey((prev) => new Map(prev).set(key(batiment, sex), null)))
+        );
       }
     }
 
-    Promise.all([...setupPromises, ...hebdoPromises, ...productionPromises, ...stockPromises]).finally(() =>
+    const livraisonsPromise = api.livraisonsAliment
+      .list({ farmId, lot, sem: semaine })
+      .then((list) => setLivraisonsAlimentList(list ?? []))
+      .catch(() => setLivraisonsAlimentList([]));
+
+    const resumeSummaryPromise = api.suiviConsommationHebdo
+      .getResumeSummary({ farmId, lot, semaine, batiments: allBatiments })
+      .then((r) => setResumeConsoSummary(r ?? null))
+      .catch(() => setResumeConsoSummary(null));
+
+    Promise.all([...setupPromises, ...hebdoPromises, ...productionPromises, ...stockPromises, ...consumptionPromises, livraisonsPromise, resumeSummaryPromise]).finally(() =>
       setLoading(false)
     );
   }, [farmId, lot, semaine, allBatiments]);
@@ -177,6 +200,42 @@ export default function WeeklyProductionSummaryContent({
     return { totalMortality, totalWater };
   }, [aggregatedRows]);
 
+  /** Last value of cumul mortalité % (last day of week) for VIABILITE = 100% − this */
+  const lastMortaliteCumulPct = useMemo((): number | null => {
+    if (aggregatedRows.length === 0) return null;
+    const last = aggregatedRows[aggregatedRows.length - 1];
+    const pct = parseFloat(last.mortaliteCumulPct);
+    return Number.isNaN(pct) ? null : pct;
+  }, [aggregatedRows]);
+
+  // CONSOMME ALIMENT (semaine) and CUMUL: read from database via resume-summary API (only (batiment, sex) with stock saved).
+  // Fallback to frontend aggregate when API not yet loaded.
+  const aggregatedConsommation = useMemo(() => {
+    if (resumeConsoSummary != null) {
+      const conso = resumeConsoSummary.consoAlimentSemaineSum != null ? Number(resumeConsoSummary.consoAlimentSemaineSum) : 0;
+      const cumul = resumeConsoSummary.cumulAlimentConsommeSum != null ? Number(resumeConsoSummary.cumulAlimentConsommeSum) : 0;
+      return { consoAlimentSemaineSum: conso, cumulAlimentConsommeSum: cumul };
+    }
+    let consoAlimentSemaineSum = 0;
+    let cumulAlimentConsommeSum = 0;
+    for (const batiment of allBatiments) {
+      for (const sex of SEXES) {
+        const stock = stockByKey.get(key(batiment, sex));
+        if (!stock?.stockAlimentRecordExists) continue;
+        const c = consumptionByKey.get(key(batiment, sex));
+        if (c?.consommationAlimentSemaine != null) consoAlimentSemaineSum += Number(c.consommationAlimentSemaine);
+        if (c?.cumulAlimentConsomme != null) cumulAlimentConsommeSum += Number(c.cumulAlimentConsomme);
+      }
+    }
+    return { consoAlimentSemaineSum, cumulAlimentConsommeSum };
+  }, [resumeConsoSummary, consumptionByKey, stockByKey, allBatiments]);
+
+  // INDICE EAU/ALIMENT = sum CONSOMME ALIMENT / total eau semaine (from the weekly tracking table on this page)
+  const indiceEauAlimentResume =
+    weeklyTotals.totalWater > 0 && aggregatedConsommation.consoAlimentSemaineSum != null
+      ? aggregatedConsommation.consoAlimentSemaineSum / weeklyTotals.totalWater
+      : null;
+
   const aggregatedProduction = useMemo(() => {
     let reportNbre = 0;
     let reportPoids = 0;
@@ -228,20 +287,8 @@ export default function WeeklyProductionSummaryContent({
     return Math.max(0, depart - mortalite - sorties);
   }, [totalEffectifDepart, weeklyTotals.totalMortality, aggregatedProduction.venteNbre, aggregatedProduction.consoNbre, aggregatedProduction.autreNbre]);
 
-  // Last active setup = last (batiment, sex) in chain order (B1 Mâle, B1 Femelle, B2 Mâle, …) that has a saved setup (SuiviSetupForm).
-  // STOCK ALIMENT on resume = stock aliment for that (batiment, sex), i.e. final value after the last active setup in the chain.
-  const lastActiveSetup = useMemo((): { batiment: string; sex: string } | null => {
-    let last: { batiment: string; sex: string } | null = null;
-    for (const batiment of allBatiments) {
-      for (const sex of SEXES) {
-        const setup = setups.get(key(batiment, sex));
-        if (setup != null) last = { batiment, sex };
-      }
-    }
-    return last;
-  }, [setups, allBatiments]);
-
-  // Stock for the chosen semaine: effectif restant computed; poids vif summed; stock aliment = value for last active setup.
+  // Stock for the chosen semaine: effectif restant computed; poids vif summed; stock aliment = sum of stock
+  // for each sex in each activated batiment (batiment+sex with a setup record).
   const aggregatedStock = useMemo(() => {
     let poidsVifProduitKg = 0;
     for (const batiment of allBatiments) {
@@ -250,16 +297,49 @@ export default function WeeklyProductionSummaryContent({
         if (s?.poidsVifProduitKg != null) poidsVifProduitKg += Number(s.poidsVifProduitKg);
       }
     }
-    const stockAlimentFinal =
-      lastActiveSetup != null
-        ? (stockByKey.get(key(lastActiveSetup.batiment, lastActiveSetup.sex))?.stockAliment ?? null)
-        : null;
+    // Sum of stock aliment over each sex in each activated batiment (only batiment+sex with setup)
+    let stockAlimentSum = 0;
+    let hasAnyStock = false;
+    for (const batiment of allBatiments) {
+      for (const sex of SEXES) {
+        const setup = setups.get(key(batiment, sex));
+        if (!setup) continue;
+        const s = stockByKey.get(key(batiment, sex));
+        if (s?.stockAliment != null && !Number.isNaN(Number(s.stockAliment))) {
+          stockAlimentSum += Number(s.stockAliment);
+          hasAnyStock = true;
+        }
+      }
+    }
+    const stockAlimentFinal = hasAnyStock ? stockAlimentSum : null;
     return {
       effectifRestantFinSemaine: effectifRestantFinSemaineComputed,
       poidsVifProduitKg,
       stockAliment: stockAlimentFinal,
     };
-  }, [stockByKey, allBatiments, effectifRestantFinSemaineComputed, lastActiveSetup]);
+  }, [stockByKey, setups, allBatiments, effectifRestantFinSemaineComputed]);
+
+  /** Quantité livrée = sum of QTE for the selected semaine (from livraisons aliment) */
+  const quantiteLivreeSemaine = useMemo(() => {
+    return livraisonsAlimentList
+      .filter((r) => (r.sem ?? "").trim() === semaine)
+      .reduce((sum, r) => sum + (Number(r.qte) || 0), 0);
+  }, [livraisonsAlimentList, semaine]);
+
+  /** QL-Stock = Quantité livrée − stock aliment */
+  const qlStock = useMemo(() => {
+    const stock = aggregatedStock.stockAliment;
+    if (stock == null || Number.isNaN(stock)) return null;
+    return quantiteLivreeSemaine - Number(stock);
+  }, [quantiteLivreeSemaine, aggregatedStock.stockAliment]);
+
+  /** ECART = QL-Stock − CUMUL ALIMENT CONSOMME (semaine) */
+  const ecart = useMemo(() => {
+    if (qlStock == null || !Number.isFinite(qlStock)) return null;
+    const cumul = aggregatedConsommation.cumulAlimentConsommeSum;
+    if (cumul == null || !Number.isFinite(cumul)) return null;
+    return qlStock - Number(cumul);
+  }, [qlStock, aggregatedConsommation.cumulAlimentConsommeSum]);
 
   function formatStockValue(value: number | null | undefined): string {
     if (value == null || Number.isNaN(value)) return "—";
@@ -408,7 +488,19 @@ export default function WeeklyProductionSummaryContent({
         </div>
       </div>
 
-      {/* 4. Combined production tracking table (read-only) — sum of all batiments and both sexes */}
+      {/* 4. Performance / Consommation résumé — CONSOMME ALIMENT, CUMUL ALIMENT, INDICE EAU/ALIMENT */}
+      <ResumePerformanceTrackingTable
+        semaine={semaine}
+        consoAlimentSemaineSum={aggregatedConsommation.consoAlimentSemaineSum}
+        cumulAlimentConsommeSum={aggregatedConsommation.cumulAlimentConsommeSum}
+        indiceEauAliment={indiceEauAlimentResume}
+        poidsVifProduitKg={aggregatedStock.poidsVifProduitKg}
+        totalNbreSuiviProduction={aggregatedProduction.totalNbre}
+        effectifRestantFinSemaine={aggregatedStock.effectifRestantFinSemaine}
+        lastMortaliteCumulPct={lastMortaliteCumulPct}
+      />
+
+      {/* 5. Combined production tracking table (read-only) — sum of all batiments and both sexes */}
       <div className="bg-card rounded-lg border border-border shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h3 className="text-base font-display font-bold text-foreground underline decoration-primary/40">
@@ -493,7 +585,7 @@ export default function WeeklyProductionSummaryContent({
         </div>
       </div>
 
-      {/* 5. Combined stock tracking table (read-only) — sum of all batiments and both sexes */}
+      {/* 6. Combined stock tracking table (read-only) — sum of all batiments and both sexes */}
       <div className="bg-card rounded-lg border border-border shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h3 className="text-base font-display font-bold text-foreground underline decoration-primary/40">
@@ -532,14 +624,58 @@ export default function WeeklyProductionSummaryContent({
               <tr className="border-b border-border bg-card">
                 <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
                   STOCK ALIMENT
-                  <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                    {lastActiveSetup
-                      ? `(valeur finale — dernier setup actif : ${lastActiveSetup.batiment}, ${lastActiveSetup.sex})`
-                      : "(valeur finale — aucun setup enregistré)"}
-                  </span>
                 </td>
                 <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
                   {formatStockValue(aggregatedStock.stockAliment)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 7. Contrôle des stocks — Quantité livrée (cumul QTE semaine), QL-Stock */}
+      <div className="bg-card rounded-lg border border-border shadow-sm">
+        <div className="px-5 py-4 border-b border-border">
+          <h3 className="text-base font-display font-bold text-foreground underline decoration-primary/40">
+            Contrôle des stocks — {semaine}
+          </h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[320px] text-sm border-collapse">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                <th className="px-4 py-2.5 text-left font-semibold text-foreground w-[280px]">
+                  INDICATEUR
+                </th>
+                <th className="px-3 py-2.5 text-center font-semibold text-foreground border-l border-border">
+                  VALEUR
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-border bg-card">
+                <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
+                  Quantité livrée
+                </td>
+                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+                  {formatStockValue(quantiteLivreeSemaine)}
+                </td>
+              </tr>
+              <tr className="border-b border-border bg-muted/10">
+                <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
+                  QL-Stock
+                </td>
+                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+                  {formatStockValue(qlStock)}
+                </td>
+              </tr>
+              <tr className="border-b border-border bg-card">
+                <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
+                  ECART
+                </td>
+                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+                  {formatStockValue(ecart)}
                 </td>
               </tr>
             </tbody>

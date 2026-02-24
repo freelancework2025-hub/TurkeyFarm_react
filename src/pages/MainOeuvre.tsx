@@ -32,6 +32,7 @@ interface MainOeuvreRow {
   employerNom: string;
   employerPrenom: string;
   fullDay: boolean;
+  observation: string;
 }
 
 function addOneDay(isoDate: string): string {
@@ -69,6 +70,18 @@ function sortSemaines(sems: string[]): string[] {
   });
 }
 
+/** Sort lots: Lot1, Lot2, ... (natural order). */
+function sortLots(lotList: string[]): string[] {
+  return [...lotList].sort((a, b) => {
+    const numA = parseInt(a.replace(/^.*?(\d+)$/i, "$1"), 10);
+    const numB = parseInt(b.replace(/^.*?(\d+)$/i, "$1"), 10);
+    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+    if (!Number.isNaN(numA)) return -1;
+    if (!Number.isNaN(numB)) return 1;
+    return a.localeCompare(b);
+  });
+}
+
 export default function MainOeuvre() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
@@ -96,6 +109,7 @@ export default function MainOeuvre() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
+  const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
 
@@ -110,14 +124,14 @@ export default function MainOeuvre() {
   }, [showFarmSelector]);
 
   useEffect(() => {
-    if (showFarmSelector || !pageFarmId || hasLotInUrl) return;
+    if (showFarmSelector || !pageFarmId) return;
     setLotsLoading(true);
     api.farms
       .lots(pageFarmId)
       .then((list) => setLots(Array.isArray(list) ? list : []))
       .catch(() => setLots([]))
       .finally(() => setLotsLoading(false));
-  }, [showFarmSelector, pageFarmId, hasLotInUrl]);
+  }, [showFarmSelector, pageFarmId]);
 
   useEffect(() => {
     if (showFarmSelector) return;
@@ -153,15 +167,36 @@ export default function MainOeuvre() {
     [selectedFarmId, lotFilter, setSearchParams]
   );
 
-  const emptyRow = (age?: string): MainOeuvreRow => ({
+  const emptyRow = (age?: string, overrideDate?: string): MainOeuvreRow => ({
     id: crypto.randomUUID(),
-    date: today,
+    date: overrideDate ?? today,
     age: age ?? "",
     employerId: null,
     employerNom: "",
     employerPrenom: "",
     fullDay: true,
+    observation: "",
   });
+
+  /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today). */
+  const getStartDateForSemaine = useCallback(
+    (semaine: string): string => {
+      const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
+      ages.add(semaine.trim());
+      const semOrder = sortSemaines([...ages]);
+      const idx = semOrder.indexOf(semaine.trim());
+      if (idx < 0) return today;
+      if (idx === 0) return previousLotLastDate ?? today;
+      const prevSem = semOrder[idx - 1];
+      const prevRows = rows.filter((r) => (r.age || "").trim() === prevSem);
+      if (prevRows.length === 0) return today;
+      const dates = prevRows.map((r) => r.date).filter((d) => d?.trim());
+      if (dates.length === 0) return today;
+      const maxD = dates.sort()[dates.length - 1];
+      return maxD ? addOneDay(maxD) : today;
+    },
+    [rows, previousLotLastDate]
+  );
 
   const loadMovements = useCallback(async () => {
     if (showFarmSelector || !lotFilter.trim()) return;
@@ -180,6 +215,7 @@ export default function MainOeuvre() {
         employerNom: r.employerNom ?? "",
         employerPrenom: r.employerPrenom ?? "",
         fullDay: r.fullDay ?? true,
+        observation: r.observation ?? "",
       }));
       setRows(mapped);
     } catch (e) {
@@ -199,6 +235,36 @@ export default function MainOeuvre() {
   }, [loadMovements]);
 
   useEffect(() => {
+    if (!lotFilter.trim() || !pageFarmId || lots.length === 0) {
+      setPreviousLotLastDate(null);
+      return;
+    }
+    const ordered = sortLots(lots);
+    const currentIndex = ordered.indexOf(lotFilter.trim());
+    if (currentIndex <= 0) {
+      setPreviousLotLastDate(null);
+      return;
+    }
+    const previousLot = ordered[currentIndex - 1];
+    api.mainOeuvre
+      .list({ farmId: pageFarmId, lot: previousLot })
+      .then((list) => {
+        if (list.length === 0) {
+          setPreviousLotLastDate(null);
+          return;
+        }
+        const dates = list.map((r) => r.date).filter((d): d is string => !!d && d.trim() !== "");
+        if (dates.length === 0) {
+          setPreviousLotLastDate(null);
+          return;
+        }
+        const maxDate = dates.sort()[dates.length - 1];
+        setPreviousLotLastDate(addOneDay(maxDate));
+      })
+      .catch(() => setPreviousLotLastDate(null));
+  }, [lotFilter, pageFarmId, lots]);
+
+  useEffect(() => {
     setLotFilter(lotParam);
   }, [lotParam]);
 
@@ -215,14 +281,30 @@ export default function MainOeuvre() {
     const forSem = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
-    setRows((prev) => [...prev, ...Array.from({ length: toAdd }, () => emptyRow(selectedSemaine))]);
-  }, [hasSemaineInUrl, selectedSemaine, rows.length]);
+    const startDate =
+      forSem.length > 0
+        ? (() => {
+            const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
+            if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
+            const maxD = dates.sort()[dates.length - 1];
+            return addOneDay(maxD);
+          })()
+        : getStartDateForSemaine(selectedSemaine);
+    const newRows: MainOeuvreRow[] = [];
+    let nextDate = startDate;
+    for (let i = 0; i < toAdd; i++) {
+      newRows.push(emptyRow(selectedSemaine, nextDate));
+      nextDate = addOneDay(nextDate);
+    }
+    setRows((prev) => [...prev, ...newRows]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine]);
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
     const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
-    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
+    const nextDate =
+      lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
     const newRow: MainOeuvreRow = { ...emptyRow(selectedSemaine), date: nextDate };
     setRows((prev) => [...prev, newRow]);
   };
@@ -270,14 +352,22 @@ export default function MainOeuvre() {
     );
   };
 
-  const rowToRequest = (r: MainOeuvreRow): MainOeuvreRequest => ({
-    farmId: pageFarmId ?? undefined,
-    lot: lotFilter.trim() || null,
-    date: r.date || today,
-    age: r.age?.trim() || null,
-    employerId: r.employerId ?? undefined,
-    fullDay: r.fullDay,
-  });
+  const rowToRequest = (r: MainOeuvreRow): MainOeuvreRequest => {
+    const emp = r.employerId != null ? employers.find((e) => e.id === r.employerId) : null;
+    const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
+    const jours = rowJours(r.fullDay);
+    const montant = Math.round(salaire * jours * 100) / 100;
+    return {
+      farmId: pageFarmId ?? undefined,
+      lot: lotFilter.trim() || null,
+      date: r.date || today,
+      age: r.age?.trim() || null,
+      employerId: r.employerId ?? undefined,
+      fullDay: r.fullDay,
+      montant,
+      observation: r.observation?.trim() || undefined,
+    };
+  };
 
   const handleSave = async () => {
     const canSaveNew = canCreate;
@@ -361,7 +451,7 @@ export default function MainOeuvre() {
     );
   })();
 
-  const colCount = 5; // date, semaine (age), employé, temps, actions
+  const colCount = 7; // date, semaine, employé, temps, montant, observation, actions
 
   return (
     <AppLayout>
@@ -574,6 +664,8 @@ export default function MainOeuvre() {
                       <th className="min-w-[70px]">Semaine</th>
                       <th className="min-w-[200px]">Employé (nom complet)</th>
                       <th className="min-w-[140px]">Temps de travail</th>
+                      <th className="min-w-[100px]">Montant</th>
+                      <th className="min-w-[180px]">Observation</th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
@@ -589,6 +681,9 @@ export default function MainOeuvre() {
                         {currentRows.map((row) => {
                           const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
                           const showDelete = row.serverId != null ? canDelete : canCreate;
+                          const emp = row.employerId != null ? employers.find((e) => e.id === row.employerId) : null;
+                          const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
+                          const montantRow = salaire * rowJours(row.fullDay);
                           return (
                             <tr key={row.id}>
                               <td>
@@ -650,6 +745,24 @@ export default function MainOeuvre() {
                                   </select>
                                 )}
                               </td>
+                              <td className="text-sm tabular-nums">
+                                {row.employerId != null
+                                  ? montantRow.toFixed(2)
+                                  : "—"}
+                              </td>
+                              <td>
+                                {rowReadOnly ? (
+                                  <span className="text-sm">{row.observation || "—"}</span>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    value={row.observation}
+                                    onChange={(e) => updateRow(row.id, "observation", e.target.value)}
+                                    placeholder="Observation"
+                                    className="w-full min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                                  />
+                                )}
+                              </td>
                               <td>
                                 {showDelete && (
                                   <button
@@ -680,7 +793,14 @@ export default function MainOeuvre() {
                               </td>
                               <td>—</td>
                               <td className="font-semibold text-sm">{weekTotalJours}</td>
-                              <td></td>
+                              <td className="font-semibold text-sm tabular-nums">
+                                {currentRows.reduce((sum, r) => {
+                                  const emp = r.employerId != null ? employers.find((e) => e.id === r.employerId) : null;
+                                  const s = emp?.salaire != null ? Number(emp.salaire) : 0;
+                                  return sum + s * rowJours(r.fullDay);
+                                }, 0).toFixed(2)}
+                              </td>
+                              <td colSpan={2}></td>
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={2} className="text-sm font-medium text-muted-foreground">
@@ -689,6 +809,7 @@ export default function MainOeuvre() {
                               <td>—</td>
                               <td className="font-semibold text-sm">{cumulJours}</td>
                               <td></td>
+                              <td colSpan={2}></td>
                             </tr>
                           </>
                         )}

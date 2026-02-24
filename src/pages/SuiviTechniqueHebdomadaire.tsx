@@ -500,7 +500,15 @@ export default function SuiviTechniqueHebdomadaire() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => toast({ title: "À venir", description: "Résumé des coûts hebdomadaires sera disponible prochainement." })}
+                  onClick={() => {
+                    if (reportingFarmId == null) {
+                      toast({ title: "Erreur", description: "Ferme non sélectionnée.", variant: "destructive" });
+                      return;
+                    }
+                    navigate(
+                      `/suivi-technique-hebdomadaire/resume-couts?farmId=${reportingFarmId}&lot=${encodeURIComponent(lotParam)}&semaine=${encodeURIComponent(selectedSemaine)}&batiments=${allBatiments.join(",")}`
+                    );
+                  }}
                   className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left"
                 >
                   <DollarSign className="w-5 h-5 shrink-0 text-primary" />

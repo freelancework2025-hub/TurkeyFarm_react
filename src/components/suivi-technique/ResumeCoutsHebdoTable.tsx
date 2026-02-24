@@ -1,0 +1,334 @@
+/**
+ * Résumé des coûts hebdomadaires — Prix de revient table.
+ * Columns: DESIGNATION, Semaine choisie S1, Cumul, Cumul DH/KG, %
+ * - Cumul DH/KG = cumul / POIDS VIF PRODUIT EN KG (from STOCK — Tous bâtiments — S1)
+ * - % = cumul / total of all cumuls
+ * S1 (and cumul) for AMORTISSEMENT and DINDONNEAUX: editable only by responsable technique; others read-only.
+ */
+
+import { useState, useMemo } from "react";
+import { api, type SuiviCoutHebdoResponse } from "@/lib/api";
+import { Loader2 } from "lucide-react";
+
+export interface ResumeCoutsHebdoTableProps {
+  /** Semaine label (e.g. S1) for the header */
+  semaine: string;
+  /** Cost lines from API (e.g. AMORTISSEMENT) */
+  rows: SuiviCoutHebdoResponse[];
+  /** Read-only rows from module totals (ALIMENT, PDTS VETERINAIRES, etc.): S1 = total Montant for the chosen week */
+  computedRows?: { designation: string; valeurS1: number; cumul: number }[];
+  /** POIDS VIF PRODUIT EN KG from STOCK — Tous bâtiments — S1 (Résumé hebdomadaire de la production) */
+  poidsVifProduitKg: number | null;
+  /** True if user can edit S1 and cumul (responsable technique or admin) */
+  canEditS1: boolean;
+  farmId: number;
+  lot: string;
+  /** Callback after save to refresh the list */
+  onSaveSuccess?: () => void;
+}
+
+const DESIGNATION_AMORTISSEMENT = "AMORTISSEMENT";
+const DESIGNATION_DINDONNEAUX = "DINDONNEAUX";
+
+/** Designations whose S1 and CUMUL are saisie by responsable technique only. */
+const EDITABLE_DESIGNATIONS = [DESIGNATION_AMORTISSEMENT, DESIGNATION_DINDONNEAUX] as const;
+
+function isEditableByRespTech(designation: string | null | undefined): boolean {
+  const d = designation?.toUpperCase();
+  return EDITABLE_DESIGNATIONS.some((ed) => ed === d);
+}
+
+/** Designation sort order: AMORTISSEMENT, DINDONNEAUX, then module rows (ALIMENT, PDTS VETERINAIRES, ...), then others. */
+const COMPUTED_DESIGNATION_ORDER: Record<string, number> = {
+  AMORTISSEMENT: 0,
+  DINDONNEAUX: 1,
+  ALIMENT: 2,
+  "PDTS VETERINAIRES": 3,
+  "PDTS D'HYGIENE": 4,
+  GAZ: 5,
+  PAILLE: 6,
+  ELECTRICITE: 7,
+  "M.O (JOUR DE TRAVAIL)": 8,
+};
+
+function designationOrder(designation: string | null | undefined): number {
+  const d = designation?.toUpperCase();
+  if (d != null && d in COMPUTED_DESIGNATION_ORDER)
+    return COMPUTED_DESIGNATION_ORDER[d as keyof typeof COMPUTED_DESIGNATION_ORDER];
+  return 9;
+}
+
+/** Safely coerce API value (number, string, null) to number for calculations. */
+function toNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const n = typeof value === "number" ? value : parseFloat(String(value).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatNum(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
+}
+
+function formatPct(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  return `${value.toFixed(2).replace(".", ",")} %`;
+}
+
+export default function ResumeCoutsHebdoTable({
+  semaine,
+  rows,
+  computedRows = [],
+  poidsVifProduitKg,
+  canEditS1,
+  farmId,
+  lot,
+  onSaveSuccess,
+}: ResumeCoutsHebdoTableProps) {
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editValeurS1, setEditValeurS1] = useState<string>("");
+  const [editCumul, setEditCumul] = useState<string>("");
+
+  // Merge API rows (with placeholders for AMORTISSEMENT/DINDONNEAUX) and computed rows from modules
+  const displayRows = useMemo((): SuiviCoutHebdoResponse[] => {
+    const withPlaceholders = [...rows];
+    for (const designation of EDITABLE_DESIGNATIONS) {
+      const hasRow = rows.some((r) => r.designation?.toUpperCase() === designation);
+      if (!hasRow) {
+        withPlaceholders.push({
+          id: 0,
+          farmId,
+          lot,
+          semaine,
+          designation,
+          valeurS1: null,
+          cumul: null,
+        } as SuiviCoutHebdoResponse);
+      }
+    }
+    const computedAsRows: SuiviCoutHebdoResponse[] = computedRows.map((c) => ({
+      id: -1,
+      farmId: 0,
+      lot: "",
+      semaine: "",
+      designation: c.designation,
+      valeurS1: c.valeurS1,
+      cumul: c.cumul,
+    })) as SuiviCoutHebdoResponse[];
+    const merged = [...withPlaceholders, ...computedAsRows];
+    return merged.sort((a, b) => {
+      const orderA = designationOrder(a.designation);
+      const orderB = designationOrder(b.designation);
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.designation ?? "").localeCompare(b.designation ?? "");
+    });
+  }, [rows, computedRows, farmId, lot, semaine]);
+
+  /**
+   * Effective cumul for a row: use cumul when set, otherwise valeurS1 for the chosen week (S1).
+   * So when only S1 is entered, CUMUL DH/KG and % are still calculated (cumul = valeurS1 for that week).
+   */
+  const getEffectiveCumul = (row: SuiviCoutHebdoResponse): number | null => {
+    const c = toNumber(row.cumul);
+    if (c != null) return c;
+    return toNumber(row.valeurS1);
+  };
+
+  const totalCumul = useMemo(() => {
+    return displayRows.reduce(
+      (sum, r) => sum + (getEffectiveCumul(r) ?? 0),
+      0
+    );
+  }, [displayRows]);
+
+  const totalS1 = useMemo(() => {
+    return displayRows.reduce(
+      (sum, r) => sum + (toNumber(r.valeurS1) ?? 0),
+      0
+    );
+  }, [displayRows]);
+
+  const totalCumulDhKg = useMemo(() => {
+    if (poidsVifProduitKg == null || !Number.isFinite(poidsVifProduitKg) || poidsVifProduitKg <= 0)
+      return null;
+    return totalCumul / poidsVifProduitKg;
+  }, [totalCumul, poidsVifProduitKg]);
+
+  const startEdit = (row: SuiviCoutHebdoResponse) => {
+    if (!canEditS1) return;
+    setEditingId(row.id);
+    setEditValeurS1(row.valeurS1 != null ? String(row.valeurS1) : "");
+    setEditCumul(row.cumul != null ? String(row.cumul) : "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValeurS1("");
+    setEditCumul("");
+  };
+
+  const saveEdit = async (row: SuiviCoutHebdoResponse) => {
+    if (!canEditS1) return;
+    setSaving(true);
+    try {
+      const valeurS1 = editValeurS1.trim() === "" ? null : parseFloat(editValeurS1.replace(",", "."));
+      const cumul = editCumul.trim() === "" ? null : parseFloat(editCumul.replace(",", "."));
+      await api.suiviCoutHebdo.save(
+        {
+          designation: row.designation,
+          valeurS1: Number.isFinite(valeurS1) ? valeurS1 : null,
+          cumul: Number.isFinite(cumul) ? cumul : null,
+        },
+        { farmId, lot, semaine }
+      );
+      cancelEdit();
+      onSaveSuccess?.();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-lg border border-border shadow-sm" id="couts">
+      <div className="px-5 py-4 border-b border-border bg-sky-100 dark:bg-sky-950/40">
+        <h3 className="text-base font-display font-bold text-primary text-center">
+          PRIX DE REVIENT
+        </h3>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[500px] text-sm border-collapse">
+          <thead>
+            <tr className="border-b border-border bg-sky-100 dark:bg-sky-950/40">
+              <th className="px-4 py-2.5 text-left font-semibold text-foreground border-r border-border">
+                DESIGNATION
+              </th>
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border">
+                {semaine}
+              </th>
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border">
+                CUMUL
+              </th>
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border whitespace-nowrap">
+                CUMUL DH/KG
+              </th>
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground">
+                %
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.map((row, index) => {
+              const effectiveCumul = getEffectiveCumul(row);
+              const cumulDhKg =
+                poidsVifProduitKg != null &&
+                Number.isFinite(poidsVifProduitKg) &&
+                poidsVifProduitKg > 0 &&
+                effectiveCumul != null
+                  ? effectiveCumul / poidsVifProduitKg
+                  : null;
+              const pct =
+                totalCumul > 0 && effectiveCumul != null ? (effectiveCumul / totalCumul) * 100 : null;
+              const isEditing = editingId === row.id;
+
+              return (
+                <tr
+                  key={row.id || `placeholder-${row.designation}`}
+                  className={`border-b border-border ${index % 2 === 0 ? "bg-card" : "bg-muted/10"}`}
+                >
+                  <td className="px-4 py-2 border-r border-border font-medium text-foreground">
+                    {row.designation}
+                  </td>
+                  <td className="px-3 py-2 border-r border-border text-center align-middle">
+                    {isEditableByRespTech(row.designation) ? (
+                      isEditing ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="w-24 rounded border border-input bg-background px-2 py-1 text-center text-sm tabular-nums"
+                            value={editValeurS1}
+                            onChange={(e) => setEditValeurS1(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => saveEdit(row)}
+                            disabled={saving}
+                            className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                          >
+                            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "OK"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEdit}
+                            className="rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                          >
+                            Annuler
+                          </button>
+                        </div>
+                      ) : canEditS1 ? (
+                        <button
+                          type="button"
+                          onClick={() => startEdit(row)}
+                          className="rounded border border-border bg-muted/30 px-2 py-1 text-sm tabular-nums hover:bg-muted/50"
+                        >
+                          {formatNum(row.valeurS1)}
+                        </button>
+                      ) : (
+                        <span className="tabular-nums text-foreground">
+                          {formatNum(row.valeurS1)}
+                        </span>
+                      )
+                    ) : (
+                      <span className="tabular-nums text-foreground">
+                        {formatNum(row.valeurS1)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 border-r border-border text-center align-middle">
+                    {isEditableByRespTech(row.designation) && isEditing ? (
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="w-24 rounded border border-input bg-background px-2 py-1 text-center text-sm tabular-nums"
+                        value={editCumul}
+                        onChange={(e) => setEditCumul(e.target.value)}
+                      />
+                    ) : (
+                      <span className="tabular-nums text-foreground">
+                        {formatNum(effectiveCumul)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 border-r border-border text-center tabular-nums text-foreground">
+                    {formatNum(cumulDhKg)}
+                  </td>
+                  <td className="px-3 py-2 text-center tabular-nums text-foreground">
+                    {formatPct(pct)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-border bg-sky-100 dark:bg-sky-950/40 font-semibold text-foreground">
+              <td className="px-4 py-2.5 border-r border-border">Total</td>
+              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
+                {formatNum(totalS1)}
+              </td>
+              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
+                {formatNum(totalCumul)}
+              </td>
+              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
+                {formatNum(totalCumulDhKg)}
+              </td>
+              <td className="px-3 py-2.5 text-center tabular-nums">
+                {totalCumul > 0 ? formatPct(100) : formatPct(null)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}

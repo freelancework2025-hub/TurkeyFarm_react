@@ -63,6 +63,8 @@ interface PerformanceTrackingTableProps {
   sex: string;
   /** Bâtiment (Lot → Semaine → Batiment workflow). */
   batiment?: string;
+  /** When this key changes, performance data is refetched so computed fields (indice consommation, viabilité) update. */
+  refreshKey?: number;
 }
 
 export default function PerformanceTrackingTable({
@@ -71,6 +73,7 @@ export default function PerformanceTrackingTable({
   semaine,
   sex,
   batiment,
+  refreshKey,
 }: PerformanceTrackingTableProps) {
   const { isReadOnly, canCreate, canUpdate } = useAuth();
   const { toast } = useToast();
@@ -131,8 +134,9 @@ export default function PerformanceTrackingTable({
     } finally {
       setLoading(false);
     }
-  }, [farmId, lot, semaine, sex, batiment, toast]);
+  }, [farmId, lot, semaine, sex, batiment, toast, refreshKey]);
 
+  // Refetch when refreshKey changes so computed fields (indice consommation, viabilité) and CONSOMME ALIMENT–derived values update.
   useEffect(() => {
     load();
   }, [load]);

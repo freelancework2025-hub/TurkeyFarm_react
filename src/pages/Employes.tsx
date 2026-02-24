@@ -43,7 +43,9 @@ import { Label } from "@/components/ui/label";
  */
 
 export default function Employes() {
-  const { isReadOnly, canCreate, canUpdate, canDelete } = useAuth();
+  const { isReadOnly, canCreate, canUpdate, canDelete, hasFullAccess } = useAuth();
+  /** Only responsable technique and administrateur can manage (create/update/delete) employés. */
+  const canManageEmployes = hasFullAccess;
   const [employers, setEmployers] = useState<EmployerResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
@@ -52,6 +54,7 @@ export default function Employes() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formNom, setFormNom] = useState("");
   const [formPrenom, setFormPrenom] = useState("");
+  const [formNumeroEmploye, setFormNumeroEmploye] = useState("");
   const [formSalaire, setFormSalaire] = useState("");
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -88,6 +91,7 @@ export default function Employes() {
     setEditingId(null);
     setFormNom("");
     setFormPrenom("");
+    setFormNumeroEmploye("");
     setFormSalaire("");
     setDialogOpen(true);
   };
@@ -96,6 +100,7 @@ export default function Employes() {
     setEditingId(e.id);
     setFormNom(e.nom ?? "");
     setFormPrenom(e.prenom ?? "");
+    setFormNumeroEmploye(e.numeroEmploye ?? "");
     setFormSalaire(e.salaire != null ? String(e.salaire) : "");
     setDialogOpen(true);
   };
@@ -132,12 +137,13 @@ export default function Employes() {
     const body: EmployerRequest = {
       nom,
       prenom,
+      numeroEmploye: formNumeroEmploye.trim() || undefined,
       salaire: salaire ?? undefined,
     };
 
     try {
       if (editingId != null) {
-        if (!canUpdate) {
+        if (!canManageEmployes) {
           toast({
             title: "Non autorisé",
             description: "Vous ne pouvez pas modifier les employés.",
@@ -151,7 +157,7 @@ export default function Employes() {
           description: `${nom} ${prenom} a été mis à jour.`,
         });
       } else {
-        if (!canCreate) {
+        if (!canManageEmployes) {
           toast({
             title: "Non autorisé",
             description: "Vous ne pouvez pas ajouter d'employé.",
@@ -178,7 +184,7 @@ export default function Employes() {
   };
 
   const openDeleteDialog = (e: EmployerResponse) => {
-    if (!canDelete) {
+    if (!canManageEmployes) {
       toast({
         title: "Non autorisé",
         description: "Vous ne pouvez pas supprimer un employé.",
@@ -240,7 +246,7 @@ export default function Employes() {
               <h2 className="text-lg font-display font-bold text-foreground">
                 Employés
               </h2>
-              {canCreate && (
+              {canManageEmployes && (
                 <Button
                   type="button"
                   onClick={openCreate}
@@ -262,6 +268,7 @@ export default function Employes() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="min-w-[100px]">Id</TableHead>
                   <TableHead className="min-w-[120px]">Nom</TableHead>
                   <TableHead className="min-w-[120px]">Prénom</TableHead>
                   <TableHead className="min-w-[100px]">Salaire</TableHead>
@@ -276,7 +283,7 @@ export default function Employes() {
                 {employers.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={isReadOnly ? 3 : 4}
+                      colSpan={isReadOnly ? 4 : 5}
                       className="text-center text-muted-foreground py-8"
                     >
                       Aucun employé.
@@ -285,6 +292,7 @@ export default function Employes() {
                 ) : (
                   employers.map((e) => (
                     <TableRow key={e.id}>
+                      <TableCell className="font-mono text-sm">{e.numeroEmploye ?? "—"}</TableCell>
                       <TableCell className="font-medium">{e.nom}</TableCell>
                       <TableCell>{e.prenom}</TableCell>
                       <TableCell>
@@ -292,7 +300,7 @@ export default function Employes() {
                       </TableCell>
                       {!isReadOnly && (
                         <TableCell className="text-right">
-                          {canUpdate && (
+                          {canManageEmployes && canUpdate && (
                             <Button
                               type="button"
                               variant="ghost"
@@ -304,7 +312,7 @@ export default function Employes() {
                               <Pencil className="w-4 h-4" />
                             </Button>
                           )}
-                          {canDelete && (
+                          {canManageEmployes && canDelete && (
                             <Button
                               type="button"
                               variant="ghost"
@@ -335,6 +343,15 @@ export default function Employes() {
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="employe-numero">Id (n° employé)</Label>
+              <Input
+                id="employe-numero"
+                value={formNumeroEmploye}
+                onChange={(e) => setFormNumeroEmploye(e.target.value)}
+                placeholder="Ex. EMP001"
+              />
+            </div>
             <div className="grid gap-2">
               <Label htmlFor="employe-nom">Nom</Label>
               <Input

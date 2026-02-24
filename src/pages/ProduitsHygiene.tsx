@@ -78,6 +78,18 @@ function sortSemaines(sems: string[]): string[] {
   });
 }
 
+/** Sort lots: Lot1, Lot2, ... (natural order). */
+function sortLots(lotList: string[]): string[] {
+  return [...lotList].sort((a, b) => {
+    const numA = parseInt(a.replace(/^.*?(\d+)$/i, "$1"), 10);
+    const numB = parseInt(b.replace(/^.*?(\d+)$/i, "$1"), 10);
+    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+    if (!Number.isNaN(numA)) return -1;
+    if (!Number.isNaN(numB)) return 1;
+    return a.localeCompare(b);
+  });
+}
+
 export default function ProduitsHygiene() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
@@ -114,6 +126,7 @@ export default function ProduitsHygiene() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
+  const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
 
@@ -128,14 +141,14 @@ export default function ProduitsHygiene() {
   }, [showFarmSelector]);
 
   useEffect(() => {
-    if (showFarmSelector || !pageFarmId || hasLotInUrl) return;
+    if (showFarmSelector || !pageFarmId) return;
     setLotsLoading(true);
     api.farms
       .lots(pageFarmId)
       .then((list) => setLots(list ?? []))
       .catch(() => setLots([]))
       .finally(() => setLotsLoading(false));
-  }, [showFarmSelector, pageFarmId, hasLotInUrl]);
+  }, [showFarmSelector, pageFarmId]);
 
   const selectFarm = useCallback(
     (id: number) => setSearchParams({ farmId: String(id) }),
@@ -161,9 +174,9 @@ export default function ProduitsHygiene() {
     [selectedFarmId, lotFilter, setSearchParams]
   );
 
-  const emptyRow = (age?: string): HygieneRow => ({
+  const emptyRow = (age?: string, overrideDate?: string): HygieneRow => ({
     id: crypto.randomUUID(),
-    date: today,
+    date: overrideDate ?? today,
     age: age ?? "",
     designation: "",
     supplier: "",
@@ -175,6 +188,26 @@ export default function ProduitsHygiene() {
     male: "",
     femelle: "",
   });
+
+  /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today). */
+  const getStartDateForSemaine = useCallback(
+    (semaine: string): string => {
+      const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
+      ages.add(semaine.trim());
+      const semOrder = sortSemaines([...ages]);
+      const idx = semOrder.indexOf(semaine.trim());
+      if (idx < 0) return today;
+      if (idx === 0) return previousLotLastDate ?? today;
+      const prevSem = semOrder[idx - 1];
+      const prevRows = rows.filter((r) => (r.age || "").trim() === prevSem);
+      if (prevRows.length === 0) return today;
+      const dates = prevRows.map((r) => r.date).filter((d) => d?.trim());
+      if (dates.length === 0) return today;
+      const maxD = dates.sort()[dates.length - 1];
+      return maxD ? addOneDay(maxD) : today;
+    },
+    [rows, previousLotLastDate]
+  );
 
   const loadMovements = useCallback(async () => {
     if (showFarmSelector || !lotFilter.trim()) return;
@@ -254,6 +287,36 @@ export default function ProduitsHygiene() {
   }, [loadMovements]);
 
   useEffect(() => {
+    if (!lotFilter.trim() || !pageFarmId || lots.length === 0) {
+      setPreviousLotLastDate(null);
+      return;
+    }
+    const ordered = sortLots(lots);
+    const currentIndex = ordered.indexOf(lotFilter.trim());
+    if (currentIndex <= 0) {
+      setPreviousLotLastDate(null);
+      return;
+    }
+    const previousLot = ordered[currentIndex - 1];
+    api.livraisonsProduitsHygiene
+      .list({ farmId: pageFarmId, lot: previousLot })
+      .then((list) => {
+        if (list.length === 0) {
+          setPreviousLotLastDate(null);
+          return;
+        }
+        const dates = list.map((r) => r.date).filter((d): d is string => !!d && d.trim() !== "");
+        if (dates.length === 0) {
+          setPreviousLotLastDate(null);
+          return;
+        }
+        const maxDate = dates.sort()[dates.length - 1];
+        setPreviousLotLastDate(addOneDay(maxDate));
+      })
+      .catch(() => setPreviousLotLastDate(null));
+  }, [lotFilter, pageFarmId, lots]);
+
+  useEffect(() => {
     setLotFilter(lotParam);
   }, [lotParam]);
 
@@ -270,14 +333,30 @@ export default function ProduitsHygiene() {
     const forSem = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
-    setRows((prev) => [...prev, ...Array.from({ length: toAdd }, () => emptyRow(selectedSemaine))]);
-  }, [hasSemaineInUrl, selectedSemaine, rows.length]);
+    const startDate =
+      forSem.length > 0
+        ? (() => {
+            const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
+            if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
+            const maxD = dates.sort()[dates.length - 1];
+            return addOneDay(maxD);
+          })()
+        : getStartDateForSemaine(selectedSemaine);
+    const newRows: HygieneRow[] = [];
+    let nextDate = startDate;
+    for (let i = 0; i < toAdd; i++) {
+      newRows.push(emptyRow(selectedSemaine, nextDate));
+      nextDate = addOneDay(nextDate);
+    }
+    setRows((prev) => [...prev, ...newRows]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine]);
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
     const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
-    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
+    const nextDate =
+      lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
     const newRow = { ...emptyRow(selectedSemaine), date: nextDate };
     setRows((prev) => [...prev, newRow]);
   };

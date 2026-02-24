@@ -61,32 +61,101 @@ function isSavedRow(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
+/** Add n days to ISO date string (YYYY-MM-DD), return YYYY-MM-DD. */
+function addDays(isoDate: string, n: number): string {
+  const d = new Date(isoDate + "T12:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
+/** Age (days) starts at 1 on placement date; semaine = week number (S1=1–7, S2=8–14, …). Per lot, age resets to 1. */
+function computeAgeAndSemaine(reportDate: string, placementDate: string): { age: number; semaine: number } {
+  const report = new Date(reportDate + "T12:00:00");
+  const placement = new Date(placementDate + "T12:00:00");
+  const diffTime = report.getTime() - placement.getTime();
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  const age = Math.max(1, diffDays + 1);
+  const semaine = Math.ceil(age / 7);
+  return { age, semaine };
+}
+
 interface DailyReportTableProps {
   /** When set, only load and show reports for this date (YYYY-MM-DD). New row uses this date. */
   initialDate?: string;
   /** When set (Admin/RT), list and create are scoped to this farm. */
   farmId?: number | null;
+  /** When set (e.g. from Reporting Journalier lot selector), age/semaine are computed from placement date for this lot. */
+  lot?: string | null;
+  /** When true, show "Nouveau tableau vide pour le [date]" (opened via Nouveau rapport). */
+  isNewReport?: boolean;
+  /** When provided and save succeeds while isNewReport: called with saved report date so parent can stay on that day (set selectedDate + setIsNewReport false). */
+  onSaveSuccess?: (reportDate: string) => void;
 }
 
-export default function DailyReportTable({ initialDate, farmId }: DailyReportTableProps) {
+export default function DailyReportTable({ initialDate, farmId, lot, isNewReport, onSaveSuccess }: DailyReportTableProps) {
   const today = new Date().toISOString().split("T")[0];
-  const dateContext = initialDate ?? today;
   const { selectedFarmName, allFarmsMode, canCreate, canUpdate, canDelete, isReadOnly } = useAuth();
   const { toast } = useToast();
-  const [rows, setRows] = useState<DailyRow[]>([emptyRow(dateContext)]);
+  const [rows, setRows] = useState<DailyRow[]>([emptyRow(initialDate ?? today)]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [placementDateForLot, setPlacementDateForLot] = useState<string | null>(null);
+  /** When isNewReport: date for the new report (last saved date + 1 day). Used for subtitle and addRow. */
+  const [computedNewReportDate, setComputedNewReportDate] = useState<string | null>(null);
+  const dateContext = (isNewReport && computedNewReportDate) ? computedNewReportDate : (initialDate ?? today);
+
+  useEffect(() => {
+    if (!farmId || !lot || lot.trim() === "") {
+      setPlacementDateForLot(null);
+      return;
+    }
+    api.placements.list(farmId).then((list) => {
+      const forLot = list.filter((p) => p.lot === lot.trim());
+      if (forLot.length === 0) {
+        setPlacementDateForLot(null);
+        return;
+      }
+      const minDate = forLot.reduce((min, p) => (p.placementDate < min ? p.placementDate : min), forLot[0].placementDate);
+      setPlacementDateForLot(minDate);
+    }).catch(() => setPlacementDateForLot(null));
+  }, [farmId, lot]);
 
   const load = useCallback(async () => {
     setLoading(true);
     const todayStr = new Date().toISOString().split("T")[0];
-    const forDate = initialDate ?? todayStr;
+    let forDate = initialDate ?? todayStr;
     try {
       const list = await api.dailyReports.list(farmId ?? undefined);
-      const filtered = initialDate ? list.filter((r) => r.reportDate === initialDate) : list;
-      const mapped = filtered.map(toRow);
-      // Backoffice (read-only): show only saved rows, no empty row to add
-      setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, emptyRow(forDate)] : [emptyRow(forDate)]));
+      // For "Nouveau rapport": use next day after last saved report so Date and Âge (J) increment +1
+      if (isNewReport && list.length > 0) {
+        const maxReportDate = list.reduce((max, r) => (r.reportDate > max ? r.reportDate : max), list[0].reportDate);
+        forDate = addDays(maxReportDate, 1);
+        setComputedNewReportDate(forDate);
+      } else if (isNewReport) {
+        setComputedNewReportDate(forDate);
+      } else {
+        setComputedNewReportDate(null);
+      }
+      const filtered = initialDate && !isNewReport ? list.filter((r) => r.reportDate === initialDate) : list;
+      let mapped = filtered.map(toRow);
+      if (placementDateForLot) {
+        mapped = mapped.map((r) => {
+          const { age, semaine } = computeAgeAndSemaine(r.report_date, placementDateForLot);
+          return { ...r, age_jour: String(age), semaine: String(semaine) };
+        });
+      }
+      let empty = emptyRow(forDate);
+      if (placementDateForLot) {
+        const { age, semaine } = computeAgeAndSemaine(empty.report_date, placementDateForLot);
+        empty = { ...empty, age_jour: String(age), semaine: String(semaine) };
+      }
+      // When "Nouveau rapport": always show empty table for the new day (ignore existing data for that date)
+      if (isNewReport) {
+        setRows([empty]);
+      } else {
+        // Backoffice (read-only): show only saved rows, no empty row to add
+        setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, empty] : [empty]));
+      }
     } catch (e) {
       toast({
         title: "Erreur",
@@ -97,7 +166,7 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
     } finally {
       setLoading(false);
     }
-  }, [toast, initialDate, farmId, isReadOnly]);
+  }, [toast, initialDate, farmId, isReadOnly, placementDateForLot, isNewReport]);
 
   useEffect(() => {
     load();
@@ -105,16 +174,19 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
 
   const addRow = () => {
     const last = rows[rows.length - 1];
-    setRows((prev) => [
-      ...prev,
-      {
-        ...emptyRow(dateContext),
-        id: crypto.randomUUID(),
-        report_date: last?.report_date || dateContext,
-        age_jour: last?.age_jour ?? "",
-        semaine: last?.semaine ?? "",
-      },
-    ]);
+    const newRow: DailyRow = {
+      ...emptyRow(dateContext),
+      id: crypto.randomUUID(),
+      report_date: last?.report_date || dateContext,
+      age_jour: last?.age_jour ?? "",
+      semaine: last?.semaine ?? "",
+    };
+    if (placementDateForLot && newRow.report_date) {
+      const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placementDateForLot);
+      newRow.age_jour = String(age);
+      newRow.semaine = String(semaine);
+    }
+    setRows((prev) => [...prev, newRow]);
   };
 
   const removeRow = (id: string) => {
@@ -122,9 +194,19 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
   };
 
   const updateRow = (id: string, field: keyof DailyRow, value: string | boolean) => {
-    setRows((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
-    );
+    setRows((prev) => {
+      const next = prev.map((r) => (r.id === id ? { ...r, [field]: value } : r));
+      if (field === "report_date" && placementDateForLot && typeof value === "string") {
+        const row = next.find((r) => r.id === id);
+        if (row && row.report_date) {
+          const { age, semaine } = computeAgeAndSemaine(row.report_date, placementDateForLot);
+          return next.map((r) =>
+            r.id === id ? { ...r, age_jour: String(age), semaine: String(semaine) } : r
+          );
+        }
+      }
+      return next;
+    });
   };
 
   const handleSave = async () => {
@@ -163,9 +245,14 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
     }
     setSaving(true);
     try {
-      await api.dailyReports.createBatch(toSend, farmId ?? undefined);
+      const reportDate = toSend[0].reportDate;
+      await api.dailyReports.replaceBatch(reportDate, toSend, farmId ?? undefined);
       toast({ title: "Rapports enregistrés", description: `${toSend.length} ligne(s) enregistrée(s).` });
-      await load();
+      if (isNewReport && onSaveSuccess) {
+        onSaveSuccess(reportDate);
+      } else {
+        await load();
+      }
     } catch (e) {
       toast({
         title: "Erreur",
@@ -190,7 +277,13 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
 
   return (
     <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+      <div className="flex flex-col gap-2 px-5 py-4 border-b border-border">
+        {isNewReport && dateContext && (
+          <p className="text-sm font-medium text-primary">
+            Nouveau tableau vide pour le {dateContext.split("-").reverse().join("/")}
+          </p>
+        )}
+        <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-display font-bold text-foreground">
             Reporting Journalier
@@ -223,6 +316,7 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
             </button>
           </div>
         )}
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -265,8 +359,8 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
                       onChange={(e) => updateRow(row.id, "age_jour", e.target.value)}
                       placeholder="0"
                       min="0"
-                      readOnly={readOnly}
-                      className={readOnly ? "bg-muted/50 cursor-not-allowed" : ""}
+                      readOnly={readOnly || !!placementDateForLot}
+                      className={(readOnly || placementDateForLot) ? "bg-muted/50 cursor-not-allowed" : ""}
                     />
                   </td>
                   <td>
@@ -276,8 +370,8 @@ export default function DailyReportTable({ initialDate, farmId }: DailyReportTab
                       onChange={(e) => updateRow(row.id, "semaine", e.target.value)}
                       placeholder="0"
                       min="0"
-                      readOnly={readOnly}
-                      className={readOnly ? "bg-muted/50 cursor-not-allowed" : ""}
+                      readOnly={readOnly || !!placementDateForLot}
+                      className={(readOnly || placementDateForLot) ? "bg-muted/50 cursor-not-allowed" : ""}
                     />
                   </td>
                   <td>

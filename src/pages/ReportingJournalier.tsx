@@ -28,6 +28,7 @@ export default function ReportingJournalier() {
 
   const [viewMode, setViewMode] = useState<"overview" | "form">("overview");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [isNewReport, setIsNewReport] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -66,17 +67,20 @@ export default function ReportingJournalier() {
 
   const handleSelectDay = (date: string) => {
     setSelectedDate(date);
+    setIsNewReport(false);
     setViewMode("form");
   };
 
   const handleNewReport = () => {
     setSelectedDate(today);
+    setIsNewReport(true);
     setViewMode("form");
   };
 
   const handleBackToOverview = () => {
     setViewMode("overview");
     setSelectedDate(null);
+    setIsNewReport(false);
   };
 
   return (
@@ -188,6 +192,12 @@ export default function ReportingJournalier() {
                 key={selectedDate ?? undefined}
                 initialDate={selectedDate ?? undefined}
                 farmId={reportingFarmId}
+                lot={lotParam || undefined}
+                isNewReport={isNewReport}
+                onSaveSuccess={(date) => {
+                  setSelectedDate(date);
+                  setIsNewReport(false);
+                }}
               />
             </div>
           )}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Plus, Save, Tag, Trash2 } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Loader2, Plus, Save, Tag, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
@@ -37,6 +37,18 @@ function typeUsesDesignationDropdown(type: string): boolean {
   return TYPES_WITH_DESIGNATION_DROPDOWN.includes(type);
 }
 
+/** Semaine selector options (S1..S24), like LivraisonGaz */
+const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+
+/** Parse "S1" or "1" to number for API */
+function parseSemaineToNum(s: string): number | null {
+  if (s == null || s.trim() === "") return null;
+  const m = s.trim().match(/^S?(\d+)$/i);
+  if (m) return parseInt(m[1], 10);
+  const n = parseInt(s.trim(), 10);
+  return Number.isNaN(n) ? null : n;
+}
+
 interface SortieRow {
   id: string;
   /** Set when row is loaded from API (saved); used for readOnly and delete permission */
@@ -58,9 +70,13 @@ export default function SortiesFerme() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
   const lotParam = searchParams.get("lot") ?? "";
+  const semaineParam = searchParams.get("semaine") ?? "";
   const selectedFarmId = farmIdParam ? parseInt(farmIdParam, 10) : null;
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
   const hasLotInUrl = lotParam.trim() !== "";
+  const trimmedSemaine = semaineParam.trim();
+  const hasSemaineInUrl = trimmedSemaine !== "";
+  const selectedSemaine = trimmedSemaine;
 
   const {
     isAdministrateur,
@@ -83,6 +99,7 @@ export default function SortiesFerme() {
   const [rows, setRows] = useState<SortieRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [newSemaineInput, setNewSemaineInput] = useState("");
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
 
@@ -112,9 +129,27 @@ export default function SortiesFerme() {
   );
   const clearFarmSelection = useCallback(() => setSearchParams({}), [setSearchParams]);
 
-  const emptyRow = (lotPreFill?: string): SortieRow => ({
+  const clearSemaineSelection = useCallback(() => {
+    const next: Record<string, string> = {};
+    if (selectedFarmId != null) next.farmId = String(selectedFarmId);
+    if (lotParam.trim()) next.lot = lotParam.trim();
+    setSearchParams(next);
+  }, [selectedFarmId, lotParam, setSearchParams]);
+
+  const selectSemaine = useCallback(
+    (semaine: string) => {
+      const next: Record<string, string> = {};
+      if (selectedFarmId != null) next.farmId = String(selectedFarmId);
+      if (lotParam.trim()) next.lot = lotParam.trim();
+      next.semaine = semaine;
+      setSearchParams(next);
+    },
+    [selectedFarmId, lotParam, setSearchParams]
+  );
+
+  const emptyRow = (lotPreFill?: string, semainePreFill?: string): SortieRow => ({
     id: crypto.randomUUID(),
-    semaine: "",
+    semaine: semainePreFill ?? "",
     date: today,
     lot: lotPreFill ?? "",
     client: "",
@@ -128,14 +163,24 @@ export default function SortiesFerme() {
   });
 
   const loadSorties = useCallback(async () => {
-    if (showFarmSelector || !hasLotInUrl) return;
+    if (showFarmSelector || !hasLotInUrl || !hasSemaineInUrl) return;
     setLoading(true);
     try {
-      const list = await api.sorties.list({ farmId: pageFarmId ?? undefined, lot: lotParam.trim() || undefined });
+      const list = await api.sorties.list({
+        farmId: pageFarmId ?? undefined,
+        lot: lotParam.trim() || undefined,
+        semaine: parseSemaineToNum(selectedSemaine) ?? undefined,
+      });
+      const normalizedSemaine = (v: number | string | null | undefined): string => {
+        if (v == null) return "";
+        if (typeof v === "number") return `S${v}`;
+        const s = String(v).trim();
+        return s === "" ? "" : /^\d+$/.test(s) ? `S${s}` : s;
+      };
       const mapped: SortieRow[] = list.map((r: SortieResponse) => ({
         id: crypto.randomUUID(),
         serverId: r.id,
-        semaine: r.semaine != null ? String(r.semaine) : "",
+        semaine: normalizedSemaine(r.semaine),
         date: r.date ?? "",
         lot: r.lot ?? "",
         client: r.client ?? "",
@@ -147,30 +192,38 @@ export default function SortiesFerme() {
         prix_kg: r.prix_kg != null ? String(r.prix_kg) : "",
         montant_ttc: r.montant_ttc != null ? String(r.montant_ttc) : "",
       }));
-      setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, emptyRow(lotParam.trim())] : [emptyRow(lotParam.trim())]));
+      const forSem = mapped.filter((r) => (r.semaine || "").trim() === selectedSemaine);
+      const withEmpty =
+        isReadOnly || !canCreate
+          ? mapped
+          : forSem.length > 0
+            ? mapped
+            : [...mapped, emptyRow(lotParam.trim(), selectedSemaine)];
+      setRows(withEmpty);
     } catch (e) {
       toast({
         title: "Erreur",
         description: e instanceof Error ? e.message : "Impossible de charger les sorties.",
         variant: "destructive",
       });
-      setRows(canCreate ? [emptyRow(lotParam.trim())] : []);
+      setRows(canCreate ? [emptyRow(lotParam.trim(), selectedSemaine)] : []);
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, hasLotInUrl, lotParam, isReadOnly, canCreate, toast]);
+  }, [showFarmSelector, pageFarmId, hasLotInUrl, hasSemaineInUrl, lotParam, selectedSemaine, isReadOnly, canCreate, toast]);
 
   useEffect(() => {
     loadSorties();
   }, [loadSorties]);
 
   const addRow = () => {
-    if (!canCreate) return;
-    setRows((prev) => [...prev, emptyRow(lotParam.trim())]);
+    if (!canCreate || !selectedSemaine) return;
+    setRows((prev) => [...prev, emptyRow(lotParam.trim(), selectedSemaine)]);
   };
 
   const removeRow = (id: string) => {
-    if (rows.length <= 1) return;
+    const currentRows = rows.filter((r) => (r.semaine || "").trim() === selectedSemaine);
+    if (currentRows.length <= 1) return;
     const row = rows.find((r) => r.id === id);
     if (row?.serverId != null && !canDelete) return;
     if (row?.serverId != null) {
@@ -204,7 +257,7 @@ export default function SortiesFerme() {
 
   const rowToRequest = (r: SortieRow): SortieRequest => ({
     date: r.date || null,
-    semaine: r.semaine.trim() !== "" ? parseInt(r.semaine, 10) : null,
+    semaine: parseSemaineToNum(r.semaine),
     lot: r.lot || null,
     client: r.client || null,
     num_bl: r.num_bl || null,
@@ -221,10 +274,15 @@ export default function SortiesFerme() {
       toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer les données.", variant: "destructive" });
       return;
     }
+    if (!selectedSemaine) {
+      toast({ title: "Semaine requise", description: "Choisissez une semaine avant d'enregistrer.", variant: "destructive" });
+      return;
+    }
+    const forSem = (r: SortieRow) => (r.semaine || "").trim() === selectedSemaine;
     const toCreate = canCreate
-      ? rows.filter((r) => r.serverId == null).map((r) => rowToRequest(r))
+      ? rows.filter((r) => forSem(r) && r.serverId == null).map((r) => rowToRequest(r))
       : [];
-    const toUpdate = canUpdate ? rows.filter((r) => r.serverId != null) : [];
+    const toUpdate = canUpdate ? rows.filter((r) => forSem(r) && r.serverId != null) : [];
 
     if (toCreate.length === 0 && toUpdate.length === 0) {
       toast({
@@ -259,6 +317,8 @@ export default function SortiesFerme() {
       setSaving(false);
     }
   };
+
+  const currentRows = selectedSemaine ? rows.filter((r) => (r.semaine || "").trim() === selectedSemaine) : [];
 
   return (
     <AppLayout>
@@ -333,6 +393,75 @@ export default function SortiesFerme() {
               title="Choisir un lot — Sorties Ferme"
               emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
             />
+          ) : !hasSemaineInUrl ? (
+            <div className="space-y-6">
+              {canAccessAllFarms && isValidFarmId && (
+                <button
+                  type="button"
+                  onClick={clearFarmSelection}
+                  className="mb-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Changer de ferme
+                </button>
+              )}
+              <div className="flex flex-wrap items-center gap-4 mb-4">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <Tag className="w-4 h-4 text-muted-foreground" />
+                  Lot : <strong>{lotParam}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId) } : {})}
+                  className="text-sm text-muted-foreground hover:text-foreground underline"
+                >
+                  Changer de lot
+                </button>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Choisissez une semaine pour consulter et gérer les sorties ferme.
+              </p>
+              <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-3">
+                {SEMAINES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => selectSemaine(s)}
+                    className="flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group"
+                  >
+                    <Calendar className="w-5 h-5 shrink-0 text-muted-foreground group-hover:text-primary" />
+                    <span className="font-semibold text-foreground">{s}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="pt-4 border-t border-border">
+                <p className="text-sm font-medium text-foreground mb-2">Ou ajouter une nouvelle semaine</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={newSemaineInput}
+                    onChange={(e) => setNewSemaineInput(e.target.value)}
+                    placeholder="ex. S25, S26..."
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const value = newSemaineInput.trim();
+                      if (value) {
+                        selectSemaine(value);
+                        setNewSemaineInput("");
+                      }
+                    }}
+                    disabled={!newSemaineInput.trim()}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Ajouter
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : (
             <>
           <div className="flex flex-wrap items-center gap-4 mb-4">
@@ -346,6 +475,15 @@ export default function SortiesFerme() {
               className="text-sm text-muted-foreground hover:text-foreground underline"
             >
               Changer de lot
+            </button>
+            <span className="text-muted-foreground">|</span>
+            <span className="text-sm font-medium">Semaine : <strong>{selectedSemaine}</strong></span>
+            <button
+              type="button"
+              onClick={clearSemaineSelection}
+              className="text-sm text-muted-foreground hover:text-foreground underline"
+            >
+              Changer de semaine
             </button>
           </div>
 
@@ -369,7 +507,7 @@ export default function SortiesFerme() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading}
+                      disabled={saving || loading || !selectedSemaine}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -382,9 +520,7 @@ export default function SortiesFerme() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th>Semaine</th>
                       <th>Date</th>
-                      <th>Lot</th>
                       <th>Client</th>
                       <th>N° BL</th>
                       <th>Type</th>
@@ -399,24 +535,18 @@ export default function SortiesFerme() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={12} className="p-8 text-center text-muted-foreground">
+                        <td colSpan={10} className="p-8 text-center text-muted-foreground">
                           Chargement…
                         </td>
                       </tr>
                     ) : (
-                      rows.map((row) => {
+                      currentRows.map((row) => {
                         const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
                         const showDelete = row.serverId != null ? canDelete : canCreate;
                         return (
                           <tr key={row.id}>
                             <td>
-                              <input type="number" value={row.semaine} onChange={(e) => updateRow(row.id, "semaine", e.target.value)} placeholder="—" disabled={rowReadOnly} />
-                            </td>
-                            <td>
                               <input type="date" value={row.date} onChange={(e) => updateRow(row.id, "date", e.target.value)} disabled={rowReadOnly} />
-                            </td>
-                            <td>
-                              <input type="text" value={row.lot} onChange={(e) => updateRow(row.id, "lot", e.target.value)} placeholder="—" disabled={rowReadOnly} />
                             </td>
                             <td>
                               <input type="text" value={row.client} onChange={(e) => updateRow(row.id, "client", e.target.value)} placeholder="—" className="min-w-[100px]" disabled={rowReadOnly} />
@@ -466,7 +596,7 @@ export default function SortiesFerme() {
                             <td className="font-semibold text-sm">{row.montant_ttc || "0.00"}</td>
                             <td>
                               {showDelete && (
-                                <button onClick={() => removeRow(row.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1" disabled={rows.length <= 1}>
+                                <button onClick={() => removeRow(row.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1" disabled={currentRows.length <= 1}>
                                   <Trash2 className="w-4 h-4" />
                                 </button>
                               )}
