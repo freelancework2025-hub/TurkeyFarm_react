@@ -9,6 +9,7 @@ const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
  * Full-page "Résumé hebdomadaire de la production" for a given lot and semaine.
  * URL: /suivi-technique-hebdomadaire/resume-production?farmId=8&lot=1&semaine=S1&batiments=B1,B2,B3,B4
  * batiments is optional; defaults to B1,B2,B3,B4.
+ * Permissions: child components (WeeklyProductionSummaryContent, etc.) apply the same role matrix; RESPONSABLE_FERME: saved rows read-only.
  */
 export default function ResumeProductionHebdoPage() {
   const [searchParams] = useSearchParams();

@@ -17,6 +17,8 @@ import {
  * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
  * Each semaine has its own table; TOTAL = current semaine, CUMUL = vide sanitaire + semaines up to current.
  * Vide sanitaire row at top (per lot). Same permission matrix: canCreate/canUpdate/canDelete.
+ * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
+ * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → Enregistrer → locked; then day 2 → Enregistrer → locked. Only the first unsaved row is editable.
  * Columns: Date, age (semaine), designation, fournisseur, qte, prix, montant, N°BL, N°BR, male, femelle.
  */
 
@@ -433,9 +435,7 @@ export default function LivraisonGaz() {
   };
 
   const handleSave = async () => {
-    const canSaveNew = canCreate;
-    const canSaveExisting = canUpdate;
-    if (!canSaveNew && !canSaveExisting) {
+    if (!canCreate) {
       toast({
         title: "Non autorisé",
         description: "Vous ne pouvez pas enregistrer les données.",
@@ -452,29 +452,25 @@ export default function LivraisonGaz() {
       return;
     }
     const forSem = (r: GazRow) => (r.age || "").trim() === selectedSemaine;
-    const toCreate: LivraisonGazRequest[] = canSaveNew
-      ? rows.filter((r) => forSem(r) && r.serverId == null).filter((r) => r.date.trim() !== "").map((r) => rowToRequest(r))
-      : [];
-    const toUpdate = canSaveExisting
-      ? rows.filter((r) => forSem(r) && r.serverId != null && r.date.trim() !== "")
-      : [];
     const vsHasData = videSanitaire.qte.trim() !== "" || videSanitaire.prixPerUnit.trim() !== "";
+    const unsavedForSem = rows
+      .filter((r) => forSem(r) && r.serverId == null)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const firstUnsaved = unsavedForSem[0];
 
-    if (toCreate.length === 0 && toUpdate.length === 0 && !(vsHasData && !videSanitaireReadOnly)) {
-      toast({
-        title: "Aucune ligne à enregistrer",
-        description:
-          "Remplissez au moins la date pour une ligne nouvelle, modifiez une ligne existante, ou QTE/Prix pour le Vide sanitaire.",
-        variant: "destructive",
-      });
-      return;
+    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
+      if (!(vsHasData && !videSanitaireReadOnly)) {
+        toast({
+          title: "Aucune ligne à enregistrer",
+          description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
+          variant: "destructive",
+        });
+        return;
+      }
     }
 
     setSaving(true);
     try {
-      if (toUpdate.length > 0) {
-        await Promise.all(toUpdate.map((r) => api.livraisonsGaz.update(r.serverId!, rowToRequest(r))));
-      }
       if (vsHasData && !videSanitaireReadOnly) {
         await api.videSanitaireGaz.put(
           {
@@ -490,16 +486,17 @@ export default function LivraisonGaz() {
           pageFarmId ?? undefined
         );
       }
-      if (toCreate.length > 0) {
-        await api.livraisonsGaz.createBatch(toCreate, pageFarmId ?? undefined);
+      if (firstUnsaved && firstUnsaved.date.trim() !== "") {
+        await api.livraisonsGaz.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
       }
       const parts: string[] = [];
-      if (toUpdate.length > 0) parts.push(`${toUpdate.length} ligne(s) modifiée(s)`);
       if (vsHasData && !videSanitaireReadOnly) parts.push("Vide sanitaire enregistré");
-      if (toCreate.length > 0) parts.push(`${toCreate.length} nouvelle(s) livraison(s)`);
+      if (firstUnsaved && firstUnsaved.date.trim() !== "") {
+        parts.push(`Le ${firstUnsaved.date} enregistré. Remplissez le jour suivant.`);
+      }
       toast({
-        title: "Enregistrement effectué",
-        description: parts.join(". "),
+        title: parts.length > 0 ? "Enregistrement effectué" : "Jour enregistré",
+        description: parts.join(". ") || "Vous pouvez maintenant remplir le jour suivant.",
       });
       loadMovements();
     } catch (e) {
@@ -513,7 +510,13 @@ export default function LivraisonGaz() {
     }
   };
 
-  const currentRows = selectedSemaine ? rows.filter((r) => (r.age || "").trim() === selectedSemaine) : [];
+  const currentRows = selectedSemaine
+    ? [...rows.filter((r) => (r.age || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    : [];
+  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
+  const videSanitaireReadOnly = isReadOnly || (hasExistingVideSanitaire && !canUpdate);
+  const hasVideSanitaireToSave = (videSanitaire.qte.trim() !== "" || videSanitaire.prixPerUnit.trim() !== "") && !videSanitaireReadOnly;
+  const canClickSave = firstEditableRowIndex >= 0 || hasVideSanitaireToSave;
   const videSanitaireTotals = {
     qte: toNum(videSanitaire.qte),
     prix: toNum(videSanitaire.prixPerUnit),
@@ -552,7 +555,6 @@ export default function LivraisonGaz() {
   })();
 
   const colCount = 12;
-  const videSanitaireReadOnly = isReadOnly || (hasExistingVideSanitaire && !canUpdate);
 
   return (
     <AppLayout>
@@ -726,7 +728,14 @@ export default function LivraisonGaz() {
           <div className="space-y-6 w-full min-w-0">
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
-                <h2 className="text-lg font-display font-bold text-foreground">Livraisons gaz</h2>
+                <div>
+                  <h2 className="text-lg font-display font-bold text-foreground">Livraisons gaz</h2>
+                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                    </p>
+                  )}
+                </div>
                 {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
                     {canCreate && (
@@ -741,7 +750,7 @@ export default function LivraisonGaz() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading}
+                      disabled={saving || loading || !canClickSave}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -847,8 +856,9 @@ export default function LivraisonGaz() {
                           <td>—</td>
                           <td></td>
                         </tr>
-                        {currentRows.map((row) => {
-                          const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
+                        {currentRows.map((row, rowIndex) => {
+                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
+                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           return (
                             <tr key={row.id}>

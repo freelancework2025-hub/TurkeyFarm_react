@@ -12,7 +12,7 @@ interface ConsumptionRow {
   unit?: string;
 }
 
-// CONSOMMATION ALIMENT is calculated: Stock(S_{N-1}) + Livraisons(S_N) - Stock(S_N). User enters Stock in STOCK table; consumption is computed on save.
+// CONSOMMATION ALIMENT: B1 = Stock(S_{N-1}) + Livraisons(S_N) - Stock(S_N). B2+ = Stock(S_{N-1}) + Stock(bâtiment précédent, même sexe, S_N) - Stock(S_N).
 // Cumul = sum S1..N; Indice EAU/ALIMENT = totalEauSemaine (L) / consommationAlimentSemaine (kg); CONSO Kg/J = backend-computed.
 const ROWS: ConsumptionRow[] = [
   { key: "consommation_aliment", label: "CONSOMMATION ALIMENT", editable: false, unit: "kg" },
@@ -89,7 +89,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
           Suivi de consommation
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. Consommation = Stock précédent (sexe) + Quantité livrée globale de la semaine — Stock actuel (sexe).
+          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock dernier bâtiment actif (fin S_N-1) + Livraisons — Stock actuel. B2+ : Stock bâtiment actuel (fin S_N-1) + Stock bâtiment préc. (même sexe) — Stock actuel.
         </p>
       </div>
       <div className="overflow-x-auto">

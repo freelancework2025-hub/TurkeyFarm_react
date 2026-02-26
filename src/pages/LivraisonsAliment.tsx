@@ -19,6 +19,9 @@ import {
  * The total quantity per week (per farm/lot) feeds Stock Aliment in Suivi Technique Hebdomadaire:
  * stock is shared across all batiments (B1 then B2 then B3…), and the next week = rest of previous week + livraisons.
  * Permission matrix: same as Sorties — canCreate for add/save, canUpdate for saved rows, canDelete for delete.
+ * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
+ * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → clicks Enregistrer → day 1 saved and locked.
+ * Then fills day 2 → Enregistrer → day 2 locked. Only the first unsaved row is editable at a time.
  */
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
@@ -34,6 +37,7 @@ interface LivraisonRow {
   supplier: string;
   deliveryNoteNumber: string;
   qte: string;
+  sex: string;
   prixPerUnit: string;
   montant: string;
   maleQty: string;
@@ -167,6 +171,7 @@ export default function LivraisonsAliment() {
     supplier: "",
     deliveryNoteNumber: "",
     qte: "",
+    sex: "",
     prixPerUnit: "",
     montant: "",
     maleQty: "",
@@ -213,6 +218,7 @@ export default function LivraisonsAliment() {
         supplier: r.supplier ?? "",
         deliveryNoteNumber: r.deliveryNoteNumber ?? "",
         qte: fromNum(r.qte),
+        sex: r.sex ?? "",
         prixPerUnit: fromNum(r.prixPerUnit),
         montant: fromNum(r.montant),
         maleQty: fromNum(r.maleQty),
@@ -220,18 +226,62 @@ export default function LivraisonsAliment() {
         movementType: r.movementType ?? "DELIVERY",
         notes: r.notes ?? "",
       }));
-      setRows(mapped);
+      
+      // Ensure MIN_TABLE_ROWS for the selected semaine (if semaine is selected)
+      if (hasSemaineInUrl && selectedSemaine) {
+        const forSem = mapped.filter((r) => (r.sem || "").trim() === selectedSemaine);
+        if (isReadOnly) {
+          // Read-only: show only what exists
+          setRows(mapped);
+        } else if (forSem.length >= MIN_TABLE_ROWS) {
+          // Already have enough rows for this semaine
+          setRows(mapped);
+        } else {
+          // Need to add empty rows to reach MIN_TABLE_ROWS
+          const toAdd = MIN_TABLE_ROWS - forSem.length;
+          // Calculate start date inline to avoid circular dependency
+          const startDate = forSem.length > 0
+            ? (() => {
+                const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
+                if (dates.length === 0) return previousLotLastDate ?? today;
+                const maxD = dates.sort()[dates.length - 1];
+                return addOneDay(maxD);
+              })()
+            : previousLotLastDate ?? today;
+          const newRows: LivraisonRow[] = [];
+          let nextDate = startDate;
+          for (let i = 0; i < toAdd; i++) {
+            newRows.push(emptyRow(selectedSemaine, nextDate));
+            nextDate = addOneDay(nextDate);
+          }
+          setRows([...mapped, ...newRows]);
+        }
+      } else {
+        setRows(mapped);
+      }
     } catch (e) {
       toast({
         title: "Erreur",
         description: e instanceof Error ? e.message : "Impossible de charger les livraisons.",
         variant: "destructive",
       });
-      setRows([]);
+      if (hasSemaineInUrl && selectedSemaine && canCreate) {
+        // On error, create MIN_TABLE_ROWS empty rows for the selected semaine
+        const startDate = previousLotLastDate ?? today;
+        const newRows: LivraisonRow[] = [];
+        let nextDate = startDate;
+        for (let i = 0; i < MIN_TABLE_ROWS; i++) {
+          newRows.push(emptyRow(selectedSemaine, nextDate));
+          nextDate = addOneDay(nextDate);
+        }
+        setRows(newRows);
+      } else {
+        setRows([]);
+      }
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, toast]);
+  }, [showFarmSelector, pageFarmId, lotFilter, toast, hasSemaineInUrl, selectedSemaine, isReadOnly, canCreate, previousLotLastDate, today]);
 
   useEffect(() => {
     loadMovements();
@@ -278,29 +328,6 @@ export default function LivraisonsAliment() {
     if (hasSemaineInUrl && trimmedSemaine) params.semaine = trimmedSemaine;
     setSearchParams(params, { replace: true });
   }, [selectedFarmId, lotFilter, hasSemaineInUrl, trimmedSemaine, setSearchParams]);
-
-  useEffect(() => {
-    if (!hasSemaineInUrl || !selectedSemaine) return;
-    const forSem = rows.filter((r) => (r.sem || "").trim() === selectedSemaine);
-    if (forSem.length >= MIN_TABLE_ROWS) return;
-    const toAdd = MIN_TABLE_ROWS - forSem.length;
-    const startDate =
-      forSem.length > 0
-        ? (() => {
-            const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
-            if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
-            const maxD = dates.sort()[dates.length - 1];
-            return addOneDay(maxD);
-          })()
-        : getStartDateForSemaine(selectedSemaine);
-    const newRows: LivraisonRow[] = [];
-    let nextDate = startDate;
-    for (let i = 0; i < toAdd; i++) {
-      newRows.push(emptyRow(selectedSemaine, nextDate));
-      nextDate = addOneDay(nextDate);
-    }
-    setRows((prev) => [...prev, ...newRows]);
-  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine]);
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
@@ -368,6 +395,7 @@ export default function LivraisonsAliment() {
       supplier: r.supplier.trim() || null,
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
       qte: qte ?? null,
+      sex: r.sex.trim() !== "" ? r.sex.trim() : null,
       maleQty: male > 0 ? male : null,
       femaleQty: female > 0 ? female : null,
       prixPerUnit: prix > 0 ? prix : null,
@@ -378,9 +406,7 @@ export default function LivraisonsAliment() {
   };
 
   const handleSave = async () => {
-    const canSaveNew = canCreate;
-    const canSaveExisting = canUpdate;
-    if (!canSaveNew && !canSaveExisting) {
+    if (!canCreate) {
       toast({
         title: "Non autorisé",
         description: "Vous ne pouvez pas enregistrer les données.",
@@ -398,46 +424,29 @@ export default function LivraisonsAliment() {
     }
 
     const forSem = (r: LivraisonRow) => (r.sem || "").trim() === selectedSemaine;
-    const toCreate: LivraisonAlimentRequest[] = canSaveNew
-      ? rows
-          .filter((r) => forSem(r) && r.serverId == null)
-          .filter((r) => r.date.trim() !== "")
-          .map((r) => rowToRequest(r))
-          .filter((r) => r.date != null)
-      : [];
+    const unsavedForSem = rows
+      .filter((r) => forSem(r) && r.serverId == null)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const firstUnsaved = unsavedForSem[0];
 
-    const toUpdate = canSaveExisting
-      ? rows.filter((r) => forSem(r) && r.serverId != null && r.date.trim() !== "")
-      : [];
-
-    if (toCreate.length === 0 && toUpdate.length === 0) {
+    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
       toast({
         title: "Aucune ligne à enregistrer",
-        description: "Remplissez au moins la date et les quantités pour une ligne nouvelle, ou modifiez une ligne existante.",
+        description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
         variant: "destructive",
       });
       return;
     }
+
     setSaving(true);
     try {
-      if (toUpdate.length > 0) {
-        await Promise.all(
-          toUpdate.map((r) =>
-            api.livraisonsAliment.update(r.serverId!, rowToRequest(r))
-          )
-        );
-      }
-      if (toCreate.length > 0) {
-        await api.livraisonsAliment.createBatch(toCreate, pageFarmId ?? undefined);
-      }
-      const createdCount = toCreate.length;
-      const updatedCount = toUpdate.length;
-      const parts: string[] = [];
-      if (createdCount > 0) parts.push(`${createdCount} nouvelle(s) ligne(s)`);
-      if (updatedCount > 0) parts.push(`${updatedCount} ligne(s) modifiée(s)`);
+      await api.livraisonsAliment.createBatch(
+        [rowToRequest(firstUnsaved)],
+        pageFarmId ?? undefined
+      );
       toast({
-        title: "Livraisons enregistrées",
-        description: parts.join(". "),
+        title: "Jour enregistré",
+        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadMovements();
     } catch (e) {
@@ -451,10 +460,15 @@ export default function LivraisonsAliment() {
     }
   };
 
-  /** Rows for the selected semaine only; one table per semaine. */
+  /** Rows for the selected semaine only; sorted by date (day 1, day 2, ...). */
   const currentRows = selectedSemaine
-    ? rows.filter((r) => (r.sem || "").trim() === selectedSemaine)
+    ? [...rows.filter((r) => (r.sem || "").trim() === selectedSemaine)].sort(
+        (a, b) => (a.date || "").localeCompare(b.date || "")
+      )
     : [];
+
+  /** Index of the first unsaved row (day-by-day: only this row is editable). */
+  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
 
   /** Total for current semaine only. */
   const weekTotal = (() => {
@@ -661,9 +675,16 @@ export default function LivraisonsAliment() {
           <div className="space-y-6 w-full min-w-0">
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
-                <h2 className="text-lg font-display font-bold text-foreground">
-                  Livraisons d'aliment
-                </h2>
+                <div>
+                  <h2 className="text-lg font-display font-bold text-foreground">
+                    Livraisons d'aliment
+                  </h2>
+                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                    </p>
+                  )}
+                </div>
                 {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
                     {canCreate && (
@@ -678,7 +699,7 @@ export default function LivraisonsAliment() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading}
+                      disabled={saving || loading || firstEditableRowIndex < 0}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -698,6 +719,7 @@ export default function LivraisonsAliment() {
                       <th className="min-w-[120px]">FOURNISSEUR</th>
                       <th className="min-w-[90px]">N° BL</th>
                       <th className="min-w-[70px]">QTE</th>
+                      <th className="min-w-[80px]">SEX</th>
                       <th className="min-w-[80px]">PRIX</th>
                       <th className="min-w-[90px]">MONTANT</th>
                       <th className="min-w-[70px]">MALE</th>
@@ -708,14 +730,15 @@ export default function LivraisonsAliment() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={12} className="p-8 text-center text-muted-foreground">
+                        <td colSpan={13} className="p-8 text-center text-muted-foreground">
                           Chargement…
                         </td>
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
-                          const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
+                        {currentRows.map((row, rowIndex) => {
+                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
+                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           return (
                             <tr key={row.id}>
@@ -788,6 +811,18 @@ export default function LivraisonsAliment() {
                                 />
                               </td>
                               <td>
+                                <select
+                                  value={row.sex}
+                                  onChange={(e) => updateRow(row.id, "sex", e.target.value)}
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-[70px] bg-transparent border-0 outline-none text-sm rounded px-1 py-0.5"
+                                >
+                                  <option value="">—</option>
+                                  <option value="MALE">Male</option>
+                                  <option value="FEMELLE">Femelle</option>
+                                </select>
+                              </td>
+                              <td>
                                 <input
                                   type="number"
                                   value={row.prixPerUnit}
@@ -839,6 +874,7 @@ export default function LivraisonsAliment() {
                           </td>
                           <td>—</td>
                           <td>{weekTotal.qte}</td>
+                          <td>—</td>
                           <td>{weekTotal.prix.toFixed(2)}</td>
                           <td>{weekTotal.montant.toFixed(2)}</td>
                           <td>{weekTotal.maleQty}</td>
@@ -851,6 +887,7 @@ export default function LivraisonsAliment() {
                           </td>
                           <td>—</td>
                           <td>{cumulForSelectedSemaine.qte}</td>
+                          <td>—</td>
                           <td>{cumulForSelectedSemaine.prix.toFixed(2)}</td>
                           <td>{cumulForSelectedSemaine.montant.toFixed(2)}</td>
                           <td>{cumulForSelectedSemaine.maleQty}</td>

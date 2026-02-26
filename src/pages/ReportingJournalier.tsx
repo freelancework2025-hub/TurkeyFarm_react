@@ -9,6 +9,10 @@ import SavedDaysOverview from "@/components/reporting/SavedDaysOverview";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse } from "@/lib/api";
 
+/**
+ * Reporting Journalier — effectif mis en place and rapport journalier per day.
+ * Permissions: DailyReportTable and EffectifMisEnPlace use canCreate/canUpdate; RESPONSABLE_FERME: saved rows read-only.
+ */
 export default function ReportingJournalier() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");

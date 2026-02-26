@@ -714,25 +714,27 @@ export const api = {
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/employers/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
   },
-  /** Suivi Technique Setup — initial configuration per lot/sex */
+  /** Suivi Technique Setup — initial configuration per lot/semaine/sex (each semaine isolated). */
   suiviTechniqueSetup: {
-    list: (params: { farmId: number; lot?: string | null }, token?: string | null) => {
+    list: (params: { farmId: number; lot: string; semaine: string }, token?: string | null) => {
       const search = new URLSearchParams();
       search.set("farmId", String(params.farmId));
-      if (params.lot != null && params.lot !== "") search.set("lot", params.lot);
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
       return apiFetch<SuiviTechniqueSetupResponse[]>(
         `/api/suivi-technique-setup?${search.toString()}`,
         { token: token ?? getStoredToken() }
       );
     },
-    /** Get setup for (farm, lot, sex, batiment). Returns null when none exists (e.g. after "Ajouter l'autre sexe" — form stays empty for the new sex). */
+    /** Get setup for (farm, lot, semaine, sex, batiment). Returns null when none exists. */
     getBySex: async (
-      params: { farmId: number; lot: string; sex: string; batiment: string },
+      params: { farmId: number; lot: string; semaine: string; sex: string; batiment: string },
       token?: string | null
     ): Promise<SuiviTechniqueSetupResponse | null> => {
       const search = new URLSearchParams();
       search.set("farmId", String(params.farmId));
       search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
       search.set("sex", params.sex);
       search.set("batiment", params.batiment);
       const t = token ?? getStoredToken();
@@ -757,32 +759,35 @@ export const api = {
           token: token ?? getStoredToken(),
         }
       ),
-    delete: (params: { farmId: number; lot: string; sex: string; batiment: string }, token?: string | null) => {
+    delete: (params: { farmId: number; lot: string; semaine: string; sex: string; batiment: string }, token?: string | null) => {
       const search = new URLSearchParams();
       search.set("farmId", String(params.farmId));
       search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
       search.set("sex", params.sex);
       search.set("batiment", params.batiment);
       return apiFetch<void>(`/api/suivi-technique-setup?${search.toString()}`, { method: "DELETE", token: token ?? getStoredToken() });
     },
-    /** Get list of sexes that have setup records for a specific farm, lot, and batiment. */
-    getConfiguredSexes: (params: { farmId: number; lot: string; batiment: string }, token?: string | null) => {
+    /** Get list of sexes that have setup records for (farm, lot, batiment, semaine). */
+    getConfiguredSexes: (params: { farmId: number; lot: string; batiment: string; semaine: string }, token?: string | null) => {
       const search = new URLSearchParams();
       search.set("farmId", String(params.farmId));
       search.set("lot", params.lot);
       search.set("batiment", params.batiment);
+      search.set("semaine", params.semaine);
       return apiFetch<string[]>(
         `/api/suivi-technique-setup/sexes?${search.toString()}`,
         { token: token ?? getStoredToken() }
       );
     },
-    /** Delete all suivi data for a sex (setup, hebdo, production, consumption, performances) in the given batiment. */
-    deleteAllDataForSex: (params: { farmId: number; lot: string; batiment: string; sex: string }, token?: string | null) => {
+    /** Delete suivi data for a sex in the given batiment and semaine only (hebdo, production, consumption, performances, stock). */
+    deleteAllDataForSex: (params: { farmId: number; lot: string; batiment: string; sex: string; semaine: string }, token?: string | null) => {
       const search = new URLSearchParams();
       search.set("farmId", String(params.farmId));
       search.set("lot", params.lot);
       search.set("batiment", params.batiment);
       search.set("sex", params.sex);
+      search.set("semaine", params.semaine);
       return apiFetch<void>(`/api/suivi-technique-setup/all-data-for-sex?${search.toString()}`, {
         method: "DELETE",
         token: token ?? getStoredToken(),
@@ -977,6 +982,20 @@ export const api = {
       search.set("semaine", params.semaine);
       return apiFetch<SuiviCoutHebdoResponse[]>(
         `/api/suivi-cout-hebdo?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    getResumeSummary: (
+      params: { farmId: number; lot: string; semaine: string; batiments?: string },
+      token?: string | null
+    ) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("semaine", params.semaine);
+      if (params.batiments?.trim()) search.set("batiments", params.batiments.trim());
+      return apiFetch<ResumeCoutsHebdoSummaryResponse>(
+        `/api/suivi-cout-hebdo/resume-summary?${search.toString()}`,
         { token: token ?? getStoredToken() }
       );
     },
@@ -1180,6 +1199,7 @@ export interface LivraisonAlimentRequest {
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
   qte?: number | null;
+  sex?: string | null;
   maleQty?: number | null;
   femaleQty?: number | null;
   prixPerUnit?: number | null;
@@ -1202,6 +1222,7 @@ export interface LivraisonAlimentResponse {
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
   qte?: number | null;
+  sex?: string | null;
   maleQty?: number | null;
   femaleQty?: number | null;
   prixPerUnit?: number | null;
@@ -1556,10 +1577,11 @@ export interface EmployerResponse {
   updatedAt?: string;
 }
 
-/** Suivi Technique Setup — request (initial configuration per lot/sex) */
+/** Suivi Technique Setup — request (initial configuration per lot/semaine/sex) */
 export interface SuiviTechniqueSetupRequest {
   farmId?: number | null;
   lot: string;
+  semaine: string;
   sex: string;
   typeElevage?: string | null;
   origineFournisseur?: string | null;
@@ -1575,6 +1597,7 @@ export interface SuiviTechniqueSetupResponse {
   id: number;
   farmId: number;
   lot: string;
+  semaine: string;
   sex: string;
   typeElevage?: string | null;
   origineFournisseur?: string | null;
@@ -1631,6 +1654,8 @@ export interface SuiviTechniqueHebdoResponse {
   version?: number;
   createdAt?: string;
   updatedAt?: string;
+  /** True when ageJour, mortaliteNbre, consoEauL are all null — placeholder rows stay editable */
+  isPlaceholder?: boolean;
 }
 
 /** Weekly summary for Suivi Technique */
@@ -1706,10 +1731,14 @@ export interface SuiviConsommationHebdoResponse {
   updatedAt?: string;
 }
 
-/** Resume page consumption summary — CONSOMME ALIMENT (semaine) and CUMUL from DB, only (batiment, sex) with stock saved */
+/** Resume page consumption summary — CONSOMME ALIMENT (semaine) and CUMUL from DB, only (batiment, sex) with stock saved. Per-sex = sum across B1+B2+B3+... */
 export interface ConsoResumeSummary {
   consoAlimentSemaineSum?: number | null;
   cumulAlimentConsommeSum?: number | null;
+  consoAlimentSemaineMale?: number | null;
+  consoAlimentSemaineFemelle?: number | null;
+  cumulAlimentConsommeMale?: number | null;
+  cumulAlimentConsommeFemelle?: number | null;
 }
 
 /** Suivi de PERFORMANCES Hebdo — request (REEL + NORME; NORME applied only if user has update permission) */
@@ -1784,6 +1813,17 @@ export interface SaveStockAlimentRequest {
 }
 
 /** Suivi Coût Hebdo — one cost line (e.g. AMORTISSEMENT) for Prix de revient. */
+export interface ResumeCoutsHebdoSummaryResponse {
+  costLines: SuiviCoutHebdoResponse[];
+  computedRows: { designation: string; valeurS1: number; cumul: number }[];
+  poidsVifProduitKg: number | null;
+  totalCumul: number;
+  effectifRestantFinSemaine: number;
+  totalNbreProduction: number;
+  prixRevientParSujet: number | null;
+  prixRevientParKg: number | null;
+}
+
 export interface SuiviCoutHebdoResponse {
   id: number;
   farmId: number;

@@ -18,6 +18,8 @@ interface WeeklyRow {
   vaccination: string;
   traitement: string;
   observation: string;
+  /** From API: true when age/mortalite/conso all null — placeholder rows stay editable */
+  isPlaceholder?: boolean;
 }
 
 function toRow(r: SuiviTechniqueHebdoResponse): WeeklyRow {
@@ -35,6 +37,7 @@ function toRow(r: SuiviTechniqueHebdoResponse): WeeklyRow {
     vaccination: r.vaccination ?? "",
     traitement: r.traitement ?? "",
     observation: r.observation ?? "",
+    isPlaceholder: r.isPlaceholder ?? (r.ageJour == null && r.mortaliteNbre == null && r.consoEauL == null),
   };
 }
 
@@ -58,6 +61,15 @@ function emptyRow(date: string): WeeklyRow {
 
 function isSavedRow(id: string): boolean {
   return /^\d+$/.test(id);
+}
+
+/** Row has meaningful daily data (age, mortality, water). Placeholder rows with only effectif_depart should stay editable. */
+function hasMeaningfulDailyData(row: WeeklyRow): boolean {
+  return (
+    (row.ageJour?.trim() ?? "") !== "" ||
+    (row.mortaliteNbre?.trim() ?? "") !== "" ||
+    (row.consoEauL?.trim() ?? "") !== ""
+  );
 }
 
 const ROWS_PER_WEEK = 7;
@@ -219,10 +231,11 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       return;
     }
 
-    // Responsable de ferme: can only create; exclude already-saved rows from batch so we do not attempt update
+    // Responsable de ferme: can only create; exclude already-saved rows from batch EXCEPT placeholder rows
+    // (saved with only effectif_depart) which they can complete by filling age/mortality/water
     const toSend: SuiviTechniqueHebdoRequest[] = rows
       .filter((r) => r.recordDate && (r.mortaliteNbre.trim() !== "" || r.consoEauL.trim() !== ""))
-      .filter((r) => canUpdate || !isSavedRow(r.id))
+      .filter((r) => canUpdate || !isSavedRow(r.id) || hasMeaningfulDailyData(r))
       .map((r) => ({
         lot,
         sex,
@@ -523,7 +536,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             <tbody>
               {rows.map((row, index) => {
                 const saved = isSavedRow(row.id);
-                const readOnly = isReadOnly || (saved && !canUpdate);
+                const isPlaceholder = row.isPlaceholder ?? !hasMeaningfulDailyData(row);
+                const readOnly = isReadOnly || (saved && !canUpdate && !isPlaceholder);
                 const inputBase = "w-full bg-transparent border-0 outline-none px-1 py-1 text-sm focus:ring-1 focus:ring-ring rounded " + (readOnly ? "bg-muted/40 cursor-not-allowed" : "");
                 return (
                   <tr

@@ -56,7 +56,7 @@ export default function WeeklyProductionSummaryModal({
       for (const sex of SEXES) {
         setupPromises.push(
           api.suiviTechniqueSetup
-            .getBySex({ farmId, lot, sex, batiment })
+            .getBySex({ farmId, lot, semaine, sex, batiment })
             .then((r) => setSetups((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
             .catch(() => setSetups((prev) => new Map(prev).set(key(batiment, sex), null)))
         );

@@ -3,7 +3,8 @@
  * Columns: DESIGNATION, Semaine choisie S1, Cumul, Cumul DH/KG, %
  * - Cumul DH/KG = cumul / POIDS VIF PRODUIT EN KG (from STOCK — Tous bâtiments — S1)
  * - % = cumul / total of all cumuls
- * S1 (and cumul) for AMORTISSEMENT and DINDONNEAUX: editable only by responsable technique; others read-only.
+ * S1 (and cumul) for AMORTISSEMENT and DINDONNEAUX: only ADMINISTRATEUR and RESPONSABLE_TECHNIQUE can edit.
+ * RESPONSABLE_FERME and others: read-only (permission.mdc).
  */
 
 import { useState, useMemo } from "react";
@@ -19,8 +20,18 @@ export interface ResumeCoutsHebdoTableProps {
   computedRows?: { designation: string; valeurS1: number; cumul: number }[];
   /** POIDS VIF PRODUIT EN KG from STOCK — Tous bâtiments — S1 (Résumé hebdomadaire de la production) */
   poidsVifProduitKg: number | null;
-  /** True if user can edit S1 and cumul (responsable technique or admin) */
-  canEditS1: boolean;
+  /** EFFECTIF RESTANT FIN DE SEMAINE from production résumé (for PRIX DE REVIENT/SUJET and /KG) */
+  effectifRestantFinSemaine?: number | null;
+  /** Total NB de production (report + vente + conso + autre) from production résumé */
+  totalNbreProduction?: number | null;
+  /** PRIX DE REVIENT/SUJET — from backend when available (avoids client calc) */
+  prixRevientParSujet?: number | null;
+  /** PRIX DE REVIENT/KG — from backend when available (avoids client calc) */
+  prixRevientParKg?: number | null;
+  /** User can create new rows. Not used for AMORTISSEMENT/DINDONNEAUX (those require canUpdate). */
+  canCreate: boolean;
+  /** User can edit AMORTISSEMENT and DINDONNEAUX. Only ADMINISTRATEUR and RESPONSABLE_TECHNIQUE (permission.mdc). */
+  canUpdate: boolean;
   farmId: number;
   lot: string;
   /** Callback after save to refresh the list */
@@ -49,13 +60,15 @@ const COMPUTED_DESIGNATION_ORDER: Record<string, number> = {
   PAILLE: 6,
   ELECTRICITE: 7,
   "M.O (JOUR DE TRAVAIL)": 8,
+  "ENTRETIEN ET REP": 9,
+  DIVERS: 10,
 };
 
 function designationOrder(designation: string | null | undefined): number {
   const d = designation?.toUpperCase();
   if (d != null && d in COMPUTED_DESIGNATION_ORDER)
     return COMPUTED_DESIGNATION_ORDER[d as keyof typeof COMPUTED_DESIGNATION_ORDER];
-  return 9;
+  return 10;
 }
 
 /** Safely coerce API value (number, string, null) to number for calculations. */
@@ -75,12 +88,22 @@ function formatPct(value: number | null | undefined): string {
   return `${value.toFixed(2).replace(".", ",")} %`;
 }
 
+/** Row is saved when it has a persistent id from API (id > 0). Placeholders have id 0; computed rows id < 0. */
+function isRowSaved(row: SuiviCoutHebdoResponse): boolean {
+  return row.id != null && row.id > 0;
+}
+
 export default function ResumeCoutsHebdoTable({
   semaine,
   rows,
   computedRows = [],
   poidsVifProduitKg,
-  canEditS1,
+  effectifRestantFinSemaine,
+  totalNbreProduction,
+  prixRevientParSujet,
+  prixRevientParKg,
+  canCreate,
+  canUpdate,
   farmId,
   lot,
   onSaveSuccess,
@@ -89,6 +112,16 @@ export default function ResumeCoutsHebdoTable({
   const [saving, setSaving] = useState(false);
   const [editValeurS1, setEditValeurS1] = useState<string>("");
   const [editCumul, setEditCumul] = useState<string>("");
+
+  /**
+   * AMORTISSEMENT and DINDONNEAUX: only RESPONSABLE_TECHNIQUE and ADMINISTRATEUR can edit (create or update).
+   * RESPONSABLE_FERME and others read-only per permission.mdc.
+   */
+  const canEditRow = (row: SuiviCoutHebdoResponse): boolean => {
+    if (!isEditableByRespTech(row.designation)) return false;
+    if (row.id != null && row.id < 0) return false; // computed row
+    return canUpdate;
+  };
 
   // Merge API rows (with placeholders for AMORTISSEMENT/DINDONNEAUX) and computed rows from modules
   const displayRows = useMemo((): SuiviCoutHebdoResponse[] => {
@@ -156,7 +189,7 @@ export default function ResumeCoutsHebdoTable({
   }, [totalCumul, poidsVifProduitKg]);
 
   const startEdit = (row: SuiviCoutHebdoResponse) => {
-    if (!canEditS1) return;
+    if (!canEditRow(row)) return;
     setEditingId(row.id);
     setEditValeurS1(row.valeurS1 != null ? String(row.valeurS1) : "");
     setEditCumul(row.cumul != null ? String(row.cumul) : "");
@@ -169,7 +202,7 @@ export default function ResumeCoutsHebdoTable({
   };
 
   const saveEdit = async (row: SuiviCoutHebdoResponse) => {
-    if (!canEditS1) return;
+    if (!canEditRow(row)) return;
     setSaving(true);
     try {
       const valeurS1 = editValeurS1.trim() === "" ? null : parseFloat(editValeurS1.replace(",", "."));
@@ -266,7 +299,7 @@ export default function ResumeCoutsHebdoTable({
                             Annuler
                           </button>
                         </div>
-                      ) : canEditS1 ? (
+                      ) : canEditRow(row) ? (
                         <button
                           type="button"
                           onClick={() => startEdit(row)}
@@ -329,6 +362,55 @@ export default function ResumeCoutsHebdoTable({
           </tfoot>
         </table>
       </div>
+
+      {/* Table PRIX DE REVIENT/SUJET et PRIX DE REVIENT/KG — below Prix de revient */}
+      {(effectifRestantFinSemaine != null || totalNbreProduction != null) && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[320px] text-sm border-collapse border-t border-border">
+            <thead>
+              <tr className="bg-muted/80 border-b border-border">
+                <th className="px-4 py-2.5 text-left font-semibold text-foreground w-[280px]">
+                  INDICATEUR
+                </th>
+                <th className="px-3 py-2.5 text-center font-semibold text-foreground border-l border-border">
+                  VALEUR
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-border bg-card">
+                <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
+                  PRIX DE REVIENT/SUJET
+                </td>
+                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+                  {formatNum(
+                    prixRevientParSujet != null
+                      ? prixRevientParSujet
+                      : totalCumul > 0 &&
+                          effectifRestantFinSemaine != null &&
+                          totalNbreProduction != null &&
+                          effectifRestantFinSemaine + totalNbreProduction > 0
+                        ? totalCumul / (effectifRestantFinSemaine + totalNbreProduction)
+                        : null
+                  )}
+                </td>
+              </tr>
+              <tr className="border-b border-border bg-muted/10">
+                <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
+                  PRIX DE REVIENT/KG
+                </td>
+                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+                  {formatNum(
+                    prixRevientParKg != null
+                      ? prixRevientParKg
+                      : totalCumulDhKg
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

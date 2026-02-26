@@ -38,6 +38,7 @@ const TAB_TO_API_SEX: Record<TabType, string> = { male: "Mâle", femelle: "Femel
  * - After choosing one batiment: user enters suivi for that batiment only. Tables empty if nothing saved yet.
  * - Batiment cannot be changed on the content screen; only "Retour au choix du bâtiment" clears batiment from URL and returns to step 3.
  * Permissions: per permission.mdc (all roles; create/update/delete by role).
+ * RESPONSABLE_FERME: can add and save new data in child tables; saved rows/cells are read-only.
  */
 export default function SuiviTechniqueHebdomadaire() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -102,10 +103,10 @@ export default function SuiviTechniqueHebdomadaire() {
 
   const reportingFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
-  // Fetch configured sexes from backend when batiment is selected
-  // This ensures sex tabs persist after page refresh
+  // Fetch configured sexes from backend when batiment and semaine are selected
+  // Each semaine has its own sexes — S1 male/femelle does not appear in S2
   useEffect(() => {
-    if (!reportingFarmId || !lotParam.trim() || !selectedBatiment) {
+    if (!reportingFarmId || !lotParam.trim() || !selectedBatiment || !trimmedSemaine) {
       setInitialSex(null);
       setOtherSexEnabled(false);
       return;
@@ -113,7 +114,7 @@ export default function SuiviTechniqueHebdomadaire() {
 
     setLoadingSexes(true);
     api.suiviTechniqueSetup
-      .getConfiguredSexes({ farmId: reportingFarmId, lot: lotParam.trim(), batiment: selectedBatiment })
+      .getConfiguredSexes({ farmId: reportingFarmId, lot: lotParam.trim(), batiment: selectedBatiment, semaine: trimmedSemaine })
       .then((sexes) => {
         if (sexes.length === 0) {
           // No sexes configured yet - show sex chooser
@@ -140,7 +141,7 @@ export default function SuiviTechniqueHebdomadaire() {
         setOtherSexEnabled(false);
       })
       .finally(() => setLoadingSexes(false));
-  }, [reportingFarmId, lotParam, selectedBatiment]);
+  }, [reportingFarmId, lotParam, selectedBatiment, trimmedSemaine]);
 
   // Load lots for selected farm
   useEffect(() => {
@@ -240,7 +241,7 @@ export default function SuiviTechniqueHebdomadaire() {
   }, [reportingFarmId, lotParam, selectedSemaine, selectedBatiment, initialSex, enableOtherSex]);
 
   const handleConfirmDeleteSex = useCallback(async () => {
-    if (reportingFarmId == null || !lotParam.trim() || !selectedBatiment) return;
+    if (reportingFarmId == null || !lotParam.trim() || !selectedBatiment || !selectedSemaine) return;
     const sexToDelete = TAB_TO_API_SEX[activeTab];
     setDeleteSexLoading(true);
     try {
@@ -249,6 +250,7 @@ export default function SuiviTechniqueHebdomadaire() {
         lot: lotParam.trim(),
         batiment: selectedBatiment,
         sex: sexToDelete,
+        semaine: selectedSemaine,
       });
       setDeleteSexDialogOpen(false);
       refreshStock();
@@ -274,7 +276,7 @@ export default function SuiviTechniqueHebdomadaire() {
       }
       toast({
         title: "Données supprimées",
-        description: `Toutes les données pour le sexe « ${sexToDelete} » ont été supprimées pour ce bâtiment.`,
+        description: `Les données pour le sexe « ${sexToDelete} » ont été supprimées pour ce bâtiment et la semaine ${selectedSemaine} uniquement.`,
       });
     } catch (e) {
       toast({
@@ -285,7 +287,7 @@ export default function SuiviTechniqueHebdomadaire() {
     } finally {
       setDeleteSexLoading(false);
     }
-  }, [reportingFarmId, lotParam, selectedBatiment, activeTab, refreshStock, toast]);
+  }, [reportingFarmId, lotParam, selectedBatiment, selectedSemaine, activeTab, refreshStock, toast]);
 
   const canDeleteSexData = isResponsableTechnique || isAdministrateur;
 
@@ -700,9 +702,10 @@ export default function SuiviTechniqueHebdomadaire() {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Supprimer toutes les données de ce sexe</AlertDialogTitle>
                     <AlertDialogDescription>
-                      Voulez-vous supprimer <strong>toutes les données</strong> pour le sexe{" "}
-                      <strong>{TAB_TO_API_SEX[activeTab]}</strong> dans ce bâtiment ? (Setup, suivi hebdo, production,
-                      consommation, performances.) Cette action est irréversible.
+                      Voulez-vous supprimer les données pour le sexe{" "}
+                      <strong>{TAB_TO_API_SEX[activeTab]}</strong> dans ce bâtiment pour la semaine{" "}
+                      <strong>{selectedSemaine}</strong> uniquement ? (Suivi hebdo, production, consommation,
+                      performances, stock. Le setup est conservé.) Cette action est irréversible.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>

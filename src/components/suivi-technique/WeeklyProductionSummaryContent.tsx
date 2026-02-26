@@ -64,7 +64,7 @@ export default function WeeklyProductionSummaryContent({
       for (const sex of SEXES) {
         setupPromises.push(
           api.suiviTechniqueSetup
-            .getBySex({ farmId, lot, sex, batiment })
+            .getBySex({ farmId, lot, semaine, sex, batiment })
             .then((r) => setSetups((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
             .catch(() => setSetups((prev) => new Map(prev).set(key(batiment, sex), null)))
         );
@@ -209,25 +209,56 @@ export default function WeeklyProductionSummaryContent({
   }, [aggregatedRows]);
 
   // CONSOMME ALIMENT (semaine) and CUMUL: read from database via resume-summary API (only (batiment, sex) with stock saved).
-  // Fallback to frontend aggregate when API not yet loaded.
+  // Per-sex values = sum across B1+B2+B3+... (all active batiments) for each sex.
   const aggregatedConsommation = useMemo(() => {
     if (resumeConsoSummary != null) {
       const conso = resumeConsoSummary.consoAlimentSemaineSum != null ? Number(resumeConsoSummary.consoAlimentSemaineSum) : 0;
       const cumul = resumeConsoSummary.cumulAlimentConsommeSum != null ? Number(resumeConsoSummary.cumulAlimentConsommeSum) : 0;
-      return { consoAlimentSemaineSum: conso, cumulAlimentConsommeSum: cumul };
+      const consoMale = resumeConsoSummary.consoAlimentSemaineMale != null ? Number(resumeConsoSummary.consoAlimentSemaineMale) : null;
+      const consoFemelle = resumeConsoSummary.consoAlimentSemaineFemelle != null ? Number(resumeConsoSummary.consoAlimentSemaineFemelle) : null;
+      const cumulMale = resumeConsoSummary.cumulAlimentConsommeMale != null ? Number(resumeConsoSummary.cumulAlimentConsommeMale) : null;
+      const cumulFemelle = resumeConsoSummary.cumulAlimentConsommeFemelle != null ? Number(resumeConsoSummary.cumulAlimentConsommeFemelle) : null;
+      return {
+        consoAlimentSemaineSum: conso,
+        cumulAlimentConsommeSum: cumul,
+        consoAlimentSemaineMale: consoMale,
+        consoAlimentSemaineFemelle: consoFemelle,
+        cumulAlimentConsommeMale: cumulMale,
+        cumulAlimentConsommeFemelle: cumulFemelle,
+      };
     }
     let consoAlimentSemaineSum = 0;
     let cumulAlimentConsommeSum = 0;
+    let consoAlimentSemaineMale = 0;
+    let consoAlimentSemaineFemelle = 0;
+    let cumulAlimentConsommeMale = 0;
+    let cumulAlimentConsommeFemelle = 0;
     for (const batiment of allBatiments) {
       for (const sex of SEXES) {
         const stock = stockByKey.get(key(batiment, sex));
         if (!stock?.stockAlimentRecordExists) continue;
         const c = consumptionByKey.get(key(batiment, sex));
-        if (c?.consommationAlimentSemaine != null) consoAlimentSemaineSum += Number(c.consommationAlimentSemaine);
-        if (c?.cumulAlimentConsomme != null) cumulAlimentConsommeSum += Number(c.cumulAlimentConsomme);
+        const consoVal = c?.consommationAlimentSemaine != null ? Number(c.consommationAlimentSemaine) : 0;
+        const cumulVal = c?.cumulAlimentConsomme != null ? Number(c.cumulAlimentConsomme) : 0;
+        consoAlimentSemaineSum += consoVal;
+        cumulAlimentConsommeSum += cumulVal;
+        if (sex === "Mâle") {
+          consoAlimentSemaineMale += consoVal;
+          cumulAlimentConsommeMale += cumulVal;
+        } else {
+          consoAlimentSemaineFemelle += consoVal;
+          cumulAlimentConsommeFemelle += cumulVal;
+        }
       }
     }
-    return { consoAlimentSemaineSum, cumulAlimentConsommeSum };
+    return {
+      consoAlimentSemaineSum,
+      cumulAlimentConsommeSum,
+      consoAlimentSemaineMale,
+      consoAlimentSemaineFemelle,
+      cumulAlimentConsommeMale,
+      cumulAlimentConsommeFemelle,
+    };
   }, [resumeConsoSummary, consumptionByKey, stockByKey, allBatiments]);
 
   // INDICE EAU/ALIMENT = sum CONSOMME ALIMENT / total eau semaine (from the weekly tracking table on this page)
@@ -493,6 +524,10 @@ export default function WeeklyProductionSummaryContent({
         semaine={semaine}
         consoAlimentSemaineSum={aggregatedConsommation.consoAlimentSemaineSum}
         cumulAlimentConsommeSum={aggregatedConsommation.cumulAlimentConsommeSum}
+        consoAlimentSemaineMale={aggregatedConsommation.consoAlimentSemaineMale}
+        consoAlimentSemaineFemelle={aggregatedConsommation.consoAlimentSemaineFemelle}
+        cumulAlimentConsommeMale={aggregatedConsommation.cumulAlimentConsommeMale}
+        cumulAlimentConsommeFemelle={aggregatedConsommation.cumulAlimentConsommeFemelle}
         indiceEauAliment={indiceEauAlimentResume}
         poidsVifProduitKg={aggregatedStock.poidsVifProduitKg}
         totalNbreSuiviProduction={aggregatedProduction.totalNbre}

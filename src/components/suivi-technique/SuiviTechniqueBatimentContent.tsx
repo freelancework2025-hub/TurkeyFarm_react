@@ -42,14 +42,14 @@ export default function SuiviTechniqueBatimentContent({
 
   const loadSetups = useCallback(() => {
     api.suiviTechniqueSetup
-      .getBySex({ farmId, lot, sex: "Mâle", batiment })
+      .getBySex({ farmId, lot, semaine, sex: "Mâle", batiment })
       .then((r) => setMaleSetup(r ?? null))
       .catch(() => setMaleSetup(null));
     api.suiviTechniqueSetup
-      .getBySex({ farmId, lot, sex: "Femelle", batiment })
+      .getBySex({ farmId, lot, semaine, sex: "Femelle", batiment })
       .then((r) => setFemelleSetup(r ?? null))
       .catch(() => setFemelleSetup(null));
-  }, [farmId, lot, batiment]);
+  }, [farmId, lot, semaine, batiment]);
 
   useEffect(() => {
     loadSetups();
@@ -73,6 +73,7 @@ export default function SuiviTechniqueBatimentContent({
             key="setup-Mâle"
             farmId={farmId}
             lot={lot}
+            semaine={semaine}
             sex="Mâle"
             selectedBatiment={batiment}
             onSetupSaved={handleMaleSetupSaved}
@@ -132,6 +133,7 @@ export default function SuiviTechniqueBatimentContent({
             key="setup-Femelle"
             farmId={farmId}
             lot={lot}
+            semaine={semaine}
             sex="Femelle"
             selectedBatiment={batiment}
             onSetupSaved={handleFemelleSetupSaved}

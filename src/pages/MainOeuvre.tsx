@@ -18,6 +18,8 @@ import {
  * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
  * Each semaine has its own table; TOTAL = jours for current semaine, CUMUL = running jours.
  * Table: Date, Semaine (age), Employé, Temps (1 jour or 1/2 demijour). Permissions: canCreate/canUpdate/canDelete.
+ * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
+ * Only filled lines (date + employé) are created on Save, so they can save line 1 → locked; then fill and save line 2 → both locked; etc.
  */
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
@@ -370,9 +372,7 @@ export default function MainOeuvre() {
   };
 
   const handleSave = async () => {
-    const canSaveNew = canCreate;
-    const canSaveExisting = canUpdate;
-    if (!canSaveNew && !canSaveExisting) {
+    if (!canCreate) {
       toast({
         title: "Non autorisé",
         description: "Vous ne pouvez pas enregistrer les données.",
@@ -389,20 +389,15 @@ export default function MainOeuvre() {
       return;
     }
     const forSem = (r: MainOeuvreRow) => (r.age || "").trim() === selectedSemaine;
-    const toCreate: MainOeuvreRequest[] = canSaveNew
-      ? rows
-          .filter((r) => forSem(r) && r.serverId == null)
-          .filter((r) => r.date.trim() !== "" && r.employerId != null)
-          .map((r) => rowToRequest(r))
-      : [];
-    const toUpdate = canSaveExisting
-      ? rows.filter((r) => forSem(r) && r.serverId != null && r.date.trim() !== "" && r.employerId != null)
-      : [];
+    const unsavedForSem = rows
+      .filter((r) => forSem(r) && r.serverId == null)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const firstUnsaved = unsavedForSem[0];
 
-    if (toCreate.length === 0 && toUpdate.length === 0) {
+    if (!firstUnsaved || firstUnsaved.date.trim() === "" || firstUnsaved.employerId == null) {
       toast({
         title: "Aucune ligne à enregistrer",
-        description: "Remplissez la date et choisissez un employé pour chaque ligne nouvelle ou modifiez une ligne existante.",
+        description: "Remplissez la date et choisissez un employé pour la prochaine ligne à enregistrer.",
         variant: "destructive",
       });
       return;
@@ -410,20 +405,10 @@ export default function MainOeuvre() {
 
     setSaving(true);
     try {
-      if (toUpdate.length > 0) {
-        await Promise.all(toUpdate.map((r) => api.mainOeuvre.update(r.serverId!, rowToRequest(r))));
-      }
-      if (toCreate.length > 0) {
-        await api.mainOeuvre.createBatch(toCreate, pageFarmId ?? undefined);
-      }
-      const createdCount = toCreate.length;
-      const updatedCount = toUpdate.length;
-      const parts: string[] = [];
-      if (createdCount > 0) parts.push(`${createdCount} nouvelle(s) ligne(s)`);
-      if (updatedCount > 0) parts.push(`${updatedCount} ligne(s) modifiée(s)`);
+      await api.mainOeuvre.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
       toast({
-        title: "Enregistrement effectué",
-        description: parts.join(". "),
+        title: "Jour enregistré",
+        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadMovements();
     } catch (e) {
@@ -437,7 +422,10 @@ export default function MainOeuvre() {
     }
   };
 
-  const currentRows = selectedSemaine ? rows.filter((r) => (r.age || "").trim() === selectedSemaine) : [];
+  const currentRows = selectedSemaine
+    ? [...rows.filter((r) => (r.age || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    : [];
+  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
   const weekTotalJours = currentRows.reduce((sum, r) => sum + rowJours(r.fullDay), 0);
   const cumulJours = (() => {
     const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
@@ -632,7 +620,14 @@ export default function MainOeuvre() {
           <div className="space-y-6 w-full min-w-0">
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
-                <h2 className="text-lg font-display font-bold text-foreground">Main d&apos;œuvre</h2>
+                <div>
+                  <h2 className="text-lg font-display font-bold text-foreground">Main d&apos;œuvre</h2>
+                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                    </p>
+                  )}
+                </div>
                 {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
                     {canCreate && (
@@ -647,7 +642,7 @@ export default function MainOeuvre() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading}
+                      disabled={saving || loading || firstEditableRowIndex < 0}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -678,8 +673,9 @@ export default function MainOeuvre() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
-                          const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
+                        {currentRows.map((row, rowIndex) => {
+                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
+                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           const emp = row.employerId != null ? employers.find((e) => e.id === row.employerId) : null;
                           const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;

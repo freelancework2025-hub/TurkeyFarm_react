@@ -12,6 +12,7 @@ import { api, type FarmResponse, type SortieRequest, type SortieResponse } from 
  * - ADMINISTRATEUR / RESPONSABLE_TECHNIQUE: Ligne + Enregistrer visible; can edit/delete any row.
  * - BACKOFFICE_EMPLOYER: No Ligne, no Enregistrer; all rows read-only; no delete (isReadOnly, !canCreate, !canUpdate, !canDelete).
  * - RESPONSABLE_FERME: Ligne + Enregistrer visible; saved rows read-only; no delete on saved rows (canCreate, !canUpdate, !canDelete).
+ * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → Enregistrer → locked; then day 2 → Enregistrer → locked. Only the first unsaved row is editable.
  * Buttons: Ligne & Enregistrer only when canCreate. Delete on row: when saved → canDelete; when new → canCreate.
  */
 
@@ -40,6 +41,9 @@ function typeUsesDesignationDropdown(type: string): boolean {
 /** Semaine selector options (S1..S24), like LivraisonGaz */
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 
+/** Minimum table rows to display (7 default rows for sequential save workflow) */
+const MIN_TABLE_ROWS = 7;
+
 /** Parse "S1" or "1" to number for API */
 function parseSemaineToNum(s: string): number | null {
   if (s == null || s.trim() === "") return null;
@@ -47,6 +51,13 @@ function parseSemaineToNum(s: string): number | null {
   if (m) return parseInt(m[1], 10);
   const n = parseInt(s.trim(), 10);
   return Number.isNaN(n) ? null : n;
+}
+
+/** Add one day to a YYYY-MM-DD date string. */
+function addOneDay(isoDate: string): string {
+  const d = new Date(isoDate + "T12:00:00");
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().split("T")[0];
 }
 
 interface SortieRow {
@@ -147,10 +158,10 @@ export default function SortiesFerme() {
     [selectedFarmId, lotParam, setSearchParams]
   );
 
-  const emptyRow = (lotPreFill?: string, semainePreFill?: string): SortieRow => ({
+  const emptyRow = (lotPreFill?: string, semainePreFill?: string, overrideDate?: string): SortieRow => ({
     id: crypto.randomUUID(),
     semaine: semainePreFill ?? "",
-    date: today,
+    date: overrideDate ?? today,
     lot: lotPreFill ?? "",
     client: "",
     num_bl: "",
@@ -193,20 +204,48 @@ export default function SortiesFerme() {
         montant_ttc: r.montant_ttc != null ? String(r.montant_ttc) : "",
       }));
       const forSem = mapped.filter((r) => (r.semaine || "").trim() === selectedSemaine);
-      const withEmpty =
-        isReadOnly || !canCreate
-          ? mapped
-          : forSem.length > 0
-            ? mapped
-            : [...mapped, emptyRow(lotParam.trim(), selectedSemaine)];
-      setRows(withEmpty);
+      
+      // Ensure MIN_TABLE_ROWS (7) rows for the selected semaine
+      if (isReadOnly || !canCreate) {
+        setRows(mapped);
+      } else if (forSem.length >= MIN_TABLE_ROWS) {
+        setRows(mapped);
+      } else {
+        // Pad with empty rows to reach MIN_TABLE_ROWS; dates incremented by +1 from last saved
+        const toAdd = MIN_TABLE_ROWS - forSem.length;
+        const startDate = forSem.length > 0
+          ? (() => {
+              const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
+              if (dates.length === 0) return today;
+              const maxD = dates.sort()[dates.length - 1];
+              return maxD ? addOneDay(maxD) : today;
+            })()
+          : today;
+        const newRows: SortieRow[] = [];
+        let nextDate = startDate;
+        for (let i = 0; i < toAdd; i++) {
+          newRows.push(emptyRow(lotParam.trim(), selectedSemaine, nextDate));
+          nextDate = addOneDay(nextDate);
+        }
+        setRows([...mapped, ...newRows]);
+      }
     } catch (e) {
       toast({
         title: "Erreur",
         description: e instanceof Error ? e.message : "Impossible de charger les sorties.",
         variant: "destructive",
       });
-      setRows(canCreate ? [emptyRow(lotParam.trim(), selectedSemaine)] : []);
+      if (canCreate && hasSemaineInUrl && selectedSemaine) {
+        const newRows: SortieRow[] = [];
+        let nextDate = today;
+        for (let i = 0; i < MIN_TABLE_ROWS; i++) {
+          newRows.push(emptyRow(lotParam.trim(), selectedSemaine, nextDate));
+          nextDate = addOneDay(nextDate);
+        }
+        setRows(newRows);
+      } else {
+        setRows([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -218,12 +257,16 @@ export default function SortiesFerme() {
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
-    setRows((prev) => [...prev, emptyRow(lotParam.trim(), selectedSemaine)]);
+    const currentRows = rows.filter((r) => (r.semaine || "").trim() === selectedSemaine);
+    const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
+    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
+    const newRow = { ...emptyRow(lotParam.trim(), selectedSemaine), date: nextDate };
+    setRows((prev) => [...prev, newRow]);
   };
 
   const removeRow = (id: string) => {
     const currentRows = rows.filter((r) => (r.semaine || "").trim() === selectedSemaine);
-    if (currentRows.length <= 1) return;
+    if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
     if (row?.serverId != null && !canDelete) return;
     if (row?.serverId != null) {
@@ -270,7 +313,7 @@ export default function SortiesFerme() {
   });
 
   const handleSave = async () => {
-    if (!canCreate && !canUpdate) {
+    if (!canCreate) {
       toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer les données.", variant: "destructive" });
       return;
     }
@@ -279,33 +322,26 @@ export default function SortiesFerme() {
       return;
     }
     const forSem = (r: SortieRow) => (r.semaine || "").trim() === selectedSemaine;
-    const toCreate = canCreate
-      ? rows.filter((r) => forSem(r) && r.serverId == null).map((r) => rowToRequest(r))
-      : [];
-    const toUpdate = canUpdate ? rows.filter((r) => forSem(r) && r.serverId != null) : [];
+    const unsavedForSem = rows
+      .filter((r) => forSem(r) && r.serverId == null)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const firstUnsaved = unsavedForSem[0];
 
-    if (toCreate.length === 0 && toUpdate.length === 0) {
+    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
       toast({
         title: "Aucune ligne à enregistrer",
-        description: "Ajoutez au moins une ligne nouvelle ou modifiez une ligne existante.",
+        description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
         variant: "destructive",
       });
       return;
     }
     setSaving(true);
     try {
-      if (toUpdate.length > 0) {
-        await Promise.all(toUpdate.map((r) => api.sorties.update(r.serverId!, rowToRequest(r))));
-      }
-      if (toCreate.length > 0) {
-        await api.sorties.createBatch(toCreate, pageFarmId ?? undefined);
-      }
-      const createdCount = toCreate.length;
-      const updatedCount = toUpdate.length;
-      const parts: string[] = [];
-      if (createdCount > 0) parts.push(`${createdCount} nouvelle(s) ligne(s)`);
-      if (updatedCount > 0) parts.push(`${updatedCount} ligne(s) modifiée(s)`);
-      toast({ title: "Sorties enregistrées", description: parts.join(". ") });
+      await api.sorties.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
+      toast({
+        title: "Jour enregistré",
+        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
+      });
       loadSorties();
     } catch (e) {
       toast({
@@ -318,7 +354,10 @@ export default function SortiesFerme() {
     }
   };
 
-  const currentRows = selectedSemaine ? rows.filter((r) => (r.semaine || "").trim() === selectedSemaine) : [];
+  const currentRows = selectedSemaine
+    ? [...rows.filter((r) => (r.semaine || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    : [];
+  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
 
   return (
     <AppLayout>
@@ -489,10 +528,17 @@ export default function SortiesFerme() {
 
           <div className="space-y-6 w-full min-w-0">
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-                <h2 className="text-lg font-display font-bold text-foreground">
-                  Tableau des Sorties
-                </h2>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
+                <div>
+                  <h2 className="text-lg font-display font-bold text-foreground">
+                    Tableau des Sorties
+                  </h2>
+                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                    </p>
+                  )}
+                </div>
                 {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
                     {canCreate && (
@@ -507,7 +553,7 @@ export default function SortiesFerme() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading || !selectedSemaine}
+                      disabled={saving || loading || !selectedSemaine || firstEditableRowIndex < 0}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -540,8 +586,9 @@ export default function SortiesFerme() {
                         </td>
                       </tr>
                     ) : (
-                      currentRows.map((row) => {
-                        const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
+                      currentRows.map((row, rowIndex) => {
+                        const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
+                        const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
                         const showDelete = row.serverId != null ? canDelete : canCreate;
                         return (
                           <tr key={row.id}>
@@ -596,7 +643,7 @@ export default function SortiesFerme() {
                             <td className="font-semibold text-sm">{row.montant_ttc || "0.00"}</td>
                             <td>
                               {showDelete && (
-                                <button onClick={() => removeRow(row.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1" disabled={currentRows.length <= 1}>
+                                <button onClick={() => removeRow(row.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1" disabled={currentRows.length <= MIN_TABLE_ROWS}>
                                   <Trash2 className="w-4 h-4" />
                                 </button>
                               )}

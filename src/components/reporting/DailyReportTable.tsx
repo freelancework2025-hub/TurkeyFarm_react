@@ -348,8 +348,8 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                       type="date"
                       value={row.report_date}
                       onChange={(e) => updateRow(row.id, "report_date", e.target.value)}
-                      readOnly={readOnly}
-                      className={readOnly ? "bg-muted/50 cursor-not-allowed" : ""}
+                      disabled={readOnly}
+                      className={`w-full bg-transparent border-0 outline-none text-sm py-0.5 ${readOnly ? "bg-muted/50 cursor-not-allowed" : ""}`}
                     />
                   </td>
                   <td>

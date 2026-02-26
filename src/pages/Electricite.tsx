@@ -17,6 +17,8 @@ import {
  * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
  * Each semaine has its own table; TOTAL = current semaine, CUMUL = previous semaines + current.
  * Same permission matrix: canCreate for add/save, canUpdate for saved rows, canDelete for delete.
+ * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
+ * Only filled lines (at least date) are created on Save, so they can save line 1 → locked; then fill and save line 2 → both locked; etc.
  * Columns: date, age (semaine), designation, fournisseur, qte, prix, montant, N°BR, male, femelle.
  */
 
@@ -382,9 +384,7 @@ export default function Electricite() {
   };
 
   const handleSave = async () => {
-    const canSaveNew = canCreate;
-    const canSaveExisting = canUpdate;
-    if (!canSaveNew && !canSaveExisting) {
+    if (!canCreate) {
       toast({
         title: "Non autorisé",
         description: "Vous ne pouvez pas enregistrer les données.",
@@ -401,37 +401,25 @@ export default function Electricite() {
       return;
     }
     const forSem = (r: ElectriciteRow) => (r.age || "").trim() === selectedSemaine;
-    const toCreate: LivraisonElectriciteRequest[] = canSaveNew
-      ? rows.filter((r) => forSem(r) && r.serverId == null).filter((r) => r.date.trim() !== "").map((r) => rowToRequest(r)).filter((r) => r.date != null)
-      : [];
-    const toUpdate = canSaveExisting
-      ? rows.filter((r) => forSem(r) && r.serverId != null && r.date.trim() !== "")
-      : [];
+    const unsavedForSem = rows
+      .filter((r) => forSem(r) && r.serverId == null)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const firstUnsaved = unsavedForSem[0];
 
-    if (toCreate.length === 0 && toUpdate.length === 0) {
+    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
       toast({
         title: "Aucune ligne à enregistrer",
-        description: "Remplissez au moins la date pour une ligne nouvelle ou modifiez une ligne existante.",
+        description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
         variant: "destructive",
       });
       return;
     }
     setSaving(true);
     try {
-      if (toUpdate.length > 0) {
-        await Promise.all(toUpdate.map((r) => api.livraisonsElectricite.update(r.serverId!, rowToRequest(r))));
-      }
-      if (toCreate.length > 0) {
-        await api.livraisonsElectricite.createBatch(toCreate, pageFarmId ?? undefined);
-      }
-      const createdCount = toCreate.length;
-      const updatedCount = toUpdate.length;
-      const parts: string[] = [];
-      if (createdCount > 0) parts.push(`${createdCount} nouvelle(s) ligne(s)`);
-      if (updatedCount > 0) parts.push(`${updatedCount} ligne(s) modifiée(s)`);
+      await api.livraisonsElectricite.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
       toast({
-        title: "Livraisons enregistrées",
-        description: parts.join(". "),
+        title: "Jour enregistré",
+        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadMovements();
     } catch (e) {
@@ -445,7 +433,10 @@ export default function Electricite() {
     }
   };
 
-  const currentRows = selectedSemaine ? rows.filter((r) => (r.age || "").trim() === selectedSemaine) : [];
+  const currentRows = selectedSemaine
+    ? [...rows.filter((r) => (r.age || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    : [];
+  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
   const weekTotal = (() => {
     const t = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
     for (const r of currentRows) {
@@ -650,9 +641,16 @@ export default function Electricite() {
           <div className="space-y-6 w-full min-w-0">
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
-                <h2 className="text-lg font-display font-bold text-foreground">
-                  Livraisons électricité
-                </h2>
+                <div>
+                  <h2 className="text-lg font-display font-bold text-foreground">
+                    Livraisons électricité
+                  </h2>
+                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                    </p>
+                  )}
+                </div>
                 {(canCreate || canUpdate) && (
                   <div className="flex gap-2">
                     {canCreate && (
@@ -667,7 +665,7 @@ export default function Electricite() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading}
+                      disabled={saving || loading || firstEditableRowIndex < 0}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -702,8 +700,9 @@ export default function Electricite() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
-                          const rowReadOnly = isReadOnly || (row.serverId != null && !canUpdate);
+                        {currentRows.map((row, rowIndex) => {
+                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
+                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           return (
                             <tr key={row.id}>

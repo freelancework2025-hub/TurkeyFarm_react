@@ -10,6 +10,7 @@ const BATIMENTS = ["B1", "B2", "B3", "B4"];
 interface SuiviSetupFormProps {
   farmId: number;
   lot: string;
+  semaine: string;
   sex: string;
   /** When set (e.g. from page batiment step), load/save setup for this batiment and display it read-only. */
   selectedBatiment?: string;
@@ -18,7 +19,7 @@ interface SuiviSetupFormProps {
   onSaveSuccess?: () => void;
 }
 
-export default function SuiviSetupForm({ farmId, lot, sex, selectedBatiment, onSetupSaved, onSaveSuccess }: SuiviSetupFormProps) {
+export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBatiment, onSetupSaved, onSaveSuccess }: SuiviSetupFormProps) {
   const { isReadOnly, canCreate, canUpdate } = useAuth();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -31,6 +32,7 @@ export default function SuiviSetupForm({ farmId, lot, sex, selectedBatiment, onS
 
   const [formData, setFormData] = useState<SuiviTechniqueSetupRequest>({
     lot,
+    semaine,
     sex,
     typeElevage: "DINDE CHAIR",
     origineFournisseur: "",
@@ -45,16 +47,17 @@ export default function SuiviSetupForm({ farmId, lot, sex, selectedBatiment, onS
   const [customBatiment, setCustomBatiment] = useState("");
   const [useCustomBatiment, setUseCustomBatiment] = useState(false);
 
-  /** Load setup for this (farm, lot, sex, batiment). When none exists (e.g. after "Ajouter l'autre sexe"), existing is null and the form shows empty so the user can fill setup and effectif de départ for the new sex. */
+  /** Load setup for this (farm, lot, semaine, sex, batiment). When none exists, form shows empty so the user can fill setup and effectif de départ. */
   const load = useCallback(async () => {
     setLoading(true);
     const batimentForApi = batimentFromPage ? effectiveBatiment : "B1";
     try {
-      const existing = await api.suiviTechniqueSetup.getBySex({ farmId, lot, sex, batiment: batimentForApi });
+      const existing = await api.suiviTechniqueSetup.getBySex({ farmId, lot, semaine, sex, batiment: batimentForApi });
       if (existing) {
         setHasExistingSetup(true);
         setFormData({
           lot: existing.lot,
+          semaine: existing.semaine,
           sex: existing.sex,
           typeElevage: existing.typeElevage || "DINDE CHAIR",
           origineFournisseur: existing.origineFournisseur || "",
@@ -73,6 +76,7 @@ export default function SuiviSetupForm({ farmId, lot, sex, selectedBatiment, onS
         setHasExistingSetup(false);
         setFormData({
           lot,
+          semaine,
           sex,
           typeElevage: "DINDE CHAIR",
           origineFournisseur: "",
@@ -88,6 +92,7 @@ export default function SuiviSetupForm({ farmId, lot, sex, selectedBatiment, onS
       setHasExistingSetup(false);
       setFormData({
         lot,
+        semaine,
         sex,
         typeElevage: "DINDE CHAIR",
         origineFournisseur: "",
@@ -105,7 +110,7 @@ export default function SuiviSetupForm({ farmId, lot, sex, selectedBatiment, onS
     } finally {
       setLoading(false);
     }
-  }, [farmId, lot, sex, effectiveBatiment, batimentFromPage]);
+  }, [farmId, lot, semaine, sex, effectiveBatiment, batimentFromPage]);
 
   useEffect(() => {
     load();
@@ -128,6 +133,7 @@ export default function SuiviSetupForm({ farmId, lot, sex, selectedBatiment, onS
     const dataToSave: SuiviTechniqueSetupRequest = {
       ...formData,
       lot,
+      semaine,
       sex,
       batiment: batimentFromPage ? effectiveBatiment : (useCustomBatiment ? customBatiment : formData.batiment),
     };
