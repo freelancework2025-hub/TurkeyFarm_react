@@ -12,8 +12,8 @@ interface ConsumptionRow {
   unit?: string;
 }
 
-// CONSOMMATION ALIMENT: B1 = Stock(S_{N-1}) + Livraisons(S_N) - Stock(S_N). B2+ = Stock(S_{N-1}) + Stock(bâtiment précédent, même sexe, S_N) - Stock(S_N).
-// Cumul = sum S1..N; Indice EAU/ALIMENT = totalEauSemaine (L) / consommationAlimentSemaine (kg); CONSO Kg/J = backend-computed.
+// Rule: Chaque sexe a sa propre qté de livraisons (MALE/FEMELLE). Mâle et Femelle: Stock_prev + Livraisons_sexe − Stock_actuel.
+// CUMUL = 0 jusqu'à ce que CONSOMMATION ALIMENT soit calculée pour cette semaine.
 const ROWS: ConsumptionRow[] = [
   { key: "consommation_aliment", label: "CONSOMMATION ALIMENT", editable: false, unit: "kg" },
   { key: "cumul_aliment", label: "CUMUL ALIMENT CONSOMMÉ", editable: false, unit: "kg" },
@@ -70,7 +70,12 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
     );
   }
 
-  const cumul = data?.cumulAlimentConsomme != null ? Number(data.cumulAlimentConsomme) : null;
+  // Per-week isolation: CUMUL = 0 until CONSOMMATION ALIMENT for this semaine is calculated (each sex has own cumul)
+  const consoSemaine = data?.consommationAlimentSemaine;
+  const cumul: number | null =
+    consoSemaine != null
+      ? (data?.cumulAlimentConsomme != null ? Number(data.cumulAlimentConsomme) : 0)
+      : 0; // 0 until current week's consumption is calculated
   const indice = data?.indiceEauAliment != null ? Number(data.indiceEauAliment) : null;
   const consoKgJ = data?.consoAlimentKgParJour != null ? Number(data.consoAlimentKgParJour) : null;
 
@@ -89,7 +94,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
           Suivi de consommation
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock dernier bâtiment actif (fin S_N-1) + Livraisons — Stock actuel. B2+ : Stock bâtiment actuel (fin S_N-1) + Stock bâtiment préc. (même sexe) — Stock actuel.
+          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. Chaque sexe a sa propre qté de livraisons (MALE/FEMELLE dans Livraisons Aliment). Mâle et Femelle utilisent la même formule : Stock_prev + Livraisons_sexe − Stock_actuel. CUMUL = 0 jusqu&apos;à ce que CONSOMMATION ALIMENT soit calculée pour cette semaine.
         </p>
       </div>
       <div className="overflow-x-auto">

@@ -258,6 +258,7 @@ export default function SuiviTechniqueHebdomadaire() {
         farmId: reportingFarmId,
         lot: lotParam.trim(),
         batiment: selectedBatiment,
+        semaine: selectedSemaine,
       });
       if (sexes.length === 0) {
         setInitialSex(null);

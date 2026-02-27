@@ -44,6 +44,24 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 
+/** Password rules (aligned with Spring Security BCrypt): 8–72 chars, no common weak passwords */
+const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 72;
+const WEAK_PASSWORDS = new Set([
+  "password", "password1", "password123", "admin", "admin123", "administrator",
+  "123456", "12345678", "123456789", "qwerty", "abc123", "letmein", "welcome", "monkey",
+  "master", "dragon", "login", "sunshine", "princess", "football", "iloveyou", "trustno1",
+  "shadow", "baseball", "111111", "123123", "passw0rd", "pass123", "test", "guest",
+]);
+
+function validatePassword(pwd: string): string | null {
+  if (!pwd || !pwd.trim()) return null; // optional on update
+  if (pwd.length < PASSWORD_MIN) return `Au moins ${PASSWORD_MIN} caractères requis`;
+  if (pwd.length > PASSWORD_MAX) return `Maximum ${PASSWORD_MAX} caractères`;
+  if (WEAK_PASSWORDS.has(pwd.toLowerCase().trim())) return "Mot de passe trop courant ou compromis";
+  return null;
+}
+
 const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: "ADMINISTRATEUR", label: "Administrateur" },
   { value: "RESPONSABLE_TECHNIQUE", label: "Responsable technique" },
@@ -220,10 +238,20 @@ export default function Utilisateurs() {
     };
     if (form.password?.trim()) body.password = form.password.trim();
     if (editingUser) {
+      const pwdErr = body.password ? validatePassword(body.password) : null;
+      if (pwdErr) {
+        toast({ title: "Mot de passe invalide", description: pwdErr, variant: "destructive" });
+        return;
+      }
       updateMutation.mutate({ id: editingUser.id, body });
     } else {
       if (!body.password) {
         toast({ title: "Mot de passe requis", variant: "destructive" });
+        return;
+      }
+      const pwdErr = validatePassword(body.password);
+      if (pwdErr) {
+        toast({ title: "Mot de passe invalide", description: pwdErr, variant: "destructive" });
         return;
       }
       if (!body.email?.trim() && !body.username?.trim()) {
@@ -488,7 +516,10 @@ export default function Utilisateurs() {
                   onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
                   placeholder="••••••••"
                   required={!editingUser}
+                  minLength={PASSWORD_MIN}
+                  maxLength={PASSWORD_MAX}
                 />
+                <p className="text-xs text-muted-foreground mt-1">8–128 caractères, mot de passe non trivial</p>
               </div>
             )}
             {editingUser && (
@@ -499,7 +530,10 @@ export default function Utilisateurs() {
                   value={form.password ?? ""}
                   onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
                   placeholder="••••••••"
+                  minLength={PASSWORD_MIN}
+                  maxLength={PASSWORD_MAX}
                 />
+                <p className="text-xs text-muted-foreground mt-1">8–128 caractères si modifié</p>
               </div>
             )}
             <div>

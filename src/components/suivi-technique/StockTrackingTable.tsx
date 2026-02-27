@@ -135,7 +135,7 @@ export default function StockTrackingTable({
             STOCK
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}
+            Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. Chaque sexe a sa propre qté. Consommation = Stock_prev + Livraisons_sexe − Stock_actuel.
           </p>
         </div>
         {canEditStock && (

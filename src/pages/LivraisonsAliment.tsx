@@ -18,6 +18,8 @@ import {
  * Each semaine has its own table and total; cumul = sum of previous semaines + current.
  * The total quantity per week (per farm/lot) feeds Stock Aliment in Suivi Technique Hebdomadaire:
  * stock is shared across all batiments (B1 then B2 then B3…), and the next week = rest of previous week + livraisons.
+ * Rule: Chaque sexe a sa propre qté de livraisons (MALE/FEMELLE). Mâle et Femelle utilisent la même formule :
+ * Stock_prev + Livraisons_sexe − Stock_actuel. CUMUL = 0 jusqu'à ce que CONSOMMATION ALIMENT soit calculée.
  * Permission matrix: same as Sorties — canCreate for add/save, canUpdate for saved rows, canDelete for delete.
  * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
  * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → clicks Enregistrer → day 1 saved and locked.
@@ -722,8 +724,8 @@ export default function LivraisonsAliment() {
                       <th className="min-w-[80px]">SEX</th>
                       <th className="min-w-[80px]">PRIX</th>
                       <th className="min-w-[90px]">MONTANT</th>
-                      <th className="min-w-[70px]">MALE</th>
-                      <th className="min-w-[80px]">FEMELLE</th>
+                      <th className="min-w-[70px]" title="Qté livrée pour Mâle — alimente CONSOMMATION ALIMENT du Mâle">MALE</th>
+                      <th className="min-w-[80px]" title="Qté livrée pour Femelle — alimente CONSOMMATION ALIMENT de la Femelle">FEMELLE</th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
