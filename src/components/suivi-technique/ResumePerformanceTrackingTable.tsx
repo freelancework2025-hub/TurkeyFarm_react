@@ -9,14 +9,6 @@ export interface ResumePerformanceTrackingTableProps {
   consoAlimentSemaineSum: number | null;
   /** Sum of CUMUL ALIMENT CONSOMME over all batiments and both sexes (kg) */
   cumulAlimentConsommeSum: number | null;
-  /** CONSOMME ALIMENT Mâle = sum across B1+B2+B3+... (kg) */
-  consoAlimentSemaineMale?: number | null;
-  /** CONSOMME ALIMENT Femelle = sum across B1+B2+B3+... (kg) */
-  consoAlimentSemaineFemelle?: number | null;
-  /** CUMUL ALIMENT CONSOMMÉ Mâle = sum across B1+B2+B3+... (kg) */
-  cumulAlimentConsommeMale?: number | null;
-  /** CUMUL ALIMENT CONSOMMÉ Femelle = sum across B1+B2+B3+... (kg) */
-  cumulAlimentConsommeFemelle?: number | null;
   /** INDICE EAU/ALIMENT = consoAlimentSemaineSum / totalWaterSemaineL (when totalWater > 0) */
   indiceEauAliment: number | null;
   /** POIDS VIF PRODUIT EN KG (sum over all batiments and sexes) */
@@ -39,10 +31,6 @@ export default function ResumePerformanceTrackingTable({
   semaine,
   consoAlimentSemaineSum,
   cumulAlimentConsommeSum,
-  consoAlimentSemaineMale,
-  consoAlimentSemaineFemelle,
-  cumulAlimentConsommeMale,
-  cumulAlimentConsommeFemelle,
   indiceEauAliment,
   poidsVifProduitKg,
   totalNbreSuiviProduction,
@@ -106,44 +94,12 @@ export default function ResumePerformanceTrackingTable({
                 {formatVal(consoAlimentSemaineSum, "kg")}
               </td>
             </tr>
-            <tr className="border-b border-border bg-muted/10">
-              <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
-                CONSOMME ALIMENT {semaine} — Mâle
-              </td>
-              <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
-                {formatVal(consoAlimentSemaineMale ?? null, "kg")}
-              </td>
-            </tr>
-            <tr className="border-b border-border bg-muted/10">
-              <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
-                CONSOMME ALIMENT {semaine} — Femelle
-              </td>
-              <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
-                {formatVal(consoAlimentSemaineFemelle ?? null, "kg")}
-              </td>
-            </tr>
             <tr className="border-b border-border bg-card">
               <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
                 CUMUL ALIMENT CONSOMME {semaine}
               </td>
               <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
                 {formatVal(cumulAlimentConsommeSum, "kg")}
-              </td>
-            </tr>
-            <tr className="border-b border-border bg-muted/10">
-              <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
-                CUMUL ALIMENT CONSOMME {semaine} — Mâle
-              </td>
-              <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
-                {formatVal(cumulAlimentConsommeMale ?? null, "kg")}
-              </td>
-            </tr>
-            <tr className="border-b border-border bg-muted/10">
-              <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
-                CUMUL ALIMENT CONSOMME {semaine} — Femelle
-              </td>
-              <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
-                {formatVal(cumulAlimentConsommeFemelle ?? null, "kg")}
               </td>
             </tr>
             <tr className="border-b border-border bg-card">

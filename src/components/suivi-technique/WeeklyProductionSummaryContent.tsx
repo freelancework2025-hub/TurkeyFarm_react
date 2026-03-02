@@ -524,10 +524,6 @@ export default function WeeklyProductionSummaryContent({
         semaine={semaine}
         consoAlimentSemaineSum={aggregatedConsommation.consoAlimentSemaineSum}
         cumulAlimentConsommeSum={aggregatedConsommation.cumulAlimentConsommeSum}
-        consoAlimentSemaineMale={aggregatedConsommation.consoAlimentSemaineMale}
-        consoAlimentSemaineFemelle={aggregatedConsommation.consoAlimentSemaineFemelle}
-        cumulAlimentConsommeMale={aggregatedConsommation.cumulAlimentConsommeMale}
-        cumulAlimentConsommeFemelle={aggregatedConsommation.cumulAlimentConsommeFemelle}
         indiceEauAliment={indiceEauAlimentResume}
         poidsVifProduitKg={aggregatedStock.poidsVifProduitKg}
         totalNbreSuiviProduction={aggregatedProduction.totalNbre}
