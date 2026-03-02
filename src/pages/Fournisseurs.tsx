@@ -91,12 +91,8 @@ export default function Fournisseurs() {
       setSavedCellKeys(cellKeys);
       setServerDesignationCount(des.length);
       setPrices(priceMap);
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger la grille.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setFournisseurs([{ id: crypto.randomUUID(), name: "Fournisseur A" }]);
       setDesignations(DEFAULT_DESIGNATIONS);
       setSavedCellKeys(new Set());
@@ -250,12 +246,8 @@ export default function Fournisseurs() {
       setServerDesignationCount(des.length);
       setPrices(priceMap);
       toast({ title: "Grille enregistrée", description: "Prix d'aliment mis à jour." });
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer la grille.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

@@ -18,8 +18,8 @@ import {
  * Each semaine has its own table and total; cumul = sum of previous semaines + current.
  * The total quantity per week (per farm/lot) feeds Stock Aliment in Suivi Technique Hebdomadaire:
  * stock is shared across all batiments (B1 then B2 then B3…), and the next week = rest of previous week + livraisons.
- * Rule: Chaque sexe a sa propre qté de livraisons (MALE/FEMELLE). Mâle et Femelle utilisent la même formule :
- * Stock_prev + Livraisons_sexe − Stock_actuel. CUMUL = 0 jusqu'à ce que CONSOMMATION ALIMENT soit calculée.
+ * Rule: B1 = Stock_prev + Livraisons_sexe − Stock_actuel. B2+ = Stock_transfer − Stock_actuel
+ * (Stock_transfer = stock du dernier bâtiment actif du même sexe dans la semaine). CUMUL = 0 jusqu'à calcul.
  * Permission matrix: same as Sorties — canCreate for add/save, canUpdate for saved rows, canDelete for delete.
  * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
  * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → clicks Enregistrer → day 1 saved and locked.
@@ -261,12 +261,7 @@ export default function LivraisonsAliment() {
       } else {
         setRows(mapped);
       }
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les livraisons.",
-        variant: "destructive",
-      });
+    } catch {
       if (hasSemaineInUrl && selectedSemaine && canCreate) {
         // On error, create MIN_TABLE_ROWS empty rows for the selected semaine
         const startDate = previousLotLastDate ?? today;
@@ -350,13 +345,7 @@ export default function LivraisonsAliment() {
       api.livraisonsAliment
         .delete(row.serverId)
         .then(() => loadMovements())
-        .catch((e) =>
-          toast({
-            title: "Erreur",
-            description: e instanceof Error ? e.message : "Impossible de supprimer.",
-            variant: "destructive",
-          })
-        );
+        .catch(() => { /* API error — logged in backend only */ });
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -387,12 +376,14 @@ export default function LivraisonsAliment() {
     const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte != null && prix >= 0 ? qte * prix : null);
+    // sem required for consumption calc; fallback to selectedSemaine when row.sem is empty
+    const sem = (r.sem || "").trim() || selectedSemaine || null;
     return {
       farmId: pageFarmId ?? undefined,
       lot: lotFilter.trim() || null,
       date: r.date || today,
       age: r.age.trim() !== "" ? parseInt(r.age, 10) : null,
-      sem: r.sem.trim() || null,
+      sem,
       designation: r.designation.trim() || null,
       supplier: r.supplier.trim() || null,
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
@@ -451,12 +442,8 @@ export default function LivraisonsAliment() {
         description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadMovements();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer les livraisons.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

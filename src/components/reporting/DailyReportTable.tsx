@@ -156,12 +156,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         // Backoffice (read-only): show only saved rows, no empty row to add
         setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, empty] : [empty]));
       }
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les rapports.",
-        variant: "destructive",
-      });
+    } catch {
       setRows([emptyRow(forDate)]);
     } finally {
       setLoading(false);
@@ -253,12 +248,8 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       } else {
         await load();
       }
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

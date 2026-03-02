@@ -220,12 +220,8 @@ export default function MainOeuvre() {
         observation: r.observation ?? "",
       }));
       setRows(mapped);
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger la main d'œuvre.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setRows([]);
     } finally {
       setLoading(false);
@@ -320,13 +316,7 @@ export default function MainOeuvre() {
       api.mainOeuvre
         .delete(row.serverId)
         .then(() => loadMovements())
-        .catch((e) =>
-          toast({
-            title: "Erreur",
-            description: e instanceof Error ? e.message : "Impossible de supprimer.",
-            variant: "destructive",
-          })
-        );
+        .catch(() => { /* API error — logged in backend only */ });
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -411,12 +401,8 @@ export default function MainOeuvre() {
         description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadMovements();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

@@ -12,8 +12,8 @@ interface ConsumptionRow {
   unit?: string;
 }
 
-// Rule: Chaque sexe a sa propre qté de livraisons (MALE/FEMELLE). Mâle et Femelle: Stock_prev + Livraisons_sexe − Stock_actuel.
-// CUMUL = 0 jusqu'à ce que CONSOMMATION ALIMENT soit calculée pour cette semaine.
+// Rule: B1 = Stock_prev + Livraisons_sexe − Stock_actuel. B2+ = Stock_transfer − Stock_actuel
+// (Stock_transfer = stock from last active batiment of same sex in the semaine). CUMUL = 0 until CONSOMMATION computed.
 const ROWS: ConsumptionRow[] = [
   { key: "consommation_aliment", label: "CONSOMMATION ALIMENT", editable: false, unit: "kg" },
   { key: "cumul_aliment", label: "CUMUL ALIMENT CONSOMMÉ", editable: false, unit: "kg" },
@@ -44,12 +44,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
     try {
       const res = await api.suiviConsommationHebdo.get({ farmId, lot, semaine, sex, batiment: batiment ?? undefined });
       setData(res);
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger le suivi de consommation.",
-        variant: "destructive",
-      });
+    } catch {
       setData(null);
     } finally {
       setLoading(false);
@@ -94,7 +89,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
           Suivi de consommation
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. Chaque sexe a sa propre qté de livraisons (MALE/FEMELLE dans Livraisons Aliment). Mâle et Femelle utilisent la même formule : Stock_prev + Livraisons_sexe − Stock_actuel. CUMUL = 0 jusqu&apos;à ce que CONSOMMATION ALIMENT soit calculée pour cette semaine.
+          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock_prev + Livraisons − Stock. B2+ : Stock_transfer − Stock (stock du dernier bâtiment actif du même sexe dans la semaine). CUMUL = 0 jusqu&apos;à calcul.
         </p>
       </div>
       <div className="overflow-x-auto">

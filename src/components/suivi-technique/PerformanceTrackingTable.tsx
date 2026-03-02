@@ -123,13 +123,8 @@ export default function PerformanceTrackingTable({
         gmq: res.gmqNorme != null ? String(res.gmqNorme) : "",
         viabilite: res.viabiliteNorme != null ? String(res.viabiliteNorme) : "",
       });
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description:
-          e instanceof Error ? e.message : "Impossible de charger le suivi de performances.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setData(null);
     } finally {
       setLoading(false);
@@ -204,12 +199,8 @@ export default function PerformanceTrackingTable({
         toast({ title: "Enregistré", description: "Suivi de performances REEL enregistré." });
       }
       await load();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

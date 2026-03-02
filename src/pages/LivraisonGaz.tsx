@@ -258,12 +258,8 @@ export default function LivraisonGaz() {
           montant: "",
         });
       }
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les livraisons gaz.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setRows([]);
       setHasExistingVideSanitaire(false);
       setVideSanitaire({
@@ -368,13 +364,7 @@ export default function LivraisonGaz() {
       api.livraisonsGaz
         .delete(row.serverId)
         .then(() => loadMovements())
-        .catch((e) =>
-          toast({
-            title: "Erreur",
-            description: e instanceof Error ? e.message : "Impossible de supprimer.",
-            variant: "destructive",
-          })
-        );
+        .catch(() => { /* API error — logged in backend only */ });
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -499,12 +489,8 @@ export default function LivraisonGaz() {
         description: parts.join(". ") || "Vous pouvez maintenant remplir le jour suivant.",
       });
       loadMovements();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

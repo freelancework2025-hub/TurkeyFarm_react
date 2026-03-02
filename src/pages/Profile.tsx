@@ -68,12 +68,8 @@ export default function Profile() {
                           await api.users.uploadProfileImage(user.id, file);
                           setImageRefreshKey((k) => k + 1);
                           toast({ title: "Photo mise à jour" });
-                        } catch (err) {
-                          toast({
-                            title: "Erreur",
-                            description: err instanceof Error ? err.message : "Impossible de mettre à jour la photo.",
-                            variant: "destructive",
-                          });
+                        } catch {
+                          /* API error — logged in backend only */
                         } finally {
                           setUploading(false);
                           e.target.value = "";

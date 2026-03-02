@@ -74,12 +74,8 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId }: 
       const list: DailyReportResponse[] = await api.dailyReports.list(farmId ?? undefined);
       const unique = Array.from(new Set(list.map((r) => r.reportDate)));
       setDates(unique);
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les jours enregistrés.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setDates([]);
     } finally {
       setLoading(false);

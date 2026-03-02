@@ -70,13 +70,8 @@ export default function Employes() {
     try {
       const list = await api.employers.list();
       setEmployers(list);
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description:
-          e instanceof Error ? e.message : "Impossible de charger les employés.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setEmployers([]);
     } finally {
       setLoading(false);
@@ -173,13 +168,8 @@ export default function Employes() {
       }
       closeDialog();
       loadEmployers();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description:
-          e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     }
   };
 
@@ -212,13 +202,8 @@ export default function Employes() {
       });
       closeDeleteDialog();
       loadEmployers();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description:
-          e instanceof Error ? e.message : "Impossible de supprimer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setDeleting(false);
     }

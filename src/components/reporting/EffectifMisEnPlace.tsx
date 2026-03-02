@@ -62,12 +62,8 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
       const mapped = list.map(toRow);
       // Backoffice (read-only): show only saved rows, no empty row to add
       setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, emptyRow()] : [emptyRow()]));
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les effectifs.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setRows([emptyRow()]);
     } finally {
       setLoading(false);
@@ -128,12 +124,8 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
       }
       toast({ title: "Effectifs enregistrés", description: `${toSend.length} ligne(s) enregistrée(s).` });
       await load();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

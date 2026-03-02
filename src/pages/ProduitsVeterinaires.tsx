@@ -230,12 +230,8 @@ export default function ProduitsVeterinaires() {
         deliveryNoteNumber: r.deliveryNoteNumber ?? "",
       }));
       setRows(normalizeRowsConsecutiveDates(mapped, (row) => row.sem));
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les livraisons.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setRows([]);
     } finally {
       setLoading(false);
@@ -330,13 +326,7 @@ export default function ProduitsVeterinaires() {
       api.livraisonsProduitsVeterinaires
         .delete(row.serverId)
         .then(() => loadMovements())
-        .catch((e) =>
-          toast({
-            title: "Erreur",
-            description: e instanceof Error ? e.message : "Impossible de supprimer.",
-            variant: "destructive",
-          })
-        );
+        .catch(() => { /* API error — logged in backend only */ });
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -417,12 +407,8 @@ export default function ProduitsVeterinaires() {
         description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadMovements();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer les livraisons.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

@@ -77,12 +77,8 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
       setConsoPoids(res.consoPoids != null ? String(res.consoPoids) : "");
       setAutreNbre(res.autreNbre != null ? String(res.autreNbre) : "");
       setAutrePoids(res.autrePoids != null ? String(res.autrePoids) : "");
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger le suivi de production.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setData(null);
     } finally {
       setLoading(false);
@@ -140,12 +136,8 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
       toast({ title: "Enregistré", description: "Suivi de production enregistré." });
       onSaveSuccess?.();
       await load();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

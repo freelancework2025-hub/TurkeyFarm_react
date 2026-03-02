@@ -145,12 +145,8 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
       toast({ title: "Configuration enregistrée", description: "Les informations de setup ont été sauvegardées." });
       onSetupSaved?.(saved);
       onSaveSuccess?.();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

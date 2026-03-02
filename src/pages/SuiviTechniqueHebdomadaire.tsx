@@ -279,12 +279,8 @@ export default function SuiviTechniqueHebdomadaire() {
         title: "Données supprimées",
         description: `Les données pour le sexe « ${sexToDelete} » ont été supprimées pour ce bâtiment et la semaine ${selectedSemaine} uniquement.`,
       });
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de supprimer les données.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setDeleteSexLoading(false);
     }

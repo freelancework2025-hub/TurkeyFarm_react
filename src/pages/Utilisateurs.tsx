@@ -152,8 +152,8 @@ export default function Utilisateurs() {
         try {
           await api.users.uploadProfileImage(newUser.id, file);
           toast({ title: "Utilisateur créé avec photo" });
-        } catch (err) {
-          toast({ title: "Utilisateur créé", description: "La photo n'a pas pu être enregistrée.", variant: "destructive" });
+        } catch {
+          /* API error — logged in backend only */
         }
         createProfileFileRef.current = null;
       } else {
@@ -162,7 +162,7 @@ export default function Utilisateurs() {
       setDialogOpen(false);
       resetForm();
     },
-    onError: (e: Error) => toast({ title: "Erreur", description: e.message, variant: "destructive" }),
+    onError: () => { /* API error — logged in backend only */ },
   });
 
   const updateMutation = useMutation({
@@ -174,7 +174,7 @@ export default function Utilisateurs() {
       setDialogOpen(false);
       resetForm();
     },
-    onError: (e: Error) => toast({ title: "Erreur", description: e.message, variant: "destructive" }),
+    onError: () => { /* API error — logged in backend only */ },
   });
 
   const deleteMutation = useMutation({
@@ -184,7 +184,7 @@ export default function Utilisateurs() {
       toast({ title: "Utilisateur supprimé" });
       setDeleteTarget(null);
     },
-    onError: (e: Error) => toast({ title: "Erreur", description: e.message, variant: "destructive" }),
+    onError: () => { /* API error — logged in backend only */ },
   });
 
   const openCreate = () => {
@@ -402,12 +402,8 @@ export default function Utilisateurs() {
                             setProfileImageRefreshKey((k) => k + 1);
                             queryClient.invalidateQueries({ queryKey: ["users"] });
                             toast({ title: "Photo mise à jour" });
-                          } catch (err) {
-                            toast({
-                              title: "Erreur",
-                              description: err instanceof Error ? err.message : "Impossible de mettre à jour la photo.",
-                              variant: "destructive",
-                            });
+                          } catch {
+                            /* API error — logged in backend only */
                           } finally {
                             setUploadingProfile(false);
                             e.target.value = "";

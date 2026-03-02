@@ -61,13 +61,7 @@ export default function StockTrackingTable({
       setStockAlimentInput(
         res.stockAliment != null ? String(res.stockAliment) : ""
       );
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description:
-          e instanceof Error ? e.message : "Impossible de charger le suivi de stock.",
-        variant: "destructive",
-      });
+    } catch {
       setData(null);
     } finally {
       setLoading(false);
@@ -103,12 +97,8 @@ export default function StockTrackingTable({
       toast({ title: "Enregistré", description: "Stock aliment enregistré. Consommation calculée automatiquement." });
       onSaveSuccess?.();
       await load();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer le stock.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }
@@ -135,7 +125,7 @@ export default function StockTrackingTable({
             STOCK
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. Chaque sexe a sa propre qté. Consommation = Stock_prev + Livraisons_sexe − Stock_actuel.
+            Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock_prev + Livraisons − Stock. B2+ : Stock_transfer − Stock (dernier bâtiment actif du même sexe dans la semaine).
           </p>
         </div>
         {canEditStock && (

@@ -232,12 +232,8 @@ export default function Electricite() {
         femelle: fromNum(r.femelle),
       }));
       setRows(normalizeRowsConsecutiveDates(mapped, (row) => row.age));
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les livraisons.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setRows([]);
     } finally {
       setLoading(false);
@@ -332,13 +328,7 @@ export default function Electricite() {
       api.livraisonsElectricite
         .delete(row.serverId)
         .then(() => loadMovements())
-        .catch((e) =>
-          toast({
-            title: "Erreur",
-            description: e instanceof Error ? e.message : "Impossible de supprimer.",
-            variant: "destructive",
-          })
-        );
+        .catch(() => { /* API error — logged in backend only */ });
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -422,12 +412,8 @@ export default function Electricite() {
         description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadMovements();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer les livraisons.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

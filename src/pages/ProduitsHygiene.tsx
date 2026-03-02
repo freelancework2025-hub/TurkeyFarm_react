@@ -262,12 +262,8 @@ export default function ProduitsHygiene() {
           montant: "",
         });
       }
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les livraisons.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setRows([]);
       setHasExistingVideSanitaire(false);
       setVideSanitaire({
@@ -372,13 +368,7 @@ export default function ProduitsHygiene() {
       api.livraisonsProduitsHygiene
         .delete(row.serverId)
         .then(() => loadMovements())
-        .catch((e) =>
-          toast({
-            title: "Erreur",
-            description: e instanceof Error ? e.message : "Impossible de supprimer.",
-            variant: "destructive",
-          })
-        );
+        .catch(() => { /* API error — logged in backend only */ });
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -505,12 +495,8 @@ export default function ProduitsHygiene() {
         description: parts.join(". ") || "Vous pouvez maintenant remplir le jour suivant.",
       });
       loadMovements();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }

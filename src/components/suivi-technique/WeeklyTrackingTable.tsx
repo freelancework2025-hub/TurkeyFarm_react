@@ -170,12 +170,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       } else {
         setRows(emptyWeekRows(today));
       }
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les données.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
       setRows(emptyWeekRows(today));
       setHasSavedEffectif(false);
     } finally {
@@ -268,12 +264,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       toast({ title: "Données enregistrées", description: `${toSend.length} ligne(s) enregistrée(s).` });
       onSaveSuccess?.();
       await load();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }
@@ -353,12 +345,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       toast({ title: "Effectif enregistré", description: "Effectif départ de la semaine enregistré." });
       onSaveSuccess?.();
       await load();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer l'effectif.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSavingEffectif(false);
     }

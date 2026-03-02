@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
-import { componentTagger } from "lovable-tagger";
 
 /** Strip sourceMappingURL from lucide-react so Vite 7 never tries to load missing/broken .map files */
 function stripLucideSourceMaps() {
@@ -42,11 +41,7 @@ export default defineConfig(({ mode }) => ({
     },
     sourcemapIgnoreList: (sourcePath) => sourcePath.includes("node_modules"),
   },
-  plugins: [
-    stripLucideSourceMaps(),
-    react(),
-    mode === "development" && componentTagger(),
-  ].filter(Boolean),
+  plugins: [stripLucideSourceMaps(), react()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

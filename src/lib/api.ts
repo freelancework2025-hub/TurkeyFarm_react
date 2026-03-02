@@ -63,6 +63,15 @@ function authHeader(credentials: AuthCredentials | null, token: string | null): 
   return { Authorization: `Basic ${encoded}` };
 }
 
+/**
+ * Parse API error response. Returns a generic message only — exception details
+ * are logged in the backend and must not appear in the frontend.
+ */
+function parseApiErrorMessage(text: string, status: number): string {
+  if (status === 401) return "Session expirée. Veuillez vous reconnecter.";
+  return "Une erreur est survenue.";
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit & { credentials?: AuthCredentials; token?: string | null; skipAuth?: boolean } = {}
@@ -82,7 +91,8 @@ export async function apiFetch<T>(
   const res = await fetch(url, { ...rest, headers, credentials: "include" });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(res.status === 401 ? "Unauthorized" : text || `HTTP ${res.status}`);
+    const msg = parseApiErrorMessage(text, res.status);
+    throw new Error(msg);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -201,7 +211,7 @@ export const api = {
       const res = await fetch(url, { method: "POST", headers, body: formData, credentials: "include" });
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(res.status === 401 ? "Unauthorized" : text || `HTTP ${res.status}`);
+        throw new Error(parseApiErrorMessage(text, res.status));
       }
       return res.json() as Promise<UserResponse>;
     },
@@ -1803,7 +1813,7 @@ export interface SuiviStockResponse {
   stockAlimentRecordExists?: boolean | null;
 }
 
-/** Request to save user-entered stock aliment (consumption is then computed: Stock_prev + Livraisons - Stock). */
+/** Request to save user-entered stock aliment. Consumption: B1 = Stock_prev + Livraisons - Stock; B2+ = Stock_transfer - Stock. */
 export interface SaveStockAlimentRequest {
   lot: string;
   semaine: string;

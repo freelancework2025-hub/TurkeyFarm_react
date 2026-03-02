@@ -229,12 +229,7 @@ export default function SortiesFerme() {
         }
         setRows([...mapped, ...newRows]);
       }
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible de charger les sorties.",
-        variant: "destructive",
-      });
+    } catch {
       if (canCreate && hasSemaineInUrl && selectedSemaine) {
         const newRows: SortieRow[] = [];
         let nextDate = today;
@@ -273,13 +268,7 @@ export default function SortiesFerme() {
       api.sorties
         .delete(row.serverId)
         .then(() => loadSorties())
-        .catch((e) =>
-          toast({
-            title: "Erreur",
-            description: e instanceof Error ? e.message : "Impossible de supprimer.",
-            variant: "destructive",
-          })
-        );
+        .catch(() => { /* API error — logged in backend only */ });
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -343,12 +332,8 @@ export default function SortiesFerme() {
         description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
       });
       loadSorties();
-    } catch (e) {
-      toast({
-        title: "Erreur",
-        description: e instanceof Error ? e.message : "Impossible d'enregistrer les sorties.",
-        variant: "destructive",
-      });
+    } catch {
+      /* API error — logged in backend only */
     } finally {
       setSaving(false);
     }
