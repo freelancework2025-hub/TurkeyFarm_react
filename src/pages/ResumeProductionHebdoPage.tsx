@@ -1,7 +1,9 @@
+import { useState, useEffect } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import WeeklyProductionSummaryContent from "@/components/suivi-technique/WeeklyProductionSummaryContent";
+import { api } from "@/lib/api";
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
 
@@ -9,6 +11,7 @@ const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
  * Full-page "Résumé hebdomadaire de la production" for a given lot and semaine.
  * URL: /suivi-technique-hebdomadaire/resume-production?farmId=8&lot=1&semaine=S1&batiments=B1,B2,B3,B4
  * batiments is optional; defaults to B1,B2,B3,B4.
+ * effectifRestantFinSemaine and totalNbreProduction come from getResumeSummary (same source as Prix de revient).
  * Permissions: child components (WeeklyProductionSummaryContent, etc.) apply the same role matrix; RESPONSABLE_FERME: saved rows read-only.
  */
 export default function ResumeProductionHebdoPage() {
@@ -24,6 +27,27 @@ export default function ResumeProductionHebdoPage() {
       .split(",")
       .map((b) => b.trim())
       .filter(Boolean) ?? DEFAULT_BATIMENTS;
+
+  const [coutSummary, setCoutSummary] = useState<Awaited<ReturnType<typeof api.suiviCoutHebdo.getResumeSummary>> | null>(null);
+
+  useEffect(() => {
+    if (!farmId || !lot || !semaine || allBatiments.length === 0) {
+      setCoutSummary(null);
+      return;
+    }
+    api.suiviCoutHebdo
+      .getResumeSummary({
+        farmId,
+        lot,
+        semaine,
+        batiments: allBatiments.join(","),
+      })
+      .then((data) => setCoutSummary(data ?? null))
+      .catch(() => setCoutSummary(null));
+  }, [farmId, lot, semaine, allBatiments.join(",")]);
+
+  const effectifRestantFinSemaine = coutSummary?.effectifRestantFinSemaine ?? null;
+  const totalNbreProduction = coutSummary?.totalNbreProduction ?? null;
 
   const backUrl = farmId != null && lot && semaine
     ? `/suivi-technique-hebdomadaire?farmId=${farmId}&lot=${encodeURIComponent(lot)}&semaine=${encodeURIComponent(semaine)}`
@@ -65,6 +89,8 @@ export default function ResumeProductionHebdoPage() {
           lot={lot}
           semaine={semaine}
           allBatiments={allBatiments}
+          effectifRestantFinSemaine={effectifRestantFinSemaine}
+          totalNbreProduction={totalNbreProduction}
         />
       )}
     </AppLayout>

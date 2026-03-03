@@ -18,6 +18,10 @@ export interface WeeklyProductionSummaryContentProps {
   lot: string;
   semaine: string;
   allBatiments: string[];
+  /** From getResumeSummary — same source as Prix de revient (preferred over local computation) */
+  effectifRestantFinSemaine?: number | null;
+  /** From getResumeSummary — report + vente + conso + autre (preferred over local computation) */
+  totalNbreProduction?: number | null;
 }
 
 interface AggregatedRow {
@@ -35,6 +39,8 @@ export default function WeeklyProductionSummaryContent({
   lot,
   semaine,
   allBatiments,
+  effectifRestantFinSemaine: effectifRestantFromBackend,
+  totalNbreProduction: totalNbreFromBackend,
 }: WeeklyProductionSummaryContentProps) {
   const [loading, setLoading] = useState(true);
   const [setups, setSetups] = useState<Map<string, SuiviTechniqueSetupResponse | null>>(new Map());
@@ -343,12 +349,15 @@ export default function WeeklyProductionSummaryContent({
       }
     }
     const stockAlimentFinal = hasAnyStock ? stockAlimentSum : null;
+    const effectifRestant = effectifRestantFromBackend != null
+      ? effectifRestantFromBackend
+      : effectifRestantFinSemaineComputed;
     return {
-      effectifRestantFinSemaine: effectifRestantFinSemaineComputed,
+      effectifRestantFinSemaine: effectifRestant,
       poidsVifProduitKg,
       stockAliment: stockAlimentFinal,
     };
-  }, [stockByKey, setups, allBatiments, effectifRestantFinSemaineComputed]);
+  }, [stockByKey, setups, allBatiments, effectifRestantFinSemaineComputed, effectifRestantFromBackend]);
 
   /** Quantité livrée = sum of QTE for the selected semaine (from livraisons aliment) */
   const quantiteLivreeSemaine = useMemo(() => {
@@ -526,7 +535,9 @@ export default function WeeklyProductionSummaryContent({
         cumulAlimentConsommeSum={aggregatedConsommation.cumulAlimentConsommeSum}
         indiceEauAliment={indiceEauAlimentResume}
         poidsVifProduitKg={aggregatedStock.poidsVifProduitKg}
-        totalNbreSuiviProduction={aggregatedProduction.totalNbre}
+        totalNbreSuiviProduction={
+          totalNbreFromBackend != null ? totalNbreFromBackend : aggregatedProduction.totalNbre
+        }
         effectifRestantFinSemaine={aggregatedStock.effectifRestantFinSemaine}
         lastMortaliteCumulPct={lastMortaliteCumulPct}
       />
