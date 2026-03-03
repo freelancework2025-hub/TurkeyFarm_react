@@ -30,7 +30,7 @@ const ROWS: MetricRow[] = [
   { key: "viabilite", label: "VIABILITÉ", unit: "%" },
 ];
 
-/** REEL computed by backend: Indice = CUMUL ALIMENT CONSOMMÉ / POIDS VIF PRODUIT (kg); Viabilité = 100% − cumul mortalité % fin de semaine */
+/** REEL computed by backend: Indice = CUMUL ALIMENT CONSOMMÉ (Suivi consommation) / POIDS VIF PRODUIT (STOCK); Viabilité = 100% − cumul mortalité % fin de semaine */
 const COMPUTED_REEL_KEYS: MetricKey[] = ["indiceConsommation", "viabilite"];
 function isReelComputed(key: MetricKey): boolean {
   return COMPUTED_REEL_KEYS.includes(key);
@@ -45,6 +45,10 @@ function formatVal(value: number | null | undefined, unit?: string): string {
   if (value == null || Number.isNaN(value)) return "—";
   const s = Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
   return unit ? `${s} ${unit}` : s;
+}
+
+function getPlaceholder(unit?: string): string {
+  return unit === "%" ? "0 %" : "—";
 }
 
 function normalizeDecimalInput(value: string): string {
@@ -314,44 +318,50 @@ export default function PerformanceTrackingTable({
                   </td>
                   <td className="align-middle border-l border-border">
                     {isReelComputed(row.key) ? (
-                      <div className={ecartCell} title={row.key === "indiceConsommation" ? "Calculé automatiquement : CUMUL ALIMENT CONSOMMÉ / POIDS VIF PRODUIT (kg)" : "100% − cumul mortalité % fin de semaine"}>
+                      <div className={ecartCell} title={row.key === "indiceConsommation" ? "Calculé automatiquement : CUMUL ALIMENT CONSOMMÉ (Suivi consommation) / POIDS VIF PRODUIT (STOCK)" : "100% − cumul mortalité % fin de semaine"}>
                         {formatVal(
                           row.key === "indiceConsommation" ? toNum(data?.indiceConsommationReel) : toNum(data?.viabiliteReel),
                           row.unit
                         )}
                       </div>
                     ) : canEditReel ? (
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={reel[row.key]}
-                        onChange={(e) => setReelField(row.key, e.target.value)}
-                        className={inputBase}
-                        placeholder="—"
-                      />
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={reel[row.key]}
+                          onChange={(e) => setReelField(row.key, e.target.value)}
+                          className={inputBase}
+                          placeholder={getPlaceholder(rowUnit)}
+                        />
+                        {rowUnit && <span className="text-xs text-muted-foreground font-medium">{rowUnit}</span>}
+                      </div>
                     ) : (
                       <div className={ecartCell}>
                         {reel[row.key].trim() !== ""
                           ? formatVal(parseOptional(reel[row.key]), rowUnit)
-                          : "—"}
+                          : rowUnit === "%" ? "0 %" : "—"}
                       </div>
                     )}
                   </td>
                   <td className={`align-middle border-l border-border ${!canEditNorme ? normeCellReadOnly : ""}`}>
                     {canEditNorme ? (
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={norme[row.key]}
-                        onChange={(e) => setNormeField(row.key, e.target.value)}
-                        className={inputBase + " bg-amber-50/50 dark:bg-amber-950/20"}
-                        placeholder="—"
-                      />
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={norme[row.key]}
+                          onChange={(e) => setNormeField(row.key, e.target.value)}
+                          className={inputBase + " bg-amber-50/50 dark:bg-amber-950/20"}
+                          placeholder={getPlaceholder(rowUnit)}
+                        />
+                        {rowUnit && <span className="text-xs text-muted-foreground font-medium">{rowUnit}</span>}
+                      </div>
                     ) : (
                       <div className={normeCellReadOnly}>
                         {norme[row.key].trim() !== ""
                           ? formatVal(parseOptional(norme[row.key]), rowUnit)
-                          : "—"}
+                          : rowUnit === "%" ? "0 %" : "—"}
                       </div>
                     )}
                   </td>

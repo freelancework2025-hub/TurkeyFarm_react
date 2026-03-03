@@ -11,6 +11,7 @@ import {
   type LivraisonProduitVeterinaireResponse,
   type LivraisonProduitVeterinaireRequest,
 } from "@/lib/api";
+import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS PRODUITS VETERINAIRES
@@ -26,6 +27,7 @@ interface VetRow {
   id: string;
   serverId?: number;
   date: string;
+  age: string; // Legacy; SEM = semaine, AGE = computed
   sem: string;
   designation: string;
   supplier: string;
@@ -52,16 +54,9 @@ function addOneDay(isoDate: string): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Sort semaines: S1, S2, ... S24, then custom (e.g. S25). */
-function sortSemaines(sems: string[]): string[] {
-  return [...sems].sort((a, b) => {
-    const numA = parseInt(a.replace(/^S(\d+)$/i, "$1"), 10);
-    const numB = parseInt(b.replace(/^S(\d+)$/i, "$1"), 10);
-    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-    if (!Number.isNaN(numA)) return -1;
-    if (!Number.isNaN(numB)) return 1;
-    return a.localeCompare(b);
-  });
+/** Get SEM from row (sem or age for backward compat). */
+function getSemFromRow(r: { sem?: string; age?: string }): string {
+  return (r.sem || r.age || "").trim();
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order). */
@@ -77,7 +72,7 @@ function sortLots(lotList: string[]): string[] {
 }
 
 /** Ensure within each semaine, row dates are consecutive (day +1). Uses min date per group as start. */
-function normalizeRowsConsecutiveDates<T extends { id: string; date: string; sem?: string }>(
+function normalizeRowsConsecutiveDates<T extends { id: string; date: string; sem?: string; age?: string }>(
   rows: T[],
   getSemaine: (r: T) => string
 ): T[] {
@@ -178,6 +173,7 @@ export default function ProduitsVeterinaires() {
   const emptyRow = (sem?: string, overrideDate?: string): VetRow => ({
     id: crypto.randomUUID(),
     date: overrideDate ?? today,
+    age: "",
     sem: sem ?? "",
     designation: "",
     supplier: "",
@@ -191,14 +187,14 @@ export default function ProduitsVeterinaires() {
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today). */
   const getStartDateForSemaine = useCallback(
     (semaine: string): string => {
-      const sems = new Set(rows.map((r) => (r.sem || "").trim()).filter(Boolean));
+      const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
       sems.add(semaine.trim());
       const semOrder = sortSemaines([...sems]);
       const idx = semOrder.indexOf(semaine.trim());
       if (idx < 0) return today;
       if (idx === 0) return previousLotLastDate ?? today;
       const prevSem = semOrder[idx - 1];
-      const prevRows = rows.filter((r) => (r.sem || "").trim() === prevSem);
+      const prevRows = rows.filter((r) => getSemFromRow(r) === prevSem);
       if (prevRows.length === 0) return today;
       const dates = prevRows.map((r) => r.date).filter((d) => d?.trim());
       if (dates.length === 0) return today;
@@ -220,7 +216,8 @@ export default function ProduitsVeterinaires() {
         id: crypto.randomUUID(),
         serverId: r.id,
         date: r.date ?? "",
-        sem: r.age ?? "",
+        age: r.age ?? "",
+        sem: r.sem ?? r.age ?? "",
         designation: r.designation ?? "",
         supplier: r.supplier ?? "",
         ug: r.ug ?? "",
@@ -229,7 +226,7 @@ export default function ProduitsVeterinaires() {
         montant: fromNum(r.montant),
         deliveryNoteNumber: r.deliveryNoteNumber ?? "",
       }));
-      setRows(normalizeRowsConsecutiveDates(mapped, (row) => row.sem));
+      setRows(normalizeRowsConsecutiveDates(mapped, getSemFromRow));
     } catch {
       /* API error — logged in backend only */
       setRows([]);
@@ -286,7 +283,7 @@ export default function ProduitsVeterinaires() {
 
   useEffect(() => {
     if (!hasSemaineInUrl || !selectedSemaine) return;
-    const forSem = rows.filter((r) => (r.sem || "").trim() === selectedSemaine);
+    const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
     const startDate =
@@ -309,7 +306,7 @@ export default function ProduitsVeterinaires() {
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
-    const currentRows = rows.filter((r) => (r.sem || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
     const nextDate =
       lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
@@ -318,7 +315,7 @@ export default function ProduitsVeterinaires() {
   };
 
   const removeRow = (id: string) => {
-    const currentRows = rows.filter((r) => (r.sem || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
     if (row?.serverId != null && !canDelete) return;
@@ -349,15 +346,23 @@ export default function ProduitsVeterinaires() {
     );
   };
 
-  const rowToRequest = (r: VetRow): LivraisonProduitVeterinaireRequest => {
+  const ageByRowId = React.useMemo(
+    () => computeAgeByRowId(rows, getSemFromRow, (r) => r.date),
+    [rows]
+  );
+
+  const rowToRequest = (r: VetRow, computedAge?: number): LivraisonProduitVeterinaireRequest => {
     const qte = toNum(r.qte);
     const prix = toNum(r.prixPerUnit);
     const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte >= 0 && prix >= 0 ? qte * prix : null);
+    const sem = (r.sem || "").trim() || selectedSemaine || null;
+    const age = computedAge != null ? String(computedAge) : (r.age.trim() || null);
     return {
       farmId: pageFarmId ?? undefined,
       lot: lotFilter.trim() || null,
       date: r.date || today,
-      age: r.sem.trim() || null,
+      age,
+      sem,
       designation: r.designation.trim() || null,
       supplier: r.supplier.trim() || null,
       ug: r.ug.trim() || null,
@@ -385,7 +390,7 @@ export default function ProduitsVeterinaires() {
       });
       return;
     }
-    const forSem = (r: VetRow) => (r.sem || "").trim() === selectedSemaine;
+    const forSem = (r: VetRow) => getSemFromRow(r) === selectedSemaine;
     const unsavedForSem = rows
       .filter((r) => forSem(r) && r.serverId == null)
       .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
@@ -401,7 +406,8 @@ export default function ProduitsVeterinaires() {
     }
     setSaving(true);
     try {
-      await api.livraisonsProduitsVeterinaires.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
+      const computedAge = ageByRowId.get(firstUnsaved.id);
+      await api.livraisonsProduitsVeterinaires.createBatch([rowToRequest(firstUnsaved, computedAge)], pageFarmId ?? undefined);
       toast({
         title: "Jour enregistré",
         description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
@@ -415,7 +421,7 @@ export default function ProduitsVeterinaires() {
   };
 
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => (r.sem || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
     : [];
   const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
   const weekTotal = (() => {
@@ -429,12 +435,12 @@ export default function ProduitsVeterinaires() {
   })();
   const cumulForSelectedSemaine = (() => {
     let running = { qte: 0, prix: 0, montant: 0 };
-    const sems = new Set(rows.map((r) => (r.sem || "").trim()).filter(Boolean));
+    const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
     const semOrder = sortSemaines([...sems]);
     const idx = semOrder.indexOf(selectedSemaine);
     const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
     for (const sem of semsUpTo) {
-      const weekRows = rows.filter((r) => (r.sem || "").trim() === sem);
+      const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
         running.qte += toNum(r.qte);
         running.prix += toNum(r.prixPerUnit);
@@ -655,8 +661,9 @@ export default function ProduitsVeterinaires() {
                 <table className="table-farm">
                   <thead>
                     <tr>
+                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
                       <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[70px]">AGE</th>
+                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
                       <th className="min-w-[180px]">DESIGNATION</th>
                       <th className="min-w-[120px]">FOURNISSEUR</th>
                       <th className="min-w-[80px]">UG</th>
@@ -682,6 +689,9 @@ export default function ProduitsVeterinaires() {
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           return (
                             <tr key={row.id}>
+                              <td className="text-sm font-medium text-muted-foreground">
+                                {ageByRowId.get(row.id) ?? "—"}
+                              </td>
                               <td>
                                 <input
                                   type="date"
@@ -691,15 +701,8 @@ export default function ProduitsVeterinaires() {
                                   className="bg-transparent border-0 outline-none text-sm w-full"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="text"
-                                  value={row.sem}
-                                  onChange={(e) => updateRow(row.id, "sem", e.target.value)}
-                                  placeholder={selectedSemaine}
-                                  disabled={rowReadOnly}
-                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                />
+                              <td className="text-sm font-medium text-muted-foreground">
+                                {(row.sem || "").trim() || selectedSemaine || "—"}
                               </td>
                               <td>
                                 <input
@@ -784,6 +787,7 @@ export default function ProduitsVeterinaires() {
                           <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             TOTAL {selectedSemaine}
                           </td>
+                          <td>—</td>
                           <td>{weekTotal.qte}</td>
                           <td>{weekTotal.prix.toFixed(2)}</td>
                           <td>{weekTotal.montant.toFixed(2)}</td>
@@ -794,6 +798,7 @@ export default function ProduitsVeterinaires() {
                           <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             CUMUL
                           </td>
+                          <td>—</td>
                           <td>{cumulForSelectedSemaine.qte}</td>
                           <td>{cumulForSelectedSemaine.prix.toFixed(2)}</td>
                           <td>{cumulForSelectedSemaine.montant.toFixed(2)}</td>

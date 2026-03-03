@@ -281,6 +281,14 @@ export const api = {
           token: token ?? getStoredToken(),
         }
       ),
+    update: (id: number, body: DailyReportRequest, token?: string | null) =>
+      apiFetch<DailyReportResponse>(`/api/daily-reports/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/daily-reports/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
   },
   /** Sorties Ferme — optional farmId, lot and semaine for filtering */
   sorties: {
@@ -1208,6 +1216,7 @@ export interface LivraisonAlimentRequest {
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
+  numeroBonReception?: string | null;
   qte?: number | null;
   sex?: string | null;
   maleQty?: number | null;
@@ -1231,6 +1240,7 @@ export interface LivraisonAlimentResponse {
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
+  numeroBonReception?: string | null;
   qte?: number | null;
   sex?: string | null;
   maleQty?: number | null;
@@ -1258,6 +1268,7 @@ export interface LivraisonProduitVeterinaireRequest {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   ug?: string | null;
@@ -1273,6 +1284,7 @@ export interface LivraisonProduitVeterinaireResponse {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   ug?: string | null;
@@ -1291,6 +1303,7 @@ export interface LivraisonProduitHygieneRequest {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
@@ -1308,6 +1321,7 @@ export interface LivraisonProduitHygieneResponse {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
@@ -1353,6 +1367,7 @@ export interface LivraisonPailleRequest {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   qte?: number | null;
@@ -1368,6 +1383,7 @@ export interface LivraisonPailleResponse {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   qte?: number | null;
@@ -1410,7 +1426,8 @@ export interface LivraisonElectriciteRequest {
   farmId?: number | null;
   lot?: string | null;
   date: string;
-  age?: string | null;
+  age?: string | number | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   qte?: number | null;
@@ -1427,6 +1444,7 @@ export interface LivraisonElectriciteResponse {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   qte?: number | null;
@@ -1446,6 +1464,7 @@ export interface LivraisonGazRequest {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
@@ -1463,6 +1482,7 @@ export interface LivraisonGazResponse {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
@@ -1511,6 +1531,7 @@ export interface MainOeuvreRequest {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   nbMo?: number | null;
   prixPerUnit?: number | null;
   montant?: number | null;
@@ -1528,6 +1549,7 @@ export interface MainOeuvreResponse {
   lot?: string | null;
   date: string;
   age?: string | null;
+  sem?: string | null;
   nbMo?: number | null;
   prixPerUnit?: number | null;
   montant?: number | null;
@@ -1546,6 +1568,8 @@ export interface DepenseDiversRequest {
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  ug?: string | null;
   qte?: number | null;
   prixPerUnit?: number | null;
   montant?: number | null;
@@ -1560,6 +1584,8 @@ export interface DepenseDiversResponse {
   designation?: string | null;
   supplier?: string | null;
   deliveryNoteNumber?: string | null;
+  numeroBR?: string | null;
+  ug?: string | null;
   qte?: number | null;
   prixPerUnit?: number | null;
   montant?: number | null;

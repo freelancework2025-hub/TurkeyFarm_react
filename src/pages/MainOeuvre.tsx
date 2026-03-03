@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Check, Loader2, Plus, Save, Trash2, UserPlus } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
@@ -12,6 +12,7 @@ import {
   type MainOeuvreResponse,
   type MainOeuvreRequest,
 } from "@/lib/api";
+import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
 /**
  * MAIN D'ŒUVRE
@@ -25,16 +26,27 @@ import {
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
 
-interface MainOeuvreRow {
+interface EmployerEntry {
   id: string;
   serverId?: number;
-  date: string;
-  age: string;
-  employerId: number | null;
+  employerId: number;
   employerNom: string;
   employerPrenom: string;
   fullDay: boolean;
+}
+
+interface MainOeuvreRow {
+  id: string;
+  date: string;
+  age: string; // Legacy; SEM = semaine, AGE = computed
+  sem: string;
+  entries: EmployerEntry[]; // Multiple employees per date
   observation: string;
+}
+
+/** Get SEM from row (sem or age for backward compat). */
+function getSemFromRow(r: { sem?: string; age?: string }): string {
+  return (r.sem || r.age || "").trim();
 }
 
 function addOneDay(isoDate: string): string {
@@ -51,25 +63,28 @@ function formatEmployerNomComplet(prenom: string | null | undefined, nom: string
   return p && n ? `${p} ${n}` : p || n;
 }
 
+/** Initiales pour avatar : première lettre prenom + nom (ex. JD) */
+function getEmployerInitials(prenom: string | null | undefined, nom: string | null | undefined): string {
+  const p = (prenom ?? "").trim();
+  const n = (nom ?? "").trim();
+  const firstP = p.charAt(0).toUpperCase();
+  const firstN = n.charAt(0).toUpperCase();
+  if (firstP && firstN) return `${firstP}${firstN}`;
+  return firstP || firstN || "?";
+}
+
 function formatTemps(fullDay: boolean | null | undefined): string {
   return fullDay === true ? "1" : fullDay === false ? "1/2" : "—";
 }
 
-/** Jours for one row: 1 if fullDay, 0.5 otherwise */
-function rowJours(fullDay: boolean): number {
+/** Jours for one entry: 1 if fullDay, 0.5 otherwise */
+function entryJours(fullDay: boolean): number {
   return fullDay ? 1 : 0.5;
 }
 
-/** Sort semaines: S1, S2, ... S24, then custom (e.g. S25). */
-function sortSemaines(sems: string[]): string[] {
-  return [...sems].sort((a, b) => {
-    const numA = parseInt(a.replace(/^S(\d+)$/i, "$1"), 10);
-    const numB = parseInt(b.replace(/^S(\d+)$/i, "$1"), 10);
-    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-    if (!Number.isNaN(numA)) return -1;
-    if (!Number.isNaN(numB)) return 1;
-    return a.localeCompare(b);
-  });
+/** Total jours for a row = sum of all entries */
+function rowTotalJours(entries: EmployerEntry[]): number {
+  return entries.reduce((s, e) => s + entryJours(e.fullDay), 0);
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order). */
@@ -111,6 +126,9 @@ export default function MainOeuvre() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
+  const [addingToRowId, setAddingToRowId] = useState<string | null>(null);
+  const [addingEmployerId, setAddingEmployerId] = useState<number | null>(null);
+  const [addingFullDay, setAddingFullDay] = useState(true);
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
@@ -173,24 +191,22 @@ export default function MainOeuvre() {
     id: crypto.randomUUID(),
     date: overrideDate ?? today,
     age: age ?? "",
-    employerId: null,
-    employerNom: "",
-    employerPrenom: "",
-    fullDay: true,
+    sem: age ?? "",
+    entries: [],
     observation: "",
   });
 
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today). */
   const getStartDateForSemaine = useCallback(
     (semaine: string): string => {
-      const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
-      ages.add(semaine.trim());
-      const semOrder = sortSemaines([...ages]);
+      const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
+      sems.add(semaine.trim());
+      const semOrder = sortSemaines([...sems]);
       const idx = semOrder.indexOf(semaine.trim());
       if (idx < 0) return today;
       if (idx === 0) return previousLotLastDate ?? today;
       const prevSem = semOrder[idx - 1];
-      const prevRows = rows.filter((r) => (r.age || "").trim() === prevSem);
+      const prevRows = rows.filter((r) => getSemFromRow(r) === prevSem);
       if (prevRows.length === 0) return today;
       const dates = prevRows.map((r) => r.date).filter((d) => d?.trim());
       if (dates.length === 0) return today;
@@ -208,17 +224,35 @@ export default function MainOeuvre() {
         farmId: pageFarmId ?? undefined,
         lot: lotFilter.trim() || undefined,
       });
-      const mapped: MainOeuvreRow[] = list.map((r: MainOeuvreResponse) => ({
-        id: crypto.randomUUID(),
-        serverId: r.id,
-        date: r.date ?? today,
-        age: r.age ?? "",
-        employerId: r.employerId ?? null,
-        employerNom: r.employerNom ?? "",
-        employerPrenom: r.employerPrenom ?? "",
-        fullDay: r.fullDay ?? true,
-        observation: r.observation ?? "",
-      }));
+      // Group by (date, sem) — each group becomes one row with multiple entries
+      const byKey = new Map<string, MainOeuvreResponse[]>();
+      for (const r of list) {
+        const date = r.date ?? today;
+        const sem = (r.sem ?? r.age ?? "").trim();
+        const key = `${date}|${sem}`;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key)!.push(r);
+      }
+      const mapped: MainOeuvreRow[] = Array.from(byKey.entries()).map(([key, recs]) => {
+        const [datePart, semPart] = key.split("|");
+        const first = recs[0]!;
+        const entries: EmployerEntry[] = recs.map((r) => ({
+          id: crypto.randomUUID(),
+          serverId: r.id,
+          employerId: r.employerId ?? 0,
+          employerNom: r.employerNom ?? "",
+          employerPrenom: r.employerPrenom ?? "",
+          fullDay: r.fullDay ?? true,
+        }));
+        return {
+          id: crypto.randomUUID(),
+          date: datePart,
+          age: first.age ?? semPart,
+          sem: semPart,
+          entries,
+          observation: first.observation ?? "",
+        };
+      });
       setRows(mapped);
     } catch {
       /* API error — logged in backend only */
@@ -226,7 +260,7 @@ export default function MainOeuvre() {
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, toast, today]);
+  }, [showFarmSelector, pageFarmId, lotFilter, today]);
 
   useEffect(() => {
     loadMovements();
@@ -276,7 +310,7 @@ export default function MainOeuvre() {
 
   useEffect(() => {
     if (!hasSemaineInUrl || !selectedSemaine) return;
-    const forSem = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
     const startDate =
@@ -299,7 +333,7 @@ export default function MainOeuvre() {
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
-    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
     const nextDate =
       lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
@@ -308,13 +342,14 @@ export default function MainOeuvre() {
   };
 
   const removeRow = (id: string) => {
-    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !canDelete) return;
-    if (row?.serverId != null) {
-      api.mainOeuvre
-        .delete(row.serverId)
+    if (!row) return;
+    const savedEntryIds = row.entries.filter((e) => e.serverId != null).map((e) => e.serverId!);
+    if (savedEntryIds.length > 0 && !canDelete) return;
+    if (savedEntryIds.length > 0) {
+      Promise.all(savedEntryIds.map((sid) => api.mainOeuvre.delete(sid)))
         .then(() => loadMovements())
         .catch(() => { /* API error — logged in backend only */ });
       return;
@@ -322,40 +357,74 @@ export default function MainOeuvre() {
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
-  const updateRow = (id: string, field: keyof MainOeuvreRow, value: string | number | boolean | null) => {
+  const updateRow = (id: string, field: "date" | "observation", value: string) => {
     setRows((prev) =>
-      prev.map((r) => {
-        if (r.id !== id) return r;
-        const updated = { ...r, [field]: value };
-        if (field === "employerId") {
-          if (value === null || value === "") {
-            updated.employerNom = "";
-            updated.employerPrenom = "";
-          } else {
-            const emp = employers.find((e) => e.id === Number(value));
-            if (emp) {
-              updated.employerNom = emp.nom ?? "";
-              updated.employerPrenom = emp.prenom ?? "";
-            }
-          }
-        }
-        return updated;
-      })
+      prev.map((r) => (r.id !== id ? r : { ...r, [field]: value }))
     );
   };
 
-  const rowToRequest = (r: MainOeuvreRow): MainOeuvreRequest => {
-    const emp = r.employerId != null ? employers.find((e) => e.id === r.employerId) : null;
+  const addEntry = (rowId: string, employerId: number, fullDay: boolean) => {
+    const emp = employers.find((e) => e.id === employerId);
+    if (!emp) return;
+    const entry: EmployerEntry = {
+      id: crypto.randomUUID(),
+      employerId: emp.id,
+      employerNom: emp.nom ?? "",
+      employerPrenom: emp.prenom ?? "",
+      fullDay,
+    };
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id !== rowId ? r : { ...r, entries: [...r.entries, entry] }
+      )
+    );
+    setAddingToRowId(null);
+    setAddingEmployerId(null);
+    setAddingFullDay(true);
+  };
+
+  const removeEntry = (rowId: string, entryId: string) => {
+    const row = rows.find((r) => r.id === rowId);
+    const entry = row?.entries.find((e) => e.id === entryId);
+    if (entry?.serverId != null && !canDelete) return;
+    if (entry?.serverId != null) {
+      api.mainOeuvre
+        .delete(entry.serverId)
+        .then(() => loadMovements())
+        .catch(() => { /* API error */ });
+      return;
+    }
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id !== rowId
+          ? r
+          : { ...r, entries: r.entries.filter((e) => e.id !== entryId) }
+      )
+    );
+  };
+
+  const ageByRowId = React.useMemo(
+    () => computeAgeByRowId(rows, getSemFromRow, (r) => r.date),
+    [rows]
+  );
+
+  const entryToRequest = (
+    r: MainOeuvreRow,
+    e: EmployerEntry,
+    computedAge?: number
+  ): MainOeuvreRequest => {
+    const emp = employers.find((x) => x.id === e.employerId);
     const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
-    const jours = rowJours(r.fullDay);
+    const jours = entryJours(e.fullDay);
     const montant = Math.round(salaire * jours * 100) / 100;
     return {
       farmId: pageFarmId ?? undefined,
       lot: lotFilter.trim() || null,
       date: r.date || today,
-      age: r.age?.trim() || null,
-      employerId: r.employerId ?? undefined,
-      fullDay: r.fullDay,
+      age: computedAge != null ? String(computedAge) : undefined,
+      sem: getSemFromRow(r) || undefined,
+      employerId: e.employerId,
+      fullDay: e.fullDay,
       montant,
       observation: r.observation?.trim() || undefined,
     };
@@ -378,16 +447,17 @@ export default function MainOeuvre() {
       });
       return;
     }
-    const forSem = (r: MainOeuvreRow) => (r.age || "").trim() === selectedSemaine;
-    const unsavedForSem = rows
-      .filter((r) => forSem(r) && r.serverId == null)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const firstUnsaved = unsavedForSem[0];
+    const forSem = (r: MainOeuvreRow) => getSemFromRow(r) === selectedSemaine;
+    const rowsForSem = rows.filter(forSem).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const firstWithUnsaved = rowsForSem.find((r) =>
+      r.entries.some((e) => e.serverId == null)
+    );
+    const unsavedEntries = firstWithUnsaved?.entries.filter((e) => e.serverId == null) ?? [];
 
-    if (!firstUnsaved || firstUnsaved.date.trim() === "" || firstUnsaved.employerId == null) {
+    if (!firstWithUnsaved || firstWithUnsaved.date.trim() === "" || unsavedEntries.length === 0) {
       toast({
-        title: "Aucune ligne à enregistrer",
-        description: "Remplissez la date et choisissez un employé pour la prochaine ligne à enregistrer.",
+        title: "Aucune donnée à enregistrer",
+        description: "Ajoutez au moins un employé (employé + temps + Confirmer) pour le jour à enregistrer.",
         variant: "destructive",
       });
       return;
@@ -395,10 +465,14 @@ export default function MainOeuvre() {
 
     setSaving(true);
     try {
-      await api.mainOeuvre.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
+      const computedAge = ageByRowId.get(firstWithUnsaved.id);
+      const requests = unsavedEntries.map((e) =>
+        entryToRequest(firstWithUnsaved, e, computedAge)
+      );
+      await api.mainOeuvre.createBatch(requests, pageFarmId ?? undefined);
       toast({
         title: "Jour enregistré",
-        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
+        description: `Le ${firstWithUnsaved.date} a été enregistré avec ${unsavedEntries.length} employé(s).`,
       });
       loadMovements();
     } catch {
@@ -409,23 +483,25 @@ export default function MainOeuvre() {
   };
 
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => (r.age || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
     : [];
-  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
-  const weekTotalJours = currentRows.reduce((sum, r) => sum + rowJours(r.fullDay), 0);
+  const firstEditableRowIndex = currentRows.findIndex((r) =>
+    r.entries.length === 0 || r.entries.some((e) => e.serverId == null)
+  );
+  const weekTotalJours = currentRows.reduce((sum, r) => sum + rowTotalJours(r.entries), 0);
   const cumulJours = (() => {
-    const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
-    const semOrder = sortSemaines([...ages]);
+    const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
+    const semOrder = sortSemaines([...sems]);
     const idx = semOrder.indexOf(selectedSemaine);
     const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
     return semsUpTo.reduce(
       (sum, sem) =>
-        sum + rows.filter((r) => (r.age || "").trim() === sem).reduce((s, r) => s + rowJours(r.fullDay), 0),
+        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((s, r) => s + rowTotalJours(r.entries), 0),
       0
     );
   })();
 
-  const colCount = 7; // date, semaine, employé, temps, montant, observation, actions
+  const colCount = 8; // AGE, date, semaine, employé, temps, montant, observation, actions
 
   return (
     <AppLayout>
@@ -610,7 +686,7 @@ export default function MainOeuvre() {
                   <h2 className="text-lg font-display font-bold text-foreground">Main d&apos;œuvre</h2>
                   {!isReadOnly && firstEditableRowIndex >= 0 && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                      Chaque ligne = un jour. Cliquez « Ajouter » pour choisir un employé et son temps de travail, puis « Confirmer ». Vous pouvez ajouter plusieurs employés par jour. Le montant est la somme de tous les employés. Cliquez « Enregistrer » quand vous avez terminé.
                     </p>
                   )}
                 </div>
@@ -628,7 +704,7 @@ export default function MainOeuvre() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading || firstEditableRowIndex < 0}
+                      disabled={saving || loading || !currentRows.some((r) => r.entries.some((e) => e.serverId == null))}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -641,6 +717,7 @@ export default function MainOeuvre() {
                 <table className="table-farm">
                   <thead>
                     <tr>
+                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
                       <th className="min-w-[120px]">Date</th>
                       <th className="min-w-[70px]">Semaine</th>
                       <th className="min-w-[200px]">Employé (nom complet)</th>
@@ -661,13 +738,21 @@ export default function MainOeuvre() {
                       <>
                         {currentRows.map((row, rowIndex) => {
                           const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
-                          const showDelete = row.serverId != null ? canDelete : canCreate;
-                          const emp = row.employerId != null ? employers.find((e) => e.id === row.employerId) : null;
-                          const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
-                          const montantRow = salaire * rowJours(row.fullDay);
+                          const hasSavedEntries = row.entries.some((e) => e.serverId != null);
+                          const rowReadOnly = isReadOnly || (hasSavedEntries && !row.entries.some((e) => e.serverId == null)) || !isFirstEditable;
+                          const canEditThisRow = isFirstEditable && !isReadOnly;
+                          const showDelete = hasSavedEntries ? canDelete : canCreate;
+                          const isAdding = addingToRowId === row.id;
+                          const montantRow = row.entries.reduce((sum, e) => {
+                            const emp = employers.find((x) => x.id === e.employerId);
+                            const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
+                            return sum + salaire * entryJours(e.fullDay);
+                          }, 0);
                           return (
                             <tr key={row.id}>
+                              <td className="text-sm tabular-nums">
+                                {ageByRowId.get(row.id) ?? "—"}
+                              </td>
                               <td>
                                 <input
                                   type="date"
@@ -677,60 +762,106 @@ export default function MainOeuvre() {
                                   className="bg-transparent border-0 outline-none text-sm w-full"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="text"
-                                  value={row.age}
-                                  onChange={(e) => updateRow(row.id, "age", e.target.value)}
-                                  placeholder={selectedSemaine}
-                                  disabled={rowReadOnly}
-                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                />
+                              <td className="text-sm">
+                                {getSemFromRow(row) || "—"}
                               </td>
                               <td>
-                                {rowReadOnly ? (
-                                  <span className="text-sm">
-                                    {formatEmployerNomComplet(row.employerPrenom, row.employerNom)}
+                                <div className="flex flex-nowrap items-center gap-2 overflow-x-auto min-w-0">
+                                  {row.entries.map((entry) => {
+                                    const initials = getEmployerInitials(entry.employerPrenom, entry.employerNom);
+                                    const fullName = formatEmployerNomComplet(entry.employerPrenom, entry.employerNom);
+                                    const tempsLabel = formatTemps(entry.fullDay);
+                                    return (
+                                      <div
+                                        key={entry.id}
+                                        className="flex items-center gap-1.5 group"
+                                        title={`${fullName} — ${tempsLabel}`}
+                                      >
+                                        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary text-xs font-semibold">
+                                          {initials}
+                                        </span>
+                                        {canEditThisRow && entry.serverId == null && (
+                                          <button
+                                            type="button"
+                                            onClick={() => removeEntry(row.id, entry.id)}
+                                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive p-0.5"
+                                            title="Retirer"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                  {canEditThisRow && (
+                                    <>
+                                      {isAdding ? (
+                                        <div className="flex flex-wrap items-center gap-2 border border-border rounded-md p-2 bg-muted/30">
+                                          <select
+                                            value={addingEmployerId ?? ""}
+                                            onChange={(e) => setAddingEmployerId(e.target.value === "" ? null : parseInt(e.target.value, 10))}
+                                            className="rounded-md border border-input bg-background px-2 py-1.5 text-sm w-40"
+                                          >
+                                            <option value="">— Employé —</option>
+                                            {employers.map((emp) => (
+                                              <option key={emp.id} value={emp.id}>
+                                                {formatEmployerNomComplet(emp.prenom, emp.nom)}
+                                              </option>
+                                            ))}
+                                            {employers.length === 0 && !employersLoading && (
+                                              <option value="" disabled>Aucun employé</option>
+                                            )}
+                                          </select>
+                                          <select
+                                            value={addingFullDay ? "1" : "0.5"}
+                                            onChange={(e) => setAddingFullDay(e.target.value === "1")}
+                                            className="rounded-md border border-input bg-background px-2 py-1.5 text-sm w-24"
+                                          >
+                                            <option value="1">1 (jour)</option>
+                                            <option value="0.5">1/2 (demijour)</option>
+                                          </select>
+                                          <button
+                                            type="button"
+                                            onClick={() => addingEmployerId != null && addEntry(row.id, addingEmployerId, addingFullDay)}
+                                            disabled={addingEmployerId == null}
+                                            className="flex items-center gap-1 px-2 py-1 rounded-md bg-primary text-primary-foreground text-sm hover:opacity-90 disabled:opacity-50"
+                                          >
+                                            <Check className="w-4 h-4" /> Confirmer
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { setAddingToRowId(null); setAddingEmployerId(null); }}
+                                            className="p-1 text-muted-foreground hover:text-foreground"
+                                          >
+                                            Annuler
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => setAddingToRowId(row.id)}
+                                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-dashed border-border text-muted-foreground hover:border-primary hover:text-primary hover:bg-primary/10 transition-colors"
+                                          title="Ajouter un employé"
+                                        >
+                                          <UserPlus className="w-4 h-4" />
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                  {row.entries.length === 0 && rowReadOnly && <span className="text-sm text-muted-foreground">—</span>}
+                                </div>
+                              </td>
+                              <td>
+                                {row.entries.length > 0 ? (
+                                  <span className="text-sm tabular-nums">
+                                    {rowTotalJours(row.entries)}
                                   </span>
                                 ) : (
-                                  <select
-                                    value={row.employerId ?? ""}
-                                    onChange={(e) => {
-                                      const v = e.target.value;
-                                      updateRow(row.id, "employerId", v === "" ? null : parseInt(v, 10));
-                                    }}
-                                    className="w-full min-w-[180px] rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                                  >
-                                    <option value="">— Choisir un employé —</option>
-                                    {employers.map((emp) => (
-                                      <option key={emp.id} value={emp.id}>
-                                        {formatEmployerNomComplet(emp.prenom, emp.nom)}
-                                      </option>
-                                    ))}
-                                    {employers.length === 0 && !employersLoading && (
-                                      <option value="" disabled>Aucun employé</option>
-                                    )}
-                                  </select>
-                                )}
-                              </td>
-                              <td>
-                                {rowReadOnly ? (
-                                  <span className="text-sm">{formatTemps(row.fullDay)}</span>
-                                ) : (
-                                  <select
-                                    value={row.fullDay ? "1" : "0.5"}
-                                    onChange={(e) => updateRow(row.id, "fullDay", e.target.value === "1")}
-                                    className="rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                                  >
-                                    <option value="1">1 (jour)</option>
-                                    <option value="0.5">1/2 (demijour)</option>
-                                  </select>
+                                  <span className="text-sm text-muted-foreground">—</span>
                                 )}
                               </td>
                               <td className="text-sm tabular-nums">
-                                {row.employerId != null
-                                  ? montantRow.toFixed(2)
-                                  : "—"}
+                                {row.entries.length > 0 ? montantRow.toFixed(2) : "—"}
                               </td>
                               <td>
                                 {rowReadOnly ? (
@@ -770,22 +901,24 @@ export default function MainOeuvre() {
                         {currentRows.length > 0 && (
                           <>
                             <tr className="bg-muted/60">
-                              <td colSpan={2} className="text-sm font-medium text-muted-foreground">
+                              <td colSpan={3} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine} (jours)
                               </td>
                               <td>—</td>
                               <td className="font-semibold text-sm">{weekTotalJours}</td>
                               <td className="font-semibold text-sm tabular-nums">
                                 {currentRows.reduce((sum, r) => {
-                                  const emp = r.employerId != null ? employers.find((e) => e.id === r.employerId) : null;
-                                  const s = emp?.salaire != null ? Number(emp.salaire) : 0;
-                                  return sum + s * rowJours(r.fullDay);
+                                  return sum + r.entries.reduce((s, e) => {
+                                    const emp = employers.find((x) => x.id === e.employerId);
+                                    const sal = emp?.salaire != null ? Number(emp.salaire) : 0;
+                                    return s + sal * entryJours(e.fullDay);
+                                  }, 0);
                                 }, 0).toFixed(2)}
                               </td>
                               <td colSpan={2}></td>
                             </tr>
                             <tr className="bg-muted/50">
-                              <td colSpan={2} className="text-sm font-medium text-muted-foreground">
+                              <td colSpan={3} className="text-sm font-medium text-muted-foreground">
                                 CUMUL (jours)
                               </td>
                               <td>—</td>

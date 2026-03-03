@@ -27,10 +27,10 @@ function toRow(p: PlacementResponse): PlacementRow {
   };
 }
 
-function emptyRow(): PlacementRow {
+function emptyRow(selectedLot?: string | null): PlacementRow {
   return {
     id: crypto.randomUUID(),
-    lot: "1",
+    lot: (selectedLot?.trim() || "1"),
     placement_date: new Date().toISOString().split("T")[0],
     building: BUILDINGS[0],
     sex: SEXES[0],
@@ -46,12 +46,15 @@ function isSavedRow(id: string): boolean {
 interface EffectifMisEnPlaceProps {
   /** When set (Admin/RT), list and create are scoped to this farm. */
   farmId?: number | null;
+  /** When set (e.g. from Reporting Journalier lot selector), new rows use this lot and list is filtered to this lot. */
+  lot?: string | null;
 }
 
-export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps = {}) {
+export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlaceProps = {}) {
   const { selectedFarmName, allFarmsMode, canCreate, canUpdate, canDelete, isReadOnly } = useAuth();
   const { toast } = useToast();
-  const [rows, setRows] = useState<PlacementRow[]>([emptyRow()]);
+  const selectedLot = lot?.trim() || null;
+  const [rows, setRows] = useState<PlacementRow[]>([emptyRow(selectedLot)]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -59,16 +62,17 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
     setLoading(true);
     try {
       const list = await api.placements.list(farmId ?? undefined);
-      const mapped = list.map(toRow);
+      const filtered = selectedLot ? list.filter((p) => String(p.lot || "").trim() === selectedLot) : list;
+      const mapped = filtered.map(toRow);
       // Backoffice (read-only): show only saved rows, no empty row to add
-      setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, emptyRow()] : [emptyRow()]));
+      setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, emptyRow(selectedLot)] : [emptyRow(selectedLot)]));
     } catch {
       /* API error — logged in backend only */
-      setRows([emptyRow()]);
+      setRows([emptyRow(selectedLot)]);
     } finally {
       setLoading(false);
     }
-  }, [toast, farmId, isReadOnly]);
+  }, [toast, farmId, isReadOnly, selectedLot]);
 
   useEffect(() => {
     load();
@@ -79,9 +83,9 @@ export default function EffectifMisEnPlace({ farmId }: EffectifMisEnPlaceProps =
     setRows((prev) => [
       ...prev,
       {
-        ...emptyRow(),
+        ...emptyRow(selectedLot),
         id: crypto.randomUUID(),
-        lot: last?.lot ?? "1",
+        lot: last?.lot ?? selectedLot ?? "1",
         placement_date: last?.placement_date ?? new Date().toISOString().split("T")[0],
       },
     ]);

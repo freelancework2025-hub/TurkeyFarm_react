@@ -191,7 +191,7 @@ export default function ReportingJournalier() {
                 <ArrowLeft className="w-4 h-4" />
                 Retour aux jours enregistrés
               </button>
-              <EffectifMisEnPlace farmId={reportingFarmId} />
+              <EffectifMisEnPlace farmId={reportingFarmId} lot={lotParam || undefined} />
               <DailyReportTable
                 key={selectedDate ?? undefined}
                 initialDate={selectedDate ?? undefined}

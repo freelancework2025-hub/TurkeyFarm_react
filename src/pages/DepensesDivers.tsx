@@ -11,19 +11,23 @@ import {
   type DepenseDiversResponse,
   type DepenseDiversRequest,
 } from "@/lib/api";
+import { computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
 /**
  * DÉPENSES DIVERS
- * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
- * Each semaine has its own table; TOTAL = current semaine, CUMUL = previous semaines + current.
- * Columns: date, age (semaine), designation, fournisseur, N°BL, QTE, prix, montant (lot shown at top of page).
- * Same permission matrix: canCreate for add/save, canUpdate for saved rows, canDelete for delete.
- * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
- * Only filled lines (at least date) are created on Save, so they can save line 1 → locked; then fill and save line 2 → both locked; etc.
+ * Flow: Farm → Lot → Semaine → Vide sanitaire table (top) + Dépenses divers table (main).
+ * Vide sanitaire: dedicated table with DATE, désignation, fournisseur, N°BL, N°BR, UG, quantité, prix, montant. TOTAL and CUMUL for quantité and montant.
+ * Main table: TOTAL = current semaine, CUMUL = vide sanitaire cumul + semaines up to current.
+ * Permission matrix (per permission.mdc):
+ * - canCreate: add new rows, save new rows. RESPONSABLE_FERME can add/save; saved rows become read-only for them.
+ * - canUpdate: edit saved rows. ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only.
+ * - canDelete: delete saved rows. ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only.
+ * - Unsaved rows: only first editable can be edited; canCreate users can remove unsaved rows.
  */
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
+const VS_AGE = "VS"; // Vide sanitaire marker
 
 interface DepenseDiversRow {
   id: string;
@@ -33,6 +37,8 @@ interface DepenseDiversRow {
   designation: string;
   supplier: string;
   deliveryNoteNumber: string;
+  numeroBR: string;
+  ug: string;
   qte: string;
   prixPerUnit: string;
   montant: string;
@@ -158,6 +164,8 @@ export default function DepensesDivers() {
     designation: "",
     supplier: "",
     deliveryNoteNumber: "",
+    numeroBR: "",
+    ug: "",
     qte: "",
     prixPerUnit: "",
     montant: "",
@@ -167,7 +175,7 @@ export default function DepensesDivers() {
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today for first lot). */
   const getStartDateForSemaine = useCallback(
     (semaine: string): string => {
-      const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
+      const ages = new Set(rows.map((r) => (r.age || "").trim()).filter((a) => a && a !== VS_AGE));
       ages.add(semaine.trim());
       const semOrder = sortSemaines([...ages]);
       const idx = semOrder.indexOf(semaine.trim());
@@ -200,6 +208,8 @@ export default function DepensesDivers() {
         designation: r.designation ?? "",
         supplier: r.supplier ?? "",
         deliveryNoteNumber: r.deliveryNoteNumber ?? "",
+        numeroBR: r.numeroBR ?? "",
+        ug: r.ug ?? "",
         qte: fromNum(r.qte),
         prixPerUnit: fromNum(r.prixPerUnit),
         montant: fromNum(r.montant),
@@ -294,6 +304,83 @@ export default function DepensesDivers() {
     setRows((prev) => [...prev, newRow]);
   };
 
+  const addRowVideSanitaire = () => {
+    if (!canCreate || !lotFilter.trim()) return;
+    const vsRows = rows.filter((r) => (r.age || "").trim() === VS_AGE);
+    const lastRow = vsRows.length > 0 ? vsRows[vsRows.length - 1] : null;
+    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
+    const newRow = { ...emptyRow(VS_AGE), date: nextDate };
+    setRows((prev) => [...prev, newRow]);
+  };
+
+  const removeRowVideSanitaire = (id: string) => {
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+    if (row.serverId != null && !canDelete) return;
+    if (row.serverId != null) {
+      api.depensesDivers
+        .delete(row.serverId)
+        .then(() => loadMovements())
+        .catch(() => { /* API error — logged in backend only */ });
+      return;
+    }
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleSaveVideSanitaire = async () => {
+    if (!canCreate || !lotFilter.trim()) return;
+    const unsavedVs = rows
+      .filter((r) => (r.age || "").trim() === VS_AGE && r.serverId == null)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const firstUnsaved = unsavedVs[0];
+    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
+      toast({
+        title: "Aucune ligne à enregistrer",
+        description: "Remplissez la date pour la ligne vide sanitaire à enregistrer.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.depensesDivers.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
+      toast({
+        title: "Vide sanitaire enregistré",
+        description: `La ligne du ${firstUnsaved.date} a été enregistrée.`,
+      });
+      loadMovements();
+    } catch (err) {
+      toast({
+        title: "Erreur",
+        description: "Impossible d'enregistrer. Vérifiez que la date et au moins un champ sont remplis.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdateVideSanitaireRow = async (row: DepenseDiversRow) => {
+    if (!canUpdate || row.serverId == null || !lotFilter.trim()) return;
+    setSaving(true);
+    try {
+      await api.depensesDivers.update(row.serverId, rowToRequest(row));
+      toast({
+        title: "Ligne mise à jour",
+        description: `La ligne du ${row.date} a été mise à jour.`,
+      });
+      loadMovements();
+    } catch (err) {
+      toast({
+        title: "Erreur",
+        description: "Impossible de mettre à jour la ligne.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const removeRow = (id: string) => {
     const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
@@ -343,6 +430,8 @@ export default function DepensesDivers() {
       designation: r.designation.trim() || null,
       supplier: r.supplier.trim() || null,
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
+      numeroBR: r.numeroBR?.trim() || null,
+      ug: r.ug?.trim() || null,
       qte: qte ?? null,
       prixPerUnit: prix > 0 ? prix : null,
       montant: montant != null && montant >= 0 ? montant : null,
@@ -395,22 +484,41 @@ export default function DepensesDivers() {
     }
   };
 
+  const videSanitaireRows = [...rows.filter((r) => (r.age || "").trim() === VS_AGE)].sort((a, b) =>
+    (a.date || "").localeCompare(b.date || "")
+  );
+  const firstEditableVideSanitaireIndex = videSanitaireRows.findIndex((r) => r.serverId == null);
+  const videSanitaireTotalQte = videSanitaireRows.reduce((acc, r) => acc + toNum(r.qte), 0);
+  const videSanitaireTotalMontant = videSanitaireRows.reduce((acc, r) => acc + toNum(r.montant), 0);
+
   const currentRows = selectedSemaine
     ? [...rows.filter((r) => (r.age || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
     : [];
   const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
+  const weekTotalQte = currentRows.reduce((acc, r) => acc + toNum(r.qte), 0);
   const weekTotalMontant = currentRows.reduce((acc, r) => acc + toNum(r.montant), 0);
-  const cumulMontant = (() => {
-    const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
-    const semOrder = sortSemaines([...ages]);
-    const idx = semOrder.indexOf(selectedSemaine);
-    const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
-    return semsUpTo.reduce(
+  const semainesOnly = new Set(rows.map((r) => (r.age || "").trim()).filter((a) => a && a !== VS_AGE));
+  const semOrder = sortSemaines([...semainesOnly]);
+  const idx = semOrder.indexOf(selectedSemaine ?? "");
+  const semsUpTo = idx < 0 ? (selectedSemaine ? [selectedSemaine] : []) : semOrder.slice(0, idx + 1);
+  const cumulQte =
+    videSanitaireTotalQte +
+    semsUpTo.reduce(
+      (sum, sem) => sum + rows.filter((r) => (r.age || "").trim() === sem).reduce((a, r) => a + toNum(r.qte), 0),
+      0
+    );
+  const cumulMontant =
+    videSanitaireTotalMontant +
+    semsUpTo.reduce(
       (sum, sem) => sum + rows.filter((r) => (r.age || "").trim() === sem).reduce((a, r) => a + toNum(r.montant), 0),
       0
     );
-  })();
-  const colCount = 9; // date, age, designation, fournisseur, N°BL, QTE, prix, montant, actions
+  const ageByRowId = React.useMemo(() => {
+    const rowsForAge = rows.filter((r) => (r.age || "").trim() !== VS_AGE);
+    return computeAgeByRowId(rowsForAge, (r) => (r.age || "").trim(), (r) => r.date);
+  }, [rows]);
+  const colCount = 11;
+  const vsColCount = 10; // Date, Désignation, Fournisseur, N°BL, N°BR, UG, Quantité, Prix, Montant, actions
 
   return (
     <AppLayout>
@@ -589,6 +697,206 @@ export default function DepensesDivers() {
           </div>
 
           <div className="space-y-6 w-full min-w-0">
+            {/* Vide sanitaire table */}
+            <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
+                <h2 className="text-lg font-display font-bold text-foreground">Vide sanitaire</h2>
+                {!isReadOnly && (canCreate || canUpdate) && (
+                  <div className="flex gap-2">
+                    {canCreate && (
+                      <button
+                        type="button"
+                        onClick={addRowVideSanitaire}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
+                      >
+                        <Plus className="w-4 h-4" /> Ligne
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleSaveVideSanitaire}
+                      disabled={saving || loading || firstEditableVideSanitaireIndex < 0}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                    >
+                      <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="overflow-x-auto w-full">
+                <table className="table-farm table-fixed w-full">
+                  <thead>
+                    <tr>
+                      <th className="w-[10%] min-w-[90px]">Date</th>
+                      <th className="w-[15%] min-w-[120px]">Désignation</th>
+                      <th className="w-[13%] min-w-[100px]">Fournisseur</th>
+                      <th className="w-[10%] min-w-[80px]">N°BL</th>
+                      <th className="w-[10%] min-w-[80px]">N°BR</th>
+                      <th className="w-[8%] min-w-[60px]">UG</th>
+                      <th className="w-[9%] min-w-[70px]">Quantité</th>
+                      <th className="w-[9%] min-w-[70px]">Prix</th>
+                      <th className="w-[10%] min-w-[80px]">Montant</th>
+                      <th className="w-[6%] min-w-[90px]"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading ? (
+                      <tr>
+                        <td colSpan={vsColCount} className="p-8 text-center text-muted-foreground">
+                          Chargement…
+                        </td>
+                      </tr>
+                    ) : (
+                      <>
+                        {videSanitaireRows.map((row, rowIndex) => {
+                          const isFirstEditable =
+                            firstEditableVideSanitaireIndex >= 0 && rowIndex === firstEditableVideSanitaireIndex;
+                          const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
+                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                          return (
+                            <tr key={row.id}>
+                              <td>
+                                <input
+                                  type="date"
+                                  value={row.date}
+                                  onChange={(e) => updateRow(row.id, "date", e.target.value)}
+                                  disabled={rowReadOnly}
+                                  className="bg-transparent border-0 outline-none text-sm w-full"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.designation}
+                                  onChange={(e) => updateRow(row.id, "designation", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="min-w-[120px] bg-transparent border-0 outline-none text-sm w-full"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.supplier}
+                                  onChange={(e) => updateRow(row.id, "supplier", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="min-w-[100px] bg-transparent border-0 outline-none text-sm w-full"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.deliveryNoteNumber}
+                                  onChange={(e) => updateRow(row.id, "deliveryNoteNumber", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.numeroBR}
+                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.ug}
+                                  onChange={(e) => updateRow(row.id, "ug", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  value={row.qte}
+                                  onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                  placeholder="—"
+                                  min={0}
+                                  step="0.01"
+                                  disabled={rowReadOnly}
+                                  className="bg-transparent border-0 outline-none text-sm w-full"
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  value={row.prixPerUnit}
+                                  onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                  placeholder="—"
+                                  step="0.01"
+                                  min={0}
+                                  disabled={rowReadOnly}
+                                  className="bg-transparent border-0 outline-none text-sm w-full"
+                                />
+                              </td>
+                              <td className="font-semibold text-sm">{row.montant || "—"}</td>
+                              <td className="align-middle w-[90px]">
+                                <div className="flex items-center justify-end gap-1 min-h-[34px]">
+                                {row.serverId != null && canUpdate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateVideSanitaireRow(row)}
+                                    disabled={saving}
+                                    className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs font-medium hover:opacity-90 disabled:opacity-50"
+                                    title="Enregistrer les modifications"
+                                  >
+                                    {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                                  </button>
+                                )}
+                                {showDelete && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeRowVideSanitaire(row.id)}
+                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                    disabled={false}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {videSanitaireRows.length > 0 && (
+                          <>
+                            <tr className="bg-muted/60">
+                              <td colSpan={6} className="text-sm font-medium text-muted-foreground">
+                                TOTAL
+                              </td>
+                              <td className="font-semibold text-sm">{videSanitaireTotalQte.toFixed(2)}</td>
+                              <td></td>
+                              <td className="font-semibold text-sm">{videSanitaireTotalMontant.toFixed(2)}</td>
+                              <td></td>
+                            </tr>
+                            <tr className="bg-muted/50">
+                              <td colSpan={6} className="text-sm font-medium text-muted-foreground">
+                                CUMUL
+                              </td>
+                              <td className="font-semibold text-sm">{videSanitaireTotalQte.toFixed(2)}</td>
+                              <td></td>
+                              <td className="font-semibold text-sm">{videSanitaireTotalMontant.toFixed(2)}</td>
+                              <td className="text-right"></td>
+                            </tr>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Main dépenses divers table */}
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
@@ -599,7 +907,7 @@ export default function DepensesDivers() {
                     </p>
                   )}
                 </div>
-                {(canCreate || canUpdate) && (
+                {!isReadOnly && (canCreate || canUpdate) && (
                   <div className="flex gap-2">
                     {canCreate && (
                       <button
@@ -622,19 +930,21 @@ export default function DepensesDivers() {
                 )}
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="table-farm">
+              <div className="overflow-x-auto w-full">
+                <table className="table-farm table-fixed w-full">
                   <thead>
                     <tr>
-                      <th className="min-w-[100px]">Date</th>
-                      <th className="min-w-[70px]">Âge</th>
-                      <th className="min-w-[140px]">Désignation</th>
-                      <th className="min-w-[120px]">Fournisseur</th>
-                      <th className="min-w-[90px]">N°BL</th>
-                      <th className="min-w-[80px]">QTE</th>
-                      <th className="min-w-[80px]">Prix</th>
-                      <th className="min-w-[90px]">Montant</th>
-                      <th className="w-10"></th>
+                      <th className="w-[7%] min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
+                      <th className="w-[11%] min-w-[90px]">Date</th>
+                      <th className="w-[7%] min-w-[60px]">Sem</th>
+                      <th className="w-[18%] min-w-[120px]">Désignation</th>
+                      <th className="w-[15%] min-w-[100px]">Fournisseur</th>
+                      <th className="w-[10%] min-w-[80px]">N°BL</th>
+                      <th className="w-[10%] min-w-[80px]">N°BR</th>
+                      <th className="w-[8%] min-w-[60px]">QTE</th>
+                      <th className="w-[9%] min-w-[70px]">Prix</th>
+                      <th className="w-[10%] min-w-[80px]">Montant</th>
+                      <th className="w-[12%] min-w-[80px]"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -648,10 +958,13 @@ export default function DepensesDivers() {
                       <>
                         {currentRows.map((row, rowIndex) => {
                           const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
+                          const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           return (
                             <tr key={row.id}>
+                              <td className="text-sm tabular-nums">
+                                {ageByRowId.get(row.id) ?? "—"}
+                              </td>
                               <td>
                                 <input
                                   type="date"
@@ -703,6 +1016,16 @@ export default function DepensesDivers() {
                               </td>
                               <td>
                                 <input
+                                  type="text"
+                                  value={row.numeroBR}
+                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <input
                                   type="number"
                                   value={row.qte}
                                   onChange={(e) => updateRow(row.id, "qte", e.target.value)}
@@ -726,7 +1049,7 @@ export default function DepensesDivers() {
                                 />
                               </td>
                               <td className="font-semibold text-sm">{row.montant || "—"}</td>
-                              <td>
+                              <td className="text-right">
                                 {showDelete && (
                                   <button
                                     type="button"
@@ -754,15 +1077,19 @@ export default function DepensesDivers() {
                               <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine}
                               </td>
-                              <td className="font-semibold text-sm">{weekTotalMontant.toFixed(2)}</td>
+                              <td className="font-semibold text-sm">{weekTotalQte.toFixed(2)}</td>
                               <td></td>
+                              <td className="font-semibold text-sm">{weekTotalMontant.toFixed(2)}</td>
+                              <td className="text-right"></td>
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={7} className="text-sm font-medium text-muted-foreground">
-                                CUMUL
+                                CUMUL (Vide sanitaire + semaines)
                               </td>
-                              <td className="font-semibold text-sm">{cumulMontant.toFixed(2)}</td>
+                              <td className="font-semibold text-sm">{cumulQte.toFixed(2)}</td>
                               <td></td>
+                              <td className="font-semibold text-sm">{cumulMontant.toFixed(2)}</td>
+                              <td className="text-right"></td>
                             </tr>
                           </>
                         )}

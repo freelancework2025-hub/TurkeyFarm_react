@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Calendar, ChevronDown, ChevronRight, Loader2, Plus } from "lucide-react";
+import { getISOWeek, getISOWeekYear } from "date-fns";
 import { api, type DailyReportResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -27,30 +28,40 @@ function formatWeekDateRange(dates: string[]): string {
 type DayItem = { type: "day"; date: string };
 type WeekItem = { type: "week"; weekKey: string; label: string; dateRange: string; dates: string[] };
 
+/** Parse YYYY-MM-DD to a local Date (avoids timezone issues for week calculation) */
+function parseDateLocal(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y!, m! - 1, d!);
+}
+
 /**
- * Group saved days into semaine boxes: each consecutive block of 7 days (newest first) becomes S1, S2, etc.
+ * Group saved days into semaine boxes by calendar week (ISO week).
+ * Each week contains only the dates that actually fall within that calendar week.
  */
 function buildOverviewItems(uniqueDates: string[]): (DayItem | WeekItem)[] {
   if (uniqueDates.length === 0) return [];
-  const sorted = [...uniqueDates].sort((a, b) => b.localeCompare(a));
-  const items: (DayItem | WeekItem)[] = [];
-  let semaineIndex = 0;
-  for (let i = 0; i < sorted.length; i += 7) {
-    const chunk = sorted.slice(i, i + 7);
-    if (chunk.length === 7) {
-      semaineIndex += 1;
-      const weekKey = `semaine-${semaineIndex}-${chunk[0]}`;
-      items.push({
-        type: "week",
-        weekKey,
-        label: `S${semaineIndex}`,
-        dateRange: formatWeekDateRange(chunk),
-        dates: [...chunk].sort(),
-      });
-    } else {
-      for (const date of chunk) items.push({ type: "day", date });
-    }
+  const byWeek = new Map<string, string[]>();
+  for (const dateStr of uniqueDates) {
+    const d = parseDateLocal(dateStr);
+    const year = getISOWeekYear(d);
+    const week = getISOWeek(d);
+    const key = `${year}-W${String(week).padStart(2, "0")}`;
+    const list = byWeek.get(key) ?? [];
+    list.push(dateStr);
+    byWeek.set(key, list);
   }
+  const weekKeys = [...byWeek.keys()].sort((a, b) => a.localeCompare(b)); // S1 = first week, S2 = second, etc.
+  const items: (DayItem | WeekItem)[] = [];
+  weekKeys.forEach((key, idx) => {
+    const dates = (byWeek.get(key) ?? []).sort();
+    items.push({
+      type: "week",
+      weekKey: `semaine-${key}-${dates[0] ?? ""}`,
+      label: `S${idx + 1}`,
+      dateRange: formatWeekDateRange(dates),
+      dates,
+    });
+  });
   return items;
 }
 
@@ -116,7 +127,7 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId }: 
               Jours enregistrés
             </h2>
             <p className="text-xs text-muted-foreground">
-              Cliquez sur une semaine (S1, S2…) pour afficher les 7 jours, puis sur un jour pour ouvrir le rapport.
+              Cliquez sur une semaine (S1, S2…) pour afficher les jours de la semaine, puis sur un jour pour ouvrir le rapport.
             </p>
           </div>
         </div>

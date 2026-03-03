@@ -11,6 +11,7 @@ import {
   type LivraisonProduitHygieneResponse,
   type LivraisonProduitHygieneRequest,
 } from "@/lib/api";
+import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS PRODUITS HYGIÈNE
@@ -29,7 +30,8 @@ interface HygieneRow {
   id: string;
   serverId?: number;
   date: string;
-  age: string;
+  age: string; // Legacy; SEM = semaine, AGE = computed
+  sem: string;
   designation: string;
   supplier: string;
   deliveryNoteNumber: string;
@@ -68,16 +70,9 @@ function addOneDay(isoDate: string): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Sort semaines: S1, S2, ... S24, then custom (e.g. S25). */
-function sortSemaines(sems: string[]): string[] {
-  return [...sems].sort((a, b) => {
-    const numA = parseInt(a.replace(/^S(\d+)$/i, "$1"), 10);
-    const numB = parseInt(b.replace(/^S(\d+)$/i, "$1"), 10);
-    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-    if (!Number.isNaN(numA)) return -1;
-    if (!Number.isNaN(numB)) return 1;
-    return a.localeCompare(b);
-  });
+/** Get SEM from row (sem or age for backward compat). */
+function getSemFromRow(r: { sem?: string; age?: string }): string {
+  return (r.sem || r.age || "").trim();
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order). */
@@ -176,10 +171,11 @@ export default function ProduitsHygiene() {
     [selectedFarmId, lotFilter, setSearchParams]
   );
 
-  const emptyRow = (age?: string, overrideDate?: string): HygieneRow => ({
+  const emptyRow = (sem?: string, overrideDate?: string): HygieneRow => ({
     id: crypto.randomUUID(),
     date: overrideDate ?? today,
-    age: age ?? "",
+    age: "",
+    sem: sem ?? "",
     designation: "",
     supplier: "",
     deliveryNoteNumber: "",
@@ -194,14 +190,14 @@ export default function ProduitsHygiene() {
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today). */
   const getStartDateForSemaine = useCallback(
     (semaine: string): string => {
-      const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
-      ages.add(semaine.trim());
-      const semOrder = sortSemaines([...ages]);
+      const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
+      sems.add(semaine.trim());
+      const semOrder = sortSemaines([...sems]);
       const idx = semOrder.indexOf(semaine.trim());
       if (idx < 0) return today;
       if (idx === 0) return previousLotLastDate ?? today;
       const prevSem = semOrder[idx - 1];
-      const prevRows = rows.filter((r) => (r.age || "").trim() === prevSem);
+      const prevRows = rows.filter((r) => getSemFromRow(r) === prevSem);
       if (prevRows.length === 0) return today;
       const dates = prevRows.map((r) => r.date).filter((d) => d?.trim());
       if (dates.length === 0) return today;
@@ -224,6 +220,7 @@ export default function ProduitsHygiene() {
         serverId: r.id,
         date: r.date ?? "",
         age: r.age ?? "",
+        sem: r.sem ?? r.age ?? "",
         designation: r.designation ?? "",
         supplier: r.supplier ?? "",
         deliveryNoteNumber: r.deliveryNoteNumber ?? "",
@@ -328,7 +325,7 @@ export default function ProduitsHygiene() {
 
   useEffect(() => {
     if (!hasSemaineInUrl || !selectedSemaine) return;
-    const forSem = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
     const startDate =
@@ -351,7 +348,7 @@ export default function ProduitsHygiene() {
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
-    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
     const nextDate =
       lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
@@ -360,7 +357,7 @@ export default function ProduitsHygiene() {
   };
 
   const removeRow = (id: string) => {
-    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
     if (row?.serverId != null && !canDelete) return;
@@ -405,17 +402,25 @@ export default function ProduitsHygiene() {
     });
   };
 
-  const rowToRequest = (r: HygieneRow): LivraisonProduitHygieneRequest => {
+  const ageByRowId = React.useMemo(
+    () => computeAgeByRowId(rows, getSemFromRow, (r) => r.date),
+    [rows]
+  );
+
+  const rowToRequest = (r: HygieneRow, computedAge?: number): LivraisonProduitHygieneRequest => {
     const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte != null && prix >= 0 ? qte * prix : null);
     const male = r.male.trim() !== "" ? toNum(r.male) : null;
     const femelle = r.femelle.trim() !== "" ? toNum(r.femelle) : null;
+    const sem = (r.sem || "").trim() || selectedSemaine || null;
+    const age = computedAge != null ? String(computedAge) : (r.age.trim() || null);
     return {
       farmId: pageFarmId ?? undefined,
       lot: lotFilter.trim() || null,
       date: r.date || today,
-      age: r.age.trim() || null,
+      age,
+      sem,
       designation: r.designation.trim() || null,
       supplier: r.supplier.trim() || null,
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
@@ -426,6 +431,32 @@ export default function ProduitsHygiene() {
       male: male != null && male >= 0 ? Math.round(male) : null,
       femelle: femelle != null && femelle >= 0 ? Math.round(femelle) : null,
     };
+  };
+
+  const handleSaveVideSanitaireOnly = async () => {
+    if (!hasVideSanitaireToSave || videSanitaireReadOnly) return;
+    setSaving(true);
+    try {
+      await api.videSanitaire.put(
+        {
+          farmId: pageFarmId ?? undefined,
+          lot: lotFilter.trim() || null,
+          date: videSanitaire.date.trim() || null,
+          supplier: videSanitaire.supplier.trim() || null,
+          deliveryNoteNumber: videSanitaire.deliveryNoteNumber.trim() || null,
+          numeroBR: videSanitaire.numeroBR.trim() || null,
+          qte: toNum(videSanitaire.qte) || null,
+          prixPerUnit: toNum(videSanitaire.prixPerUnit) || null,
+        },
+        pageFarmId ?? undefined
+      );
+      toast({ title: "Vide sanitaire enregistré", description: "Les données du vide sanitaire ont été enregistrées." });
+      loadMovements();
+    } catch {
+      /* API error — logged in backend only */
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSave = async () => {
@@ -445,7 +476,7 @@ export default function ProduitsHygiene() {
       });
       return;
     }
-    const forSem = (r: HygieneRow) => (r.age || "").trim() === selectedSemaine;
+    const forSem = (r: HygieneRow) => getSemFromRow(r) === selectedSemaine;
     const vsHasData =
       videSanitaire.qte.trim() !== "" ||
       videSanitaire.prixPerUnit.trim() !== "";
@@ -483,7 +514,8 @@ export default function ProduitsHygiene() {
         );
       }
       if (firstUnsaved && firstUnsaved.date.trim() !== "") {
-        await api.livraisonsProduitsHygiene.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
+        const computedAge = ageByRowId.get(firstUnsaved.id);
+        await api.livraisonsProduitsHygiene.createBatch([rowToRequest(firstUnsaved, computedAge)], pageFarmId ?? undefined);
       }
       const parts: string[] = [];
       if (vsHasData && !videSanitaireReadOnly) parts.push("Vide sanitaire enregistré");
@@ -503,7 +535,7 @@ export default function ProduitsHygiene() {
   };
 
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => (r.age || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
     : [];
   const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
   const videSanitaireReadOnly = isReadOnly || (hasExistingVideSanitaire && !canUpdate);
@@ -529,12 +561,12 @@ export default function ProduitsHygiene() {
   })();
   const cumulForSelectedSemaine = (() => {
     let running = { ...videSanitaireTotals };
-    const ages = new Set(rows.map((r) => (r.age || "").trim()).filter(Boolean));
-    const semOrder = sortSemaines([...ages]);
+    const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
+    const semOrder = sortSemaines([...sems]);
     const idx = semOrder.indexOf(selectedSemaine);
     const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
     for (const sem of semsUpTo) {
-      const weekRows = rows.filter((r) => (r.age || "").trim() === sem);
+      const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
         running.qte += toNum(r.qte);
         running.prix += toNum(r.prixPerUnit);
@@ -546,7 +578,7 @@ export default function ProduitsHygiene() {
     return running;
   })();
 
-  const colCount = 12;
+  const colCount = 13;
 
   return (
     <AppLayout>
@@ -757,8 +789,9 @@ export default function ProduitsHygiene() {
                 <table className="table-farm">
                   <thead>
                     <tr>
+                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
                       <th className="min-w-[100px]">Date</th>
-                      <th className="min-w-[70px]">age</th>
+                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
                       <th className="min-w-[180px]">designation</th>
                       <th className="min-w-[120px]">fournisseur</th>
                       <th className="min-w-[90px]">n°BL</th>
@@ -781,6 +814,7 @@ export default function ProduitsHygiene() {
                     ) : (
                       <>
                         <tr className="bg-red-500/15 text-foreground">
+                          <td>—</td>
                           <td>
                             <input
                               type="date"
@@ -848,7 +882,19 @@ export default function ProduitsHygiene() {
                           </td>
                           <td>—</td>
                           <td>—</td>
-                          <td></td>
+                          <td>
+                            {hasVideSanitaireToSave && (
+                              <button
+                                type="button"
+                                onClick={handleSaveVideSanitaireOnly}
+                                disabled={saving || loading}
+                                className="flex items-center gap-1.5 px-2 py-1 bg-primary text-primary-foreground rounded-md text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                              >
+                                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                                Enregistrer
+                              </button>
+                            )}
+                          </td>
                         </tr>
                         {currentRows.map((row, rowIndex) => {
                           const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
@@ -856,6 +902,9 @@ export default function ProduitsHygiene() {
                           const showDelete = row.serverId != null ? canDelete : canCreate;
                           return (
                             <tr key={row.id}>
+                              <td className="text-sm font-medium text-muted-foreground">
+                                {ageByRowId.get(row.id) ?? "—"}
+                              </td>
                               <td>
                                 <input
                                   type="date"
@@ -865,15 +914,8 @@ export default function ProduitsHygiene() {
                                   className="bg-transparent border-0 outline-none text-sm w-full"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="text"
-                                  value={row.age}
-                                  onChange={(e) => updateRow(row.id, "age", e.target.value)}
-                                  placeholder={selectedSemaine}
-                                  disabled={rowReadOnly}
-                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                />
+                              <td className="text-sm font-medium text-muted-foreground">
+                                {(row.sem || "").trim() || selectedSemaine || "—"}
                               </td>
                               <td>
                                 <input
@@ -977,7 +1019,7 @@ export default function ProduitsHygiene() {
                           );
                         })}
                         <tr className="bg-muted/60">
-                          <td colSpan={4} className="text-sm font-medium text-muted-foreground">
+                          <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             TOTAL {selectedSemaine}
                           </td>
                           <td>—</td>
@@ -990,7 +1032,7 @@ export default function ProduitsHygiene() {
                           <td></td>
                         </tr>
                         <tr className="bg-muted/50">
-                          <td colSpan={4} className="text-sm font-medium text-muted-foreground">
+                          <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             CUMUL
                           </td>
                           <td>—</td>
