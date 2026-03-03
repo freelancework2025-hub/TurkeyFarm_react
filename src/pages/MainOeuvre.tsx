@@ -489,6 +489,12 @@ export default function MainOeuvre() {
     r.entries.length === 0 || r.entries.some((e) => e.serverId == null)
   );
   const weekTotalJours = currentRows.reduce((sum, r) => sum + rowTotalJours(r.entries), 0);
+  const rowMontant = (r: MainOeuvreRow) =>
+    r.entries.reduce((sum, e) => {
+      const emp = employers.find((x) => x.id === e.employerId);
+      const sal = emp?.salaire != null ? Number(emp.salaire) : 0;
+      return sum + sal * entryJours(e.fullDay);
+    }, 0);
   const cumulJours = (() => {
     const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
     const semOrder = sortSemaines([...sems]);
@@ -497,6 +503,17 @@ export default function MainOeuvre() {
     return semsUpTo.reduce(
       (sum, sem) =>
         sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((s, r) => s + rowTotalJours(r.entries), 0),
+      0
+    );
+  })();
+  const cumulMontant = (() => {
+    const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
+    const semOrder = sortSemaines([...sems]);
+    const idx = semOrder.indexOf(selectedSemaine);
+    const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
+    return semsUpTo.reduce(
+      (sum, sem) =>
+        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((s, r) => s + rowMontant(r), 0),
       0
     );
   })();
@@ -743,11 +760,7 @@ export default function MainOeuvre() {
                           const canEditThisRow = isFirstEditable && !isReadOnly;
                           const showDelete = hasSavedEntries ? canDelete : canCreate;
                           const isAdding = addingToRowId === row.id;
-                          const montantRow = row.entries.reduce((sum, e) => {
-                            const emp = employers.find((x) => x.id === e.employerId);
-                            const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
-                            return sum + salaire * entryJours(e.fullDay);
-                          }, 0);
+                          const montantRow = rowMontant(row);
                           return (
                             <tr key={row.id}>
                               <td className="text-sm tabular-nums">
@@ -907,13 +920,7 @@ export default function MainOeuvre() {
                               <td>—</td>
                               <td className="font-semibold text-sm">{weekTotalJours}</td>
                               <td className="font-semibold text-sm tabular-nums">
-                                {currentRows.reduce((sum, r) => {
-                                  return sum + r.entries.reduce((s, e) => {
-                                    const emp = employers.find((x) => x.id === e.employerId);
-                                    const sal = emp?.salaire != null ? Number(emp.salaire) : 0;
-                                    return s + sal * entryJours(e.fullDay);
-                                  }, 0);
-                                }, 0).toFixed(2)}
+                                {currentRows.reduce((sum, r) => sum + rowMontant(r), 0).toFixed(2)}
                               </td>
                               <td colSpan={2}></td>
                             </tr>
@@ -923,7 +930,7 @@ export default function MainOeuvre() {
                               </td>
                               <td>—</td>
                               <td className="font-semibold text-sm">{cumulJours}</td>
-                              <td></td>
+                              <td className="font-semibold text-sm tabular-nums">{cumulMontant.toFixed(2)}</td>
                               <td colSpan={2}></td>
                             </tr>
                           </>
