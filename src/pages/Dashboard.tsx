@@ -10,15 +10,20 @@ import AppLayout from "@/components/layout/AppLayout";
 import {
   DashboardFilterBar,
   KPICard,
+  WaterConsumptionLineChart,
+  MortalityLineChart,
 } from "@/components/dashboard";
-import type { DashboardFilters } from "@/components/dashboard";
+import type {
+  DashboardFilters,
+  DailyWaterDataPoint,
+  DailyMortalityDataPoint,
+} from "@/components/dashboard";
 import {
   Bird,
   Scale,
   HeartPulse,
-  UtensilsCrossed,
+  Wheat,
   DollarSign,
-  Users,
   Building2,
   ClipboardList,
 } from "lucide-react";
@@ -176,6 +181,46 @@ export default function Dashboard() {
     ? Number(consoSummary.consoAlimentSemaineSum)
     : null;
 
+  const dailyWaterData = useMemo((): DailyWaterDataPoint[] => {
+    if (!hebdoList.length) return [];
+    const byDate = new Map<string, number>();
+    for (const r of hebdoList) {
+      if (!r.recordDate) continue;
+      const prev = byDate.get(r.recordDate) ?? 0;
+      byDate.set(r.recordDate, prev + (r.consoEauL ?? 0));
+    }
+    const DAY_ABBREV = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+    return Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([recordDate, consoEauL]) => {
+        const [y, m, d] = recordDate.split("-").map(Number);
+        const dateObj = new Date(y, (m ?? 1) - 1, d ?? 1);
+        const dayAbbrev = DAY_ABBREV[dateObj.getDay()] ?? "";
+        const dayNum = String(d ?? 0).padStart(2, "0");
+        return { date: recordDate, dayLabel: `${dayAbbrev} ${dayNum}`, consoEauL };
+      });
+  }, [hebdoList]);
+
+  const dailyMortalityData = useMemo((): DailyMortalityDataPoint[] => {
+    if (!hebdoList.length) return [];
+    const byDate = new Map<string, number>();
+    for (const r of hebdoList) {
+      if (!r.recordDate) continue;
+      const prev = byDate.get(r.recordDate) ?? 0;
+      byDate.set(r.recordDate, prev + (r.mortaliteNbre ?? 0));
+    }
+    const DAY_ABBREV = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+    return Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([recordDate, mortaliteNbre]) => {
+        const [y, m, d] = recordDate.split("-").map(Number);
+        const dateObj = new Date(y, (m ?? 1) - 1, d ?? 1);
+        const dayAbbrev = DAY_ABBREV[dateObj.getDay()] ?? "";
+        const dayNum = String(d ?? 0).padStart(2, "0");
+        return { date: recordDate, dayLabel: `${dayAbbrev} ${dayNum}`, mortaliteNbre };
+      });
+  }, [hebdoList]);
+
   return (
     <AppLayout>
       <div className="relative min-h-screen">
@@ -307,7 +352,7 @@ export default function Dashboard() {
                           : "-"
                       }
                       unit="kg/sem"
-                      icon={UtensilsCrossed}
+                      icon={Wheat}
                     />
                   </MagicCard>
               </div>
@@ -317,7 +362,7 @@ export default function Dashboard() {
                     <KPICard
                       label="Effectif restant fin de semaine"
                       value={costsSummary.effectifRestantFinSemaine ?? 0}
-                      icon={Users}
+                      icon={Bird}
                       animateValue
                     />
                   </MagicCard>
@@ -333,6 +378,21 @@ export default function Dashboard() {
                     label="Prix de revient / kg"
                     value={costsSummary.prixRevientParKg != null ? String(Number(costsSummary.prixRevientParKg).toFixed(2)) + " DH" : "-"}
                     icon={DollarSign}
+                  />
+                </MagicCard>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
+                  <WaterConsumptionLineChart
+                    data={dailyWaterData}
+                    semaine={filters.week ?? ""}
+                  />
+                </MagicCard>
+                <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
+                  <MortalityLineChart
+                    data={dailyMortalityData}
+                    semaine={filters.week ?? ""}
                   />
                 </MagicCard>
               </div>
