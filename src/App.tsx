@@ -5,10 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import RoleRestrictedRoute from "@/components/RoleRestrictedRoute";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import ReportingJournalier from "./pages/ReportingJournalier";
 import SuiviTechniqueHebdomadaire from "./pages/SuiviTechniqueHebdomadaire";
+import InfosSetup from "./pages/InfosSetup";
 import ResumeProductionHebdoPage from "./pages/ResumeProductionHebdoPage";
 import ResumeCoutsHebdoPage from "./pages/ResumeCoutsHebdoPage";
 import SortiesFerme from "./pages/SortiesFerme";
@@ -68,6 +70,14 @@ const App = () => (
               }
             />
             <Route
+              path="/infos-setup"
+              element={
+                <ProtectedRoute>
+                  <InfosSetup />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/suivi-technique-hebdomadaire/resume-production"
               element={
                 <ProtectedRoute>
@@ -78,9 +88,12 @@ const App = () => (
             <Route
               path="/suivi-technique-hebdomadaire/resume-couts"
               element={
-                <ProtectedRoute>
+                <RoleRestrictedRoute
+                  allowedRoles={["ADMINISTRATEUR", "RESPONSABLE_TECHNIQUE", "BACKOFFICE_EMPLOYER"]}
+                  redirectTo="/suivi-technique-hebdomadaire"
+                >
                   <ResumeCoutsHebdoPage />
-                </ProtectedRoute>
+                </RoleRestrictedRoute>
               }
             />
             <Route

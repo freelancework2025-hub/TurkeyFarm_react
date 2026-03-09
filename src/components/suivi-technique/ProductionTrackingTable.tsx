@@ -133,7 +133,7 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
         autrePoids: autrePoids.trim() !== "" ? aP : null,
       };
       await api.suiviProductionHebdo.save(body, farmId);
-      toast({ title: "Enregistré", description: "Suivi de production enregistré." });
+      toast({ title: "Enregistré", description: "Suivi de la livraison enregistré." });
       onSaveSuccess?.();
       await load();
     } catch {
@@ -147,7 +147,7 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
     return (
       <div className="bg-card rounded-lg border border-border shadow-sm p-8 flex items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="w-5 h-5 animate-spin" />
-        <span>Chargement du suivi de production…</span>
+        <span>Chargement du suivi de la livraison…</span>
       </div>
     );
   }
@@ -162,7 +162,7 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
       <div className="flex items-center justify-between px-5 py-4 border-b border-border">
         <div>
           <h3 className="text-base font-display font-bold text-foreground underline decoration-primary/40">
-            Suivi de production
+            Suivi de la livraison
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
             Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}

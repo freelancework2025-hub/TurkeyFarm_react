@@ -85,7 +85,8 @@ type AuthContextValue = AuthState & {
   
   /** 
    * True if user can DELETE platform data records.
-   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only
+   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME
+   * Note: RESPONSABLE_FERME can only delete unsaved rows (handled at component level)
    */
   canDelete: boolean;
   
@@ -354,9 +355,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const canUpdate = hasFullAccess;
   
   /** 
-   * Can DELETE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only
+   * Can DELETE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME
+   * RESPONSABLE_FERME can delete unsaved rows only (handled at component level)
    */
-  const canDelete = hasFullAccess;
+  const canDelete = hasFullAccess || isResponsableFerme;
   
   /** 
    * Read-only: BACKOFFICE_EMPLOYER

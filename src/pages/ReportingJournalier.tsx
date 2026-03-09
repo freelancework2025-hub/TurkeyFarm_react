@@ -47,6 +47,9 @@ export default function ReportingJournalier() {
   }, [showFarmSelector]);
 
   const reportingFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
+  
+  // For URL parameters, always use a farmId when available to ensure proper multi-tenant data isolation
+  const urlFarmId = reportingFarmId ?? authSelectedFarmId;
 
   useEffect(() => {
     if (showFarmSelector || !reportingFarmId || hasLotInUrl) return;
@@ -154,8 +157,8 @@ export default function ReportingJournalier() {
             <LotSelectorView
               existingLots={lots}
               loading={lotsLoading}
-              onSelectLot={(lot) => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot })}
-              onNewLot={(lot) => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot })}
+              onSelectLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
+              onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
               canCreate={!isReadOnly}
               title="Choisir un lot — Reporting Journalier"
               emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
@@ -166,7 +169,7 @@ export default function ReportingJournalier() {
             <span className="text-sm font-medium">Lot : <strong>{lotParam}</strong></span>
             <button
               type="button"
-              onClick={() => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId) } : {})}
+              onClick={() => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId) } : {})}
               className="text-sm text-muted-foreground hover:text-foreground underline"
             >
               Changer de lot
@@ -179,6 +182,7 @@ export default function ReportingJournalier() {
                 onSelectDay={handleSelectDay}
                 onNewReport={handleNewReport}
                 farmId={reportingFarmId}
+                lot={lotParam || undefined}
               />
             </div>
           ) : (

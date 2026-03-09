@@ -255,13 +255,53 @@ export const api = {
         }
       ),
   },
+  /** Setup information — extended placement data for reuse across weeks */
+  setupInfo: {
+    list: (farmId?: number | null, lot?: string | null, token?: string | null) => {
+      const params = new URLSearchParams();
+      if (farmId != null) params.set("farmId", String(farmId));
+      if (lot != null && lot !== "") params.set("lot", lot);
+      return apiFetch<SetupInfoResponse[]>(
+        `/api/setup-info${params.toString() ? `?${params.toString()}` : ""}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    createBatch: (body: SetupInfoRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<SetupInfoResponse[]>(
+        farmId != null ? `/api/setup-info/batch?farmId=${farmId}` : "/api/setup-info/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    /** Replace all setup info for the farm and lot (delete existing then create). */
+    replaceBatch: (body: SetupInfoRequest[], farmId?: number | null, lot?: string | null, token?: string | null) => {
+      const params = new URLSearchParams();
+      if (farmId != null) params.set("farmId", String(farmId));
+      if (lot != null && lot !== "") params.set("lot", lot);
+      return apiFetch<SetupInfoResponse[]>(
+        `/api/setup-info/replace${params.toString() ? `?${params.toString()}` : ""}`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      );
+    },
+  },
   /** Reporting journalier (daily report) — optional farmId for Admin/RT/Backoffice to view/create for a specific farm */
   dailyReports: {
-    list: (farmId?: number | null, token?: string | null) =>
-      apiFetch<DailyReportResponse[]>(
-        farmId != null ? `/api/daily-reports?farmId=${farmId}` : "/api/daily-reports",
+    list: (farmId?: number | null, lot?: string | null, token?: string | null) => {
+      const params = new URLSearchParams();
+      if (farmId != null) params.set("farmId", String(farmId));
+      if (lot != null && lot.trim() !== "") params.set("lot", lot.trim());
+      const queryString = params.toString();
+      return apiFetch<DailyReportResponse[]>(
+        queryString ? `/api/daily-reports?${queryString}` : "/api/daily-reports",
         { token: token ?? getStoredToken() }
-      ),
+      );
+    },
     createBatch: (body: DailyReportRequest[], farmId?: number | null, token?: string | null) =>
       apiFetch<DailyReportResponse[]>(
         farmId != null ? `/api/daily-reports/batch?farmId=${farmId}` : "/api/daily-reports/batch",
@@ -1102,11 +1142,32 @@ export interface PlacementResponse {
   createdAt: string;
 }
 
+/** Setup information — extended placement data with additional fields for reuse across weeks */
+export interface SetupInfoRequest {
+  lot: string;
+  dateMiseEnPlace: string;
+  heureMiseEnPlace: string;
+  building: string;
+  sex: string;
+  effectifMisEnPlace: number;
+  typeElevage: string;
+  origineFournisseur: string;
+  dateEclosion: string;
+  souche: string;
+}
+
+export interface SetupInfoResponse extends SetupInfoRequest {
+  id: number;
+  farmId: number;
+  createdAt: string;
+}
+
 /** Reporting journalier — request (farm is set from JWT on backend) */
 export interface DailyReportRequest {
   reportDate: string;
   ageJour?: number | null;
   semaine?: number | null;
+  lot?: string | null;
   building: string;
   designation: string;
   nbr: number;
@@ -1123,6 +1184,7 @@ export interface DailyReportResponse {
   reportDate: string;
   ageJour?: number | null;
   semaine?: number | null;
+  lot?: string | null;
   building: string;
   designation: string;
   nbr: number;

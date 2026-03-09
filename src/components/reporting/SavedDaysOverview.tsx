@@ -34,6 +34,7 @@ function parseDateLocal(iso: string): Date {
   return new Date(y!, m! - 1, d!);
 }
 
+
 /**
  * Group saved days into semaine boxes by calendar week (ISO week).
  * Each week contains only the dates that actually fall within that calendar week.
@@ -70,9 +71,11 @@ interface SavedDaysOverviewProps {
   onNewReport: () => void;
   /** When set (Admin/RT), list is scoped to this farm. */
   farmId?: number | null;
+  /** When set, filter reports to show only those related to this lot. */
+  lot?: string | null;
 }
 
-export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId }: SavedDaysOverviewProps) {
+export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId, lot }: SavedDaysOverviewProps) {
   const { toast } = useToast();
   const { canCreate } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -80,18 +83,22 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId }: 
   const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
+    console.log("📊 SavedDaysOverview - Loading daily reports with:", { farmId, lot });
     setLoading(true);
     try {
-      const list: DailyReportResponse[] = await api.dailyReports.list(farmId ?? undefined);
+      // Load daily reports for the farm, filtered by lot if specified
+      const list: DailyReportResponse[] = await api.dailyReports.list(farmId ?? undefined, lot ?? undefined);
+      console.log("✅ SavedDaysOverview - Daily reports loaded:", { count: list.length, list });
       const unique = Array.from(new Set(list.map((r) => r.reportDate)));
+      console.log("📅 SavedDaysOverview - Unique dates:", unique);
       setDates(unique);
-    } catch {
-      /* API error — logged in backend only */
+    } catch (error) {
+      console.error("❌ SavedDaysOverview - Error loading daily reports:", error);
       setDates([]);
     } finally {
       setLoading(false);
     }
-  }, [toast, farmId]);
+  }, [farmId, lot]);
 
   useEffect(() => {
     load();

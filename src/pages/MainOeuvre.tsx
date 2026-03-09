@@ -111,7 +111,8 @@ export default function MainOeuvre() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId } = useAuth();
+  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId, isAdministrateur, isResponsableTechnique, isBackofficeEmployer } = useAuth();
+  const showMontantColumn = isAdministrateur || isResponsableTechnique || isBackofficeEmployer;
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -518,7 +519,7 @@ export default function MainOeuvre() {
     );
   })();
 
-  const colCount = 8; // AGE, date, semaine, employé, temps, montant, observation, actions
+  const colCount = showMontantColumn ? 8 : 7; // AGE, date, semaine, employé, temps, [montant], observation, actions
 
   return (
     <AppLayout>
@@ -739,7 +740,7 @@ export default function MainOeuvre() {
                       <th className="min-w-[70px]">Semaine</th>
                       <th className="min-w-[200px]">Employé (nom complet)</th>
                       <th className="min-w-[140px]">Temps de travail</th>
-                      <th className="min-w-[100px]">Montant</th>
+                      {showMontantColumn && <th className="min-w-[100px]">Montant</th>}
                       <th className="min-w-[180px]">Observation</th>
                       <th className="w-10"></th>
                     </tr>
@@ -873,9 +874,11 @@ export default function MainOeuvre() {
                                   <span className="text-sm text-muted-foreground">—</span>
                                 )}
                               </td>
-                              <td className="text-sm tabular-nums">
-                                {row.entries.length > 0 ? montantRow.toFixed(2) : "—"}
-                              </td>
+                              {showMontantColumn && (
+                                <td className="text-sm tabular-nums">
+                                  {row.entries.length > 0 ? montantRow.toFixed(2) : "—"}
+                                </td>
+                              )}
                               <td>
                                 {rowReadOnly ? (
                                   <span className="text-sm">{row.observation || "—"}</span>
@@ -919,9 +922,11 @@ export default function MainOeuvre() {
                               </td>
                               <td>—</td>
                               <td className="font-semibold text-sm">{weekTotalJours}</td>
-                              <td className="font-semibold text-sm tabular-nums">
-                                {currentRows.reduce((sum, r) => sum + rowMontant(r), 0).toFixed(2)}
-                              </td>
+                              {showMontantColumn && (
+                                <td className="font-semibold text-sm tabular-nums">
+                                  {currentRows.reduce((sum, r) => sum + rowMontant(r), 0).toFixed(2)}
+                                </td>
+                              )}
                               <td colSpan={2}></td>
                             </tr>
                             <tr className="bg-muted/50">
@@ -930,7 +935,9 @@ export default function MainOeuvre() {
                               </td>
                               <td>—</td>
                               <td className="font-semibold text-sm">{cumulJours}</td>
-                              <td className="font-semibold text-sm tabular-nums">{cumulMontant.toFixed(2)}</td>
+                              {showMontantColumn && (
+                                <td className="font-semibold text-sm tabular-nums">{cumulMontant.toFixed(2)}</td>
+                              )}
                               <td colSpan={2}></td>
                             </tr>
                           </>

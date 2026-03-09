@@ -27,6 +27,9 @@ import { computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
+
+/** Options de désignation : l'utilisateur peut sélectionner ou saisir librement. */
+const DESIGNATION_OPTIONS = ["ENTRETIEN ET REP"];
 const VS_AGE = "VS"; // Vide sanitaire marker
 
 interface DepenseDiversRow {
@@ -696,6 +699,11 @@ export default function DepensesDivers() {
             </button>
           </div>
 
+          <datalist id="designation-options">
+            {DESIGNATION_OPTIONS.map((opt) => (
+              <option key={opt} value={opt} />
+            ))}
+          </datalist>
           <div className="space-y-6 w-full min-w-0">
             {/* Vide sanitaire table */}
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
@@ -767,6 +775,7 @@ export default function DepensesDivers() {
                               <td>
                                 <input
                                   type="text"
+                                  list="designation-options"
                                   value={row.designation}
                                   onChange={(e) => updateRow(row.id, "designation", e.target.value)}
                                   placeholder="—"
@@ -987,6 +996,7 @@ export default function DepensesDivers() {
                               <td>
                                 <input
                                   type="text"
+                                  list="designation-options"
                                   value={row.designation}
                                   onChange={(e) => updateRow(row.id, "designation", e.target.value)}
                                   placeholder="—"

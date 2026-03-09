@@ -546,7 +546,7 @@ export default function WeeklyProductionSummaryContent({
       <div className="bg-card rounded-lg border border-border shadow-sm">
         <div className="px-5 py-4 border-b border-border">
           <h3 className="text-base font-display font-bold text-foreground underline decoration-primary/40">
-            Suivi de production — Tous bâtiments — {semaine}
+            Suivi de la livraison — Tous bâtiments — {semaine}
           </h3>
         </div>
         <div className="overflow-x-auto">

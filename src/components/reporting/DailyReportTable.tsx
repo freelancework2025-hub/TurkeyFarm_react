@@ -1,11 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Save, CheckCircle, Trash2, Loader2 } from "lucide-react";
-import { api, type DailyReportResponse, type DailyReportRequest } from "@/lib/api";
+import { Plus, Save, CheckCircle, Trash2, Loader2, Info } from "lucide-react";
+import { api, type DailyReportResponse, type DailyReportRequest, type SetupInfoResponse } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
-const BUILDINGS = ["Bâtiment 01", "Bâtiment 02", "Bâtiment 03", "Bâtiment 04"];
-const DESIGNATIONS = ["Mâle", "Femelle"];
+const BUILDINGS_FALLBACK = ["Bâtiment 01", "Bâtiment 02", "Bâtiment 03", "Bâtiment 04"];
+const DESIGNATIONS_FALLBACK = ["Mâle", "Femelle"];
+
+interface BuildingSexConfig {
+  building: string;
+  sex: string;
+}
 
 interface DailyRow {
   id: string;
@@ -45,8 +50,8 @@ function emptyRow(today: string): DailyRow {
     report_date: today,
     age_jour: "",
     semaine: "",
-    building: BUILDINGS[0],
-    designation: DESIGNATIONS[0],
+    building: BUILDINGS_FALLBACK[0],
+    designation: DESIGNATIONS_FALLBACK[0],
     nbr: "",
     water_l: "",
     temp_min: "",
@@ -94,7 +99,7 @@ interface DailyReportTableProps {
 
 export default function DailyReportTable({ initialDate, farmId, lot, isNewReport, onSaveSuccess }: DailyReportTableProps) {
   const today = new Date().toISOString().split("T")[0];
-  const { selectedFarmName, allFarmsMode, canCreate, canUpdate, canDelete, isReadOnly } = useAuth();
+  const { selectedFarmName, allFarmsMode, canCreate, canUpdate, canDelete, isReadOnly, isResponsableFerme } = useAuth();
   /** Only Admin/RT (canUpdate) can edit age/semaine on saved rows. RESPONSABLE_FERME cannot modify after save. */
   const canEditAgeSemaine = canUpdate;
   const { toast } = useToast();
@@ -107,10 +112,55 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
   /** When isNewReport: date for the new report (last saved date + 1 day). Used for subtitle and addRow. */
   const [computedNewReportDate, setComputedNewReportDate] = useState<string | null>(null);
   const dateContext = (isNewReport && computedNewReportDate) ? computedNewReportDate : (initialDate ?? today);
+  
+  /** Building+Sex configurations from setup info */
+  const [setupConfigs, setSetupConfigs] = useState<BuildingSexConfig[]>([]);
+  const [setupLoading, setSetupLoading] = useState(true);
+  
+  /** Get available buildings from setup configs or fallback */
+  const availableBuildings = setupConfigs.length > 0 
+    ? [...new Set(setupConfigs.map(c => c.building))]
+    : BUILDINGS_FALLBACK;
+  
+  /** Get available designations from setup configs or fallback */
+  const availableDesignations = setupConfigs.length > 0
+    ? [...new Set(setupConfigs.map(c => c.sex))]
+    : DESIGNATIONS_FALLBACK;
 
+  /** Load setup info to get building+sex configurations */
   useEffect(() => {
-    if (!farmId || !lot || lot.trim() === "") {
-      setPlacementDateForLot(null);
+    if (!lot || lot.trim() === "") {
+      setSetupConfigs([]);
+      setSetupLoading(false);
+      return;
+    }
+    setSetupLoading(true);
+    api.setupInfo.list(farmId ?? undefined, lot.trim())
+      .then((list: SetupInfoResponse[]) => {
+        const configs: BuildingSexConfig[] = list.map(s => ({
+          building: s.building,
+          sex: s.sex,
+        }));
+        setSetupConfigs(configs);
+        
+        // Also get placement date from setup info
+        if (list.length > 0) {
+          const minDate = list.reduce((min, s) => 
+            (s.dateMiseEnPlace < min ? s.dateMiseEnPlace : min), 
+            list[0].dateMiseEnPlace
+          );
+          setPlacementDateForLot(minDate);
+        }
+      })
+      .catch(() => {
+        setSetupConfigs([]);
+      })
+      .finally(() => setSetupLoading(false));
+  }, [farmId, lot]);
+
+  /** Fallback: if no setup info, try to get placement date from placements API */
+  useEffect(() => {
+    if (setupConfigs.length > 0 || !farmId || !lot || lot.trim() === "") {
       return;
     }
     api.placements.list(farmId).then((list) => {
@@ -122,14 +172,52 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       const minDate = forLot.reduce((min, p) => (p.placementDate < min ? p.placementDate : min), forLot[0].placementDate);
       setPlacementDateForLot(minDate);
     }).catch(() => setPlacementDateForLot(null));
-  }, [farmId, lot]);
+  }, [farmId, lot, setupConfigs.length]);
+
+  /** Create empty rows for all building+sex configurations from setup info */
+  const createEmptyRowsFromSetup = useCallback((forDate: string): DailyRow[] => {
+    if (setupConfigs.length === 0) {
+      // Fallback: create single empty row
+      let empty = emptyRow(forDate);
+      if (placementDateForLot) {
+        const { age, semaine } = computeAgeAndSemaine(empty.report_date, placementDateForLot);
+        empty = { ...empty, age_jour: String(age), semaine: String(semaine) };
+      }
+      return [empty];
+    }
+    
+    // Create one row per building+sex configuration
+    return setupConfigs.map(config => {
+      let row: DailyRow = {
+        id: crypto.randomUUID(),
+        report_date: forDate,
+        age_jour: "",
+        semaine: "",
+        building: config.building,
+        designation: config.sex,
+        nbr: "",
+        water_l: "",
+        temp_min: "",
+        temp_max: "",
+        traitement: "",
+        verified: false,
+      };
+      if (placementDateForLot) {
+        const { age, semaine } = computeAgeAndSemaine(row.report_date, placementDateForLot);
+        row = { ...row, age_jour: String(age), semaine: String(semaine) };
+      }
+      return row;
+    });
+  }, [setupConfigs, placementDateForLot]);
 
   const load = useCallback(async () => {
+    console.log("🔄 DailyReportTable - Loading with:", { farmId, lot, initialDate, isNewReport });
     setLoading(true);
     const todayStr = new Date().toISOString().split("T")[0];
     let forDate = initialDate ?? todayStr;
     try {
-      const list = await api.dailyReports.list(farmId ?? undefined);
+      const list = await api.dailyReports.list(farmId ?? undefined, lot ?? undefined);
+      console.log("✅ DailyReportTable - Daily reports loaded:", { count: list.length, list });
       // For "Nouveau rapport": use next day after last saved report so Date and Âge (J) increment +1
       if (isNewReport && list.length > 0) {
         const maxReportDate = list.reduce((max, r) => (r.reportDate > max ? r.reportDate : max), list[0].reportDate);
@@ -146,6 +234,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       const filtered = (initialDate && !isNewReport && !skipDateFilter)
         ? list.filter((r) => r.reportDate === initialDate)
         : list;
+      console.log("📋 DailyReportTable - Filtered reports:", { count: filtered.length, filtered });
       let mapped = filtered.map(toRow);
       if (placementDateForLot) {
         mapped = mapped.map((r) => {
@@ -153,24 +242,33 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
           return { ...r, age_jour: String(age), semaine: String(semaine) };
         });
       }
-      let empty = emptyRow(forDate);
-      if (placementDateForLot) {
-        const { age, semaine } = computeAgeAndSemaine(empty.report_date, placementDateForLot);
-        empty = { ...empty, age_jour: String(age), semaine: String(semaine) };
-      }
-      // When "Nouveau rapport" (and not refreshing after multi-date save): show empty table for the new day
+      
+      // When "Nouveau rapport" (and not refreshing after multi-date save): create rows from setup configs
       if (isNewReport && !skipDateFilter) {
-        setRows([empty]);
+        const emptyRows = createEmptyRowsFromSetup(forDate);
+        setRows(emptyRows);
       } else {
         // Backoffice (read-only): show only saved rows, no empty row to add
-        setRows(isReadOnly ? mapped : (mapped.length ? [...mapped, empty] : [empty]));
+        if (isReadOnly) {
+          setRows(mapped);
+        } else if (mapped.length > 0) {
+          // Add empty rows from setup for data entry
+          const emptyRows = createEmptyRowsFromSetup(forDate);
+          setRows([...mapped, ...emptyRows]);
+        } else {
+          // No existing data: create rows from setup configs
+          const emptyRows = createEmptyRowsFromSetup(forDate);
+          setRows(emptyRows);
+        }
       }
-    } catch {
-      setRows([emptyRow(forDate)]);
+    } catch (error) {
+      console.error("❌ DailyReportTable - Error loading daily reports:", error);
+      const emptyRows = createEmptyRowsFromSetup(forDate);
+      setRows(emptyRows);
     } finally {
       setLoading(false);
     }
-  }, [toast, initialDate, farmId, isReadOnly, placementDateForLot, isNewReport]);
+  }, [initialDate, farmId, isReadOnly, placementDateForLot, isNewReport, createEmptyRowsFromSetup]);
 
   useEffect(() => {
     load();
@@ -178,19 +276,49 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
 
   const addRow = () => {
     const last = rows[rows.length - 1];
-    const newRow: DailyRow = {
-      ...emptyRow(dateContext),
-      id: crypto.randomUUID(),
-      report_date: last?.report_date || dateContext,
-      age_jour: last?.age_jour ?? "",
-      semaine: last?.semaine ?? "",
-    };
-    if (placementDateForLot && newRow.report_date) {
-      const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placementDateForLot);
-      newRow.age_jour = String(age);
-      newRow.semaine = String(semaine);
+    const reportDate = last?.report_date || dateContext;
+    
+    // If we have setup configs, add rows for all building+sex combinations
+    if (setupConfigs.length > 0) {
+      const newRows: DailyRow[] = setupConfigs.map(config => {
+        let newRow: DailyRow = {
+          id: crypto.randomUUID(),
+          report_date: reportDate,
+          age_jour: "",
+          semaine: "",
+          building: config.building,
+          designation: config.sex,
+          nbr: "",
+          water_l: "",
+          temp_min: "",
+          temp_max: "",
+          traitement: "",
+          verified: false,
+        };
+        if (placementDateForLot && newRow.report_date) {
+          const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placementDateForLot);
+          newRow.age_jour = String(age);
+          newRow.semaine = String(semaine);
+        }
+        return newRow;
+      });
+      setRows((prev) => [...prev, ...newRows]);
+    } else {
+      // Fallback: add single row
+      const newRow: DailyRow = {
+        ...emptyRow(dateContext),
+        id: crypto.randomUUID(),
+        report_date: reportDate,
+        age_jour: last?.age_jour ?? "",
+        semaine: last?.semaine ?? "",
+      };
+      if (placementDateForLot && newRow.report_date) {
+        const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placementDateForLot);
+        newRow.age_jour = String(age);
+        newRow.semaine = String(semaine);
+      }
+      setRows((prev) => [...prev, newRow]);
     }
-    setRows((prev) => [...prev, newRow]);
   };
 
   const removeRow = async (id: string) => {
@@ -228,6 +356,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
     reportDate: r.report_date,
     ageJour: r.age_jour.trim() !== "" ? parseInt(r.age_jour, 10) : null,
     semaine: r.semaine.trim() !== "" ? parseInt(r.semaine, 10) : null,
+    lot: lot?.trim() || null,
     building: r.building,
     designation: r.designation,
     nbr: parseInt(r.nbr, 10) || 0,
@@ -306,7 +435,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
 
   const totalMortality = rows.reduce((s, r) => s + (parseInt(r.nbr) || 0), 0);
 
-  if (loading) {
+  if (loading || setupLoading) {
     return (
       <div className="bg-card rounded-lg border border-border shadow-sm p-8 flex items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="w-5 h-5 animate-spin" />
@@ -381,6 +510,8 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
             {rows.map((row) => {
               const saved = isSavedRow(row.id);
               const readOnly = isReadOnly || (saved && !canUpdate);
+              // RESPONSABLE_FERME can only delete unsaved rows; other roles can delete based on canDelete permission
+              const canDeleteThisRow = canDelete && !(isResponsableFerme && saved);
               return (
                 <tr key={row.id}>
                   <td className="text-sm font-medium text-muted-foreground">
@@ -399,28 +530,42 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                     {row.semaine?.trim() ? (row.semaine.match(/^\d+$/) ? `S${row.semaine}` : row.semaine) : "—"}
                   </td>
                   <td>
-                    <select
-                      value={row.building}
-                      onChange={(e) => updateRow(row.id, "building", e.target.value)}
-                      className={`w-full bg-transparent border-0 outline-none text-sm py-0.5 ${readOnly ? "bg-muted/50 cursor-not-allowed" : ""}`}
-                      disabled={readOnly}
-                    >
-                      {BUILDINGS.map((b) => (
-                        <option key={b} value={b}>{b}</option>
-                      ))}
-                    </select>
+                    {setupConfigs.length > 0 ? (
+                      <span className="text-sm font-medium">{row.building}</span>
+                    ) : (
+                      <select
+                        value={row.building}
+                        onChange={(e) => updateRow(row.id, "building", e.target.value)}
+                        className={`w-full bg-transparent border-0 outline-none text-sm py-0.5 ${readOnly ? "bg-muted/50 cursor-not-allowed" : ""}`}
+                        disabled={readOnly}
+                      >
+                        {availableBuildings.map((b) => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                      </select>
+                    )}
                   </td>
                   <td>
-                    <select
-                      value={row.designation}
-                      onChange={(e) => updateRow(row.id, "designation", e.target.value)}
-                      className={`w-full bg-transparent border-0 outline-none text-sm py-0.5 ${readOnly ? "bg-muted/50 cursor-not-allowed" : ""}`}
-                      disabled={readOnly}
-                    >
-                      {DESIGNATIONS.map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
+                    {setupConfigs.length > 0 ? (
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                        row.designation === "Mâle" 
+                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300" 
+                          : "bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300"
+                      }`}>
+                        {row.designation}
+                      </span>
+                    ) : (
+                      <select
+                        value={row.designation}
+                        onChange={(e) => updateRow(row.id, "designation", e.target.value)}
+                        className={`w-full bg-transparent border-0 outline-none text-sm py-0.5 ${readOnly ? "bg-muted/50 cursor-not-allowed" : ""}`}
+                        disabled={readOnly}
+                      >
+                        {availableDesignations.map((d) => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    )}
                   </td>
                   <td>
                     <input
@@ -490,7 +635,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                       <CheckCircle className="w-5 h-5" />
                     </button>
                   </td>
-                  {!isReadOnly && canDelete ? (
+                  {!isReadOnly && canDeleteThisRow ? (
                     <td>
                       <button
                         onClick={() => removeRow(row.id)}

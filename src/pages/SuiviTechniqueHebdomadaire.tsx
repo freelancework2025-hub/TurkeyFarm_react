@@ -57,7 +57,8 @@ export default function SuiviTechniqueHebdomadaire() {
   /** For all users: show suivi content only when one batiment is selected. To change batiment, user must return to batiment selection. */
   const hasContentView = hasBatimentInUrl;
 
-  const { isAdministrateur, isResponsableTechnique, isResponsableFerme, isBackofficeEmployer, canAccessAllFarms, isReadOnly, selectedFarmId: authSelectedFarmId } = useAuth();
+  const { isAdministrateur, isResponsableTechnique, isBackofficeEmployer, canAccessAllFarms, isReadOnly, selectedFarmId: authSelectedFarmId } = useAuth();
+  const canAccessResumeCouts = isAdministrateur || isResponsableTechnique || isBackofficeEmployer;
   const { toast } = useToast();
   const navigate = useNavigate();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
@@ -497,22 +498,24 @@ export default function SuiviTechniqueHebdomadaire() {
                   <BarChart3 className="w-5 h-5 shrink-0 text-primary" />
                   <span className="font-medium text-foreground">Résumé hebdomadaire de la production</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (reportingFarmId == null) {
-                      toast({ title: "Erreur", description: "Ferme non sélectionnée.", variant: "destructive" });
-                      return;
-                    }
-                    navigate(
-                      `/suivi-technique-hebdomadaire/resume-couts?farmId=${reportingFarmId}&lot=${encodeURIComponent(lotParam)}&semaine=${encodeURIComponent(selectedSemaine)}&batiments=${allBatiments.join(",")}`
-                    );
-                  }}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left"
-                >
-                  <DollarSign className="w-5 h-5 shrink-0 text-primary" />
-                  <span className="font-medium text-foreground">Résumé des coûts hebdomadaires</span>
-                </button>
+                {canAccessResumeCouts && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (reportingFarmId == null) {
+                        toast({ title: "Erreur", description: "Ferme non sélectionnée.", variant: "destructive" });
+                        return;
+                      }
+                      navigate(
+                        `/suivi-technique-hebdomadaire/resume-couts?farmId=${reportingFarmId}&lot=${encodeURIComponent(lotParam)}&semaine=${encodeURIComponent(selectedSemaine)}&batiments=${allBatiments.join(",")}`
+                      );
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left"
+                  >
+                    <DollarSign className="w-5 h-5 shrink-0 text-primary" />
+                    <span className="font-medium text-foreground">Résumé des coûts hebdomadaires</span>
+                  </button>
+                )}
               </div>
 
             </div>

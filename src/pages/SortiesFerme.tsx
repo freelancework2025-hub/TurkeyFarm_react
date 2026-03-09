@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Building2, Calendar, Loader2, Plus, Save, Tag, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
@@ -12,7 +12,8 @@ import { api, type FarmResponse, type SortieRequest, type SortieResponse } from 
  * - ADMINISTRATEUR / RESPONSABLE_TECHNIQUE: Ligne + Enregistrer visible; can edit/delete any row.
  * - BACKOFFICE_EMPLOYER: No Ligne, no Enregistrer; all rows read-only; no delete (isReadOnly, !canCreate, !canUpdate, !canDelete).
  * - RESPONSABLE_FERME: Ligne + Enregistrer visible; saved rows read-only; no delete on saved rows (canCreate, !canUpdate, !canDelete).
- * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → Enregistrer → locked; then day 2 → Enregistrer → locked. Only the first unsaved row is editable.
+ * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → Enregistrer → locked; then day 2 → Enregistrer → locked.
+ * Only the first unsaved row is editable (for RESPONSABLE_FERME). ADMINISTRATEUR and RESPONSABLE_TECHNIQUE can edit saved rows and update them.
  * Buttons: Ligne & Enregistrer only when canCreate. Delete on row: when saved → canDelete; when new → canCreate.
  */
 
@@ -26,7 +27,7 @@ const TYPES = [
 ];
 
 /** Désignation options when type is Consommation Employés, Gratuite, or Vente Dinde Vive */
-const DESIGNATION_OPTIONS = ["Male", "Femelle", "Déclassée"];
+const DESIGNATION_OPTIONS = ["male", "femelle", "Déclassé male", "Déclassée Femelle"];
 
 const TYPES_WITH_DESIGNATION_DROPDOWN = [
   "Consommation Employés (kg)",
@@ -58,6 +59,21 @@ function addOneDay(isoDate: string): string {
   const d = new Date(isoDate + "T12:00:00");
   d.setDate(d.getDate() + 1);
   return d.toISOString().split("T")[0];
+}
+
+/** Compare two rows for equality (saved fields only). */
+function rowDataEqual(a: SortieRow, b: SortieRow): boolean {
+  return (
+    a.date === b.date &&
+    a.lot === b.lot &&
+    a.client === b.client &&
+    a.num_bl === b.num_bl &&
+    a.type === b.type &&
+    a.designation === b.designation &&
+    a.nbre_dinde === b.nbre_dinde &&
+    a.qte_brute_kg === b.qte_brute_kg &&
+    a.prix_kg === b.prix_kg
+  );
 }
 
 interface SortieRow {
@@ -111,6 +127,7 @@ export default function SortiesFerme() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
+  const originalSavedRowsRef = useRef<Map<number, SortieRow>>(new Map());
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
 
@@ -204,7 +221,9 @@ export default function SortiesFerme() {
         montant_ttc: r.montant_ttc != null ? String(r.montant_ttc) : "",
       }));
       const forSem = mapped.filter((r) => (r.semaine || "").trim() === selectedSemaine);
-      
+      originalSavedRowsRef.current = new Map(
+        mapped.filter((r): r is SortieRow & { serverId: number } => r.serverId != null).map((r) => [r.serverId, { ...r }])
+      );
       // Ensure MIN_TABLE_ROWS (7) rows for the selected semaine
       if (isReadOnly || !canCreate) {
         setRows(mapped);
@@ -227,9 +246,14 @@ export default function SortiesFerme() {
           newRows.push(emptyRow(lotParam.trim(), selectedSemaine, nextDate));
           nextDate = addOneDay(nextDate);
         }
-        setRows([...mapped, ...newRows]);
+        const finalRows = [...mapped, ...newRows];
+        originalSavedRowsRef.current = new Map(
+          finalRows.filter((r): r is SortieRow & { serverId: number } => r.serverId != null).map((r) => [r.serverId, { ...r }])
+        );
+        setRows(finalRows);
       }
     } catch {
+      originalSavedRowsRef.current = new Map();
       if (canCreate && hasSemaineInUrl && selectedSemaine) {
         const newRows: SortieRow[] = [];
         let nextDate = today;
@@ -302,7 +326,7 @@ export default function SortiesFerme() {
   });
 
   const handleSave = async () => {
-    if (!canCreate) {
+    if (!canCreate && !canUpdate) {
       toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer les données.", variant: "destructive" });
       return;
     }
@@ -315,22 +339,40 @@ export default function SortiesFerme() {
       .filter((r) => forSem(r) && r.serverId == null)
       .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     const firstUnsaved = unsavedForSem[0];
+    const savedRowsToUpdate = rows
+      .filter((r) => forSem(r) && r.serverId != null && canUpdate)
+      .filter((r) => {
+        const orig = originalSavedRowsRef.current.get(r.serverId!);
+        return orig && !rowDataEqual(r, orig);
+      });
 
-    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
+    const hasNewToCreate = canCreate && firstUnsaved && firstUnsaved.date.trim() !== "";
+    const hasUpdates = savedRowsToUpdate.length > 0;
+
+    if (!hasNewToCreate && !hasUpdates) {
       toast({
-        title: "Aucune ligne à enregistrer",
-        description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
+        title: "Aucune modification à enregistrer",
+        description: "Remplissez la date du jour pour une nouvelle ligne, ou modifiez une ligne existante.",
         variant: "destructive",
       });
       return;
     }
     setSaving(true);
     try {
-      await api.sorties.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
-      toast({
-        title: "Jour enregistré",
-        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
-      });
+      if (hasNewToCreate) {
+        await api.sorties.createBatch([rowToRequest(firstUnsaved!)], pageFarmId ?? undefined);
+      }
+      for (const row of savedRowsToUpdate) {
+        await api.sorties.update(row.serverId!, rowToRequest(row), undefined);
+        originalSavedRowsRef.current.set(row.serverId!, { ...row });
+      }
+      if (hasNewToCreate && hasUpdates) {
+        toast({ title: "Enregistré", description: "Nouvelle ligne et modifications enregistrées." });
+      } else if (hasNewToCreate) {
+        toast({ title: "Jour enregistré", description: `Le ${firstUnsaved!.date} a été enregistré.` });
+      } else if (hasUpdates) {
+        toast({ title: "Modifications enregistrées", description: `${savedRowsToUpdate.length} ligne(s) mise(s) à jour.` });
+      }
       loadSorties();
     } catch {
       /* API error — logged in backend only */
@@ -343,6 +385,13 @@ export default function SortiesFerme() {
     ? [...rows.filter((r) => (r.semaine || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
     : [];
   const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
+  const firstUnsaved = currentRows.find((r) => r.serverId == null);
+  const hasModifiedSavedRows = canUpdate && currentRows.some((r) => {
+    if (r.serverId == null) return false;
+    const orig = originalSavedRowsRef.current.get(r.serverId);
+    return orig != null && !rowDataEqual(r, orig);
+  });
+  const hasSomethingToSave = (canCreate && firstUnsaved && firstUnsaved.date.trim() !== "") || hasModifiedSavedRows;
 
   return (
     <AppLayout>
@@ -538,7 +587,7 @@ export default function SortiesFerme() {
                     <button
                       type="button"
                       onClick={handleSave}
-                      disabled={saving || loading || !selectedSemaine || firstEditableRowIndex < 0}
+                      disabled={saving || loading || !selectedSemaine || !hasSomethingToSave}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
@@ -573,7 +622,7 @@ export default function SortiesFerme() {
                     ) : (
                       currentRows.map((row, rowIndex) => {
                         const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                        const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
+                        const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
                         const showDelete = row.serverId != null ? canDelete : canCreate;
                         return (
                           <tr key={row.id}>
