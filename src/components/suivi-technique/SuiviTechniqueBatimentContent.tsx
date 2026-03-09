@@ -5,7 +5,7 @@ import ProductionTrackingTable from "@/components/suivi-technique/ProductionTrac
 import ConsumptionTrackingTable from "@/components/suivi-technique/ConsumptionTrackingTable";
 import PerformanceTrackingTable from "@/components/suivi-technique/PerformanceTrackingTable";
 import StockTrackingTable from "@/components/suivi-technique/StockTrackingTable";
-import { api, type SuiviTechniqueSetupResponse } from "@/lib/api";
+import { api, type SuiviTechniqueSetupResponse, type SetupInfoResponse } from "@/lib/api";
 
 export type TabType = "male" | "femelle";
 
@@ -19,6 +19,9 @@ export interface SuiviTechniqueBatimentContentProps {
   stockRefreshKey: number;
   /** When true, show a compact section header (e.g. when rendering multiple batiments). */
   showSectionHeader?: boolean;
+  /** Setup info from InfosSetup page for pre-populating forms */
+  maleSetupInfo?: SetupInfoResponse | null;
+  femelleSetupInfo?: SetupInfoResponse | null;
 }
 
 /**
@@ -36,6 +39,8 @@ export default function SuiviTechniqueBatimentContent({
   onRefreshStock,
   stockRefreshKey,
   showSectionHeader = false,
+  maleSetupInfo: propMaleSetupInfo,
+  femelleSetupInfo: propFemelleSetupInfo,
 }: SuiviTechniqueBatimentContentProps) {
   const [maleSetup, setMaleSetup] = useState<SuiviTechniqueSetupResponse | null>(null);
   const [femelleSetup, setFemelleSetup] = useState<SuiviTechniqueSetupResponse | null>(null);
@@ -78,6 +83,7 @@ export default function SuiviTechniqueBatimentContent({
             selectedBatiment={batiment}
             onSetupSaved={handleMaleSetupSaved}
             onSaveSuccess={onRefreshStock}
+            presetSetupInfo={propMaleSetupInfo ?? undefined}
           />
           <WeeklyTrackingTable
             key={`hebdo-${farmId}-${lot}-${semaine}-${batiment}-Mâle`}
@@ -138,6 +144,7 @@ export default function SuiviTechniqueBatimentContent({
             selectedBatiment={batiment}
             onSetupSaved={handleFemelleSetupSaved}
             onSaveSuccess={onRefreshStock}
+            presetSetupInfo={propFemelleSetupInfo ?? undefined}
           />
           <WeeklyTrackingTable
             key={`hebdo-${farmId}-${lot}-${semaine}-${batiment}-Femelle`}

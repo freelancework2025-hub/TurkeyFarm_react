@@ -7,7 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse, type SetupInfoRequest, type SetupInfoResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
-const BUILDINGS = ["Bâtiment 01", "Bâtiment 02", "Bâtiment 03", "Bâtiment 04"];
+const BUILDINGS = ["B1", "B2", "B3", "B4"];
 const SEXES = ["Mâle", "Femelle"];
 const ELEVAGE_TYPES = ["DINDE CHAIR"];
 const SOUCHES = ["PREMIUM", "Grade maker", "Optima", "Converter"];

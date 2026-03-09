@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { Save, Loader2 } from "lucide-react";
-import { api, type SuiviTechniqueSetupResponse, type SuiviTechniqueSetupRequest } from "@/lib/api";
+import { Save, Loader2, Info } from "lucide-react";
+import { api, type SuiviTechniqueSetupResponse, type SuiviTechniqueSetupRequest, type SetupInfoResponse } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -17,9 +17,11 @@ interface SuiviSetupFormProps {
   onSetupSaved?: (setup: SuiviTechniqueSetupResponse) => void;
   /** Called after setup is saved so parent can refresh stock. */
   onSaveSuccess?: () => void;
+  /** Pre-populated setup info from InfosSetup page - used to pre-fill form when no existing suivi setup exists */
+  presetSetupInfo?: SetupInfoResponse;
 }
 
-export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBatiment, onSetupSaved, onSaveSuccess }: SuiviSetupFormProps) {
+export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBatiment, onSetupSaved, onSaveSuccess, presetSetupInfo }: SuiviSetupFormProps) {
   const { isReadOnly, canCreate, canUpdate } = useAuth();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -47,7 +49,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
   const [customBatiment, setCustomBatiment] = useState("");
   const [useCustomBatiment, setUseCustomBatiment] = useState(false);
 
-  /** Load setup for this (farm, lot, semaine, sex, batiment). When none exists, form shows empty so the user can fill setup and effectif de départ. */
+  /** Load setup for this (farm, lot, semaine, sex, batiment). When none exists, pre-populate from presetSetupInfo if available. */
   const load = useCallback(async () => {
     setLoading(true);
     const batimentForApi = batimentFromPage ? effectiveBatiment : "B1";
@@ -73,7 +75,56 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
           setCustomBatiment(existing.batiment);
         }
       } else {
+        // No existing suivi setup - pre-populate from presetSetupInfo (from InfosSetup page) if available
         setHasExistingSetup(false);
+        if (presetSetupInfo) {
+          setFormData({
+            lot,
+            semaine,
+            sex,
+            typeElevage: presetSetupInfo.typeElevage || "DINDE CHAIR",
+            origineFournisseur: presetSetupInfo.origineFournisseur || "",
+            dateEclosion: presetSetupInfo.dateEclosion || null,
+            heureMiseEnPlace: presetSetupInfo.heureMiseEnPlace || null,
+            dateMiseEnPlace: presetSetupInfo.dateMiseEnPlace || null,
+            souche: presetSetupInfo.souche || "PREMIUM",
+            effectifMisEnPlace: presetSetupInfo.effectifMisEnPlace || null,
+            batiment: batimentFromPage ? effectiveBatiment : (presetSetupInfo.building || "B1"),
+          });
+        } else {
+          setFormData({
+            lot,
+            semaine,
+            sex,
+            typeElevage: "DINDE CHAIR",
+            origineFournisseur: "",
+            dateEclosion: null,
+            heureMiseEnPlace: null,
+            dateMiseEnPlace: null,
+            souche: "PREMIUM",
+            effectifMisEnPlace: null,
+            batiment: batimentFromPage ? effectiveBatiment : "B1",
+          });
+        }
+      }
+    } catch (e) {
+      // On error, try to use presetSetupInfo if available
+      setHasExistingSetup(false);
+      if (presetSetupInfo) {
+        setFormData({
+          lot,
+          semaine,
+          sex,
+          typeElevage: presetSetupInfo.typeElevage || "DINDE CHAIR",
+          origineFournisseur: presetSetupInfo.origineFournisseur || "",
+          dateEclosion: presetSetupInfo.dateEclosion || null,
+          heureMiseEnPlace: presetSetupInfo.heureMiseEnPlace || null,
+          dateMiseEnPlace: presetSetupInfo.dateMiseEnPlace || null,
+          souche: presetSetupInfo.souche || "PREMIUM",
+          effectifMisEnPlace: presetSetupInfo.effectifMisEnPlace || null,
+          batiment: batimentFromPage ? effectiveBatiment : (presetSetupInfo.building || "B1"),
+        });
+      } else {
         setFormData({
           lot,
           semaine,
@@ -88,21 +139,6 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
           batiment: batimentFromPage ? effectiveBatiment : "B1",
         });
       }
-    } catch (e) {
-      setHasExistingSetup(false);
-      setFormData({
-        lot,
-        semaine,
-        sex,
-        typeElevage: "DINDE CHAIR",
-        origineFournisseur: "",
-        dateEclosion: null,
-        heureMiseEnPlace: null,
-        dateMiseEnPlace: null,
-        souche: "PREMIUM",
-        effectifMisEnPlace: null,
-        batiment: batimentFromPage ? effectiveBatiment : "B1",
-      });
       if (!batimentFromPage) {
         setUseCustomBatiment(false);
         setCustomBatiment("");
@@ -110,7 +146,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
     } finally {
       setLoading(false);
     }
-  }, [farmId, lot, semaine, sex, effectiveBatiment, batimentFromPage]);
+  }, [farmId, lot, semaine, sex, effectiveBatiment, batimentFromPage, presetSetupInfo]);
 
   useEffect(() => {
     load();
@@ -172,7 +208,13 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
             Configuration initiale pour le lot {lot}
             {batimentFromPage && ` — Bâtiment ${effectiveBatiment}`}
           </p>
-          {!hasExistingSetup && (
+          {!hasExistingSetup && presetSetupInfo && (
+            <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
+              <Info className="w-3 h-3" />
+              Données pré-remplies depuis Infos de Setup — vérifiez et enregistrez pour confirmer.
+            </p>
+          )}
+          {!hasExistingSetup && !presetSetupInfo && (
             <p className="text-xs text-primary mt-1">
               Formulaire vide — renseignez les données et l&apos;effectif de départ pour ce sexe, puis enregistrez.
             </p>

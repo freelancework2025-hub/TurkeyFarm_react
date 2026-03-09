@@ -17,10 +17,39 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { api, type FarmResponse } from "@/lib/api";
+import { api, type FarmResponse, type SetupInfoResponse } from "@/lib/api";
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
+
+/**
+ * Normalize building name to standard format (B1, B2, etc.)
+ * Converts "Bâtiment 01" -> "B1", "Bâtiment 02" -> "B2", etc.
+ */
+function normalizeBatimentName(name: string): string {
+  if (!name) return name;
+  const trimmed = name.trim();
+  
+  // Already in correct format
+  if (/^B\d+$/.test(trimmed)) return trimmed;
+  
+  // Convert "Bâtiment 01" format to "B1"
+  const match = trimmed.match(/^Bâtiment\s*0*(\d+)$/i);
+  if (match) {
+    return `B${match[1]}`;
+  }
+  
+  // Return as-is if no conversion needed
+  return trimmed;
+}
+
+/** Represents setup info for a specific building and sex from InfosSetup page */
+interface BuildingSexSetup {
+  building: string;
+  sex: string;
+  effectifMisEnPlace: number;
+  setupInfo: SetupInfoResponse;
+}
 
 type TabType = "male" | "femelle";
 
@@ -67,6 +96,10 @@ export default function SuiviTechniqueHebdomadaire() {
   const [farmsLoading, setFarmsLoading] = useState(showFarmSelector);
   const [lots, setLots] = useState<string[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
+  
+  /** Setup info data from InfosSetup page - contains building/sex/effectif configurations */
+  const [setupInfoData, setSetupInfoData] = useState<SetupInfoResponse[]>([]);
+  const [loadingSetupInfo, setLoadingSetupInfo] = useState(false);
 
   const [activeTab, setActiveTab] = useState<TabType>("male");
   /** After batiment is chosen: null = show sex chooser; set when user picks Mâle or Femelle. */
@@ -89,7 +122,19 @@ export default function SuiviTechniqueHebdomadaire() {
   const [deleteSexDialogOpen, setDeleteSexDialogOpen] = useState(false);
   const [deleteSexLoading, setDeleteSexLoading] = useState(false);
 
-  const allBatiments = useMemo(() => [...DEFAULT_BATIMENTS, ...extraBatiments], [extraBatiments]);
+  // Get unique buildings from setupInfo data, then add default batiments and extra batiments
+  const allBatiments = useMemo(() => {
+    const setupBuildings = [...new Set(setupInfoData.map(d => d.building))];
+    // Prioritize buildings from setupInfo, then add defaults that aren't already included
+    const combined = [...setupBuildings];
+    DEFAULT_BATIMENTS.forEach(b => {
+      if (!combined.includes(b)) combined.push(b);
+    });
+    extraBatiments.forEach(b => {
+      if (!combined.includes(b)) combined.push(b);
+    });
+    return combined;
+  }, [setupInfoData, extraBatiments]);
 
   // Load farms for admin/RT
   useEffect(() => {
@@ -105,7 +150,7 @@ export default function SuiviTechniqueHebdomadaire() {
   const reportingFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
   // Fetch configured sexes from backend when batiment and semaine are selected
-  // Each semaine has its own sexes — S1 male/femelle does not appear in S2
+  // Also check setupInfo data to determine which sexes have effectifMisEnPlace configured
   useEffect(() => {
     if (!reportingFarmId || !lotParam.trim() || !selectedBatiment || !trimmedSemaine) {
       setInitialSex(null);
@@ -114,35 +159,63 @@ export default function SuiviTechniqueHebdomadaire() {
     }
 
     setLoadingSexes(true);
+    
+    // First check setupInfo to see which sexes have effectifMisEnPlace configured for this batiment
+    const setupInfoSexes = setupInfoData
+      .filter(info => info.building === selectedBatiment && info.effectifMisEnPlace > 0)
+      .map(info => info.sex);
+    
     api.suiviTechniqueSetup
       .getConfiguredSexes({ farmId: reportingFarmId, lot: lotParam.trim(), batiment: selectedBatiment, semaine: trimmedSemaine })
-      .then((sexes) => {
-        if (sexes.length === 0) {
-          // No sexes configured yet - show sex chooser
+      .then((configuredSexes) => {
+        // Combine configured sexes from suivi and available sexes from setupInfo
+        // A sex is "available" if it has effectifMisEnPlace in setupInfo OR is already configured in suivi
+        const availableSexes = [...new Set([...configuredSexes, ...setupInfoSexes])];
+        
+        if (availableSexes.length === 0) {
+          // No sexes available - show sex chooser (user needs to configure in InfosSetup first)
           setInitialSex(null);
           setOtherSexEnabled(false);
-        } else if (sexes.length === 1) {
-          // One sex configured - show that tab, allow adding the other
-          const sex = sexes[0];
+        } else if (availableSexes.length === 1) {
+          // One sex available - show that tab, allow adding the other if it has setupInfo
+          const sex = availableSexes[0];
+          const tabId: TabType = sex === "Mâle" ? "male" : "femelle";
+          setInitialSex(tabId);
+          setActiveTab(tabId);
+          // Check if the other sex has setupInfo configured
+          const otherSex = sex === "Mâle" ? "Femelle" : "Mâle";
+          const otherSexHasSetupInfo = setupInfoData.some(
+            info => info.building === selectedBatiment && info.sex === otherSex && info.effectifMisEnPlace > 0
+          );
+          setOtherSexEnabled(otherSexHasSetupInfo);
+        } else {
+          // Both sexes available - show both tabs
+          // Default to male tab if available, otherwise femelle
+          const defaultTab: TabType = availableSexes.includes("Mâle") ? "male" : "femelle";
+          setInitialSex(defaultTab);
+          setActiveTab(defaultTab);
+          setOtherSexEnabled(true);
+        }
+      })
+      .catch(() => {
+        // On error, try to use setupInfo data only
+        if (setupInfoSexes.length === 0) {
+          setInitialSex(null);
+          setOtherSexEnabled(false);
+        } else if (setupInfoSexes.length === 1) {
+          const sex = setupInfoSexes[0];
           const tabId: TabType = sex === "Mâle" ? "male" : "femelle";
           setInitialSex(tabId);
           setActiveTab(tabId);
           setOtherSexEnabled(false);
         } else {
-          // Both sexes configured - show both tabs
-          // Default to male tab, but both are enabled
           setInitialSex("male");
           setActiveTab("male");
           setOtherSexEnabled(true);
         }
       })
-      .catch(() => {
-        // On error, reset to sex chooser
-        setInitialSex(null);
-        setOtherSexEnabled(false);
-      })
       .finally(() => setLoadingSexes(false));
-  }, [reportingFarmId, lotParam, selectedBatiment, trimmedSemaine]);
+  }, [reportingFarmId, lotParam, selectedBatiment, trimmedSemaine, setupInfoData]);
 
   // Load lots for selected farm
   useEffect(() => {
@@ -154,6 +227,51 @@ export default function SuiviTechniqueHebdomadaire() {
       .catch(() => setLots([]))
       .finally(() => setLotsLoading(false));
   }, [showFarmSelector, reportingFarmId, hasLotInUrl]);
+
+  // Load setupInfo data when lot is selected - this provides building/sex configurations from InfosSetup page
+  // Normalize building names to standard format (B1, B2, etc.)
+  useEffect(() => {
+    if (!reportingFarmId || !hasLotInUrl || !lotParam.trim()) {
+      setSetupInfoData([]);
+      return;
+    }
+    setLoadingSetupInfo(true);
+    api.setupInfo
+      .list(reportingFarmId, lotParam.trim())
+      .then((data) => {
+        // Normalize building names in the loaded data
+        const normalizedData = (data ?? []).map(d => ({
+          ...d,
+          building: normalizeBatimentName(d.building),
+        }));
+        setSetupInfoData(normalizedData);
+        // Extract unique normalized buildings from setupInfo and add to extraBatiments if not already present
+        const setupBuildings = [...new Set(normalizedData.map(d => d.building))];
+        const newBuildings = setupBuildings.filter(b => !DEFAULT_BATIMENTS.includes(b) && !extraBatiments.includes(b));
+        if (newBuildings.length > 0) {
+          setExtraBatiments(prev => [...prev, ...newBuildings]);
+        }
+      })
+      .catch(() => setSetupInfoData([]))
+      .finally(() => setLoadingSetupInfo(false));
+  }, [reportingFarmId, hasLotInUrl, lotParam]);
+
+  // Get available sexes for the selected batiment from setupInfo data
+  const getAvailableSexesFromSetupInfo = useCallback((batiment: string): BuildingSexSetup[] => {
+    return setupInfoData
+      .filter(info => info.building === batiment && info.effectifMisEnPlace > 0)
+      .map(info => ({
+        building: info.building,
+        sex: info.sex,
+        effectifMisEnPlace: info.effectifMisEnPlace,
+        setupInfo: info,
+      }));
+  }, [setupInfoData]);
+
+  // Get setupInfo for a specific batiment and sex
+  const getSetupInfoForBatimentSex = useCallback((batiment: string, sex: string): SetupInfoResponse | undefined => {
+    return setupInfoData.find(info => info.building === batiment && info.sex === sex);
+  }, [setupInfoData]);
 
   const selectFarm = useCallback(
     (id: number) => {
@@ -553,27 +671,108 @@ export default function SuiviTechniqueHebdomadaire() {
                 </p>
               </div>
               <p className="text-sm font-medium text-foreground">Choisir le sexe pour ce bâtiment</p>
-              <p className="text-sm text-muted-foreground">
-                Sélectionnez le sexe (Mâle ou Femelle) pour afficher et saisir le suivi. Vous pourrez ajouter l'autre sexe plus tard en recopiant les valeurs calculées.
-              </p>
-              <div className="grid grid-cols-2 sm:grid-cols-2 gap-4 max-w-md">
-                <button
-                  type="button"
-                  onClick={() => { setInitialSex("male"); setActiveTab("male"); }}
-                  className="flex items-center justify-center gap-3 p-6 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group"
-                >
-                  <span className="h-4 w-4 shrink-0 rounded-full bg-blue-500" />
-                  <span className="font-semibold text-foreground">Mâle</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setInitialSex("femelle"); setActiveTab("femelle"); }}
-                  className="flex items-center justify-center gap-3 p-6 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group"
-                >
-                  <span className="h-4 w-4 shrink-0 rounded-full bg-rose-500" />
-                  <span className="font-semibold text-foreground">Femelle</span>
-                </button>
-              </div>
+              {(() => {
+                const maleSetupInfo = getSetupInfoForBatimentSex(selectedBatiment, "Mâle");
+                const femelleSetupInfo = getSetupInfoForBatimentSex(selectedBatiment, "Femelle");
+                const maleHasEffectif = maleSetupInfo && maleSetupInfo.effectifMisEnPlace > 0;
+                const femelleHasEffectif = femelleSetupInfo && femelleSetupInfo.effectifMisEnPlace > 0;
+                const noSetupInfo = !maleHasEffectif && !femelleHasEffectif;
+                
+                return (
+                  <>
+                    {noSetupInfo ? (
+                      <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+                        <p className="text-sm text-amber-800 dark:text-amber-200">
+                          <strong>Aucune configuration trouvée.</strong> Veuillez d'abord configurer les informations de setup 
+                          (effectif mis en place) dans la page <strong>"Infos de Setup"</strong> pour ce bâtiment ({selectedBatiment}).
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/infos-setup?farmId=${reportingFarmId}&lot=${encodeURIComponent(lotParam)}`)}
+                          className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-md bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition-colors"
+                        >
+                          Aller à Infos de Setup
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        Sélectionnez le sexe pour afficher les données de setup et saisir le suivi. 
+                        Seuls les sexes avec un effectif mis en place configuré sont disponibles.
+                      </p>
+                    )}
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
+                      {/* Mâle card */}
+                      <button
+                        type="button"
+                        onClick={() => { 
+                          if (maleHasEffectif) {
+                            setInitialSex("male"); 
+                            setActiveTab("male"); 
+                          }
+                        }}
+                        disabled={!maleHasEffectif}
+                        className={`flex flex-col gap-3 p-6 rounded-xl border-2 transition-colors text-left ${
+                          maleHasEffectif 
+                            ? "border-border bg-card hover:border-primary hover:bg-muted/50 cursor-pointer" 
+                            : "border-border/50 bg-muted/30 cursor-not-allowed opacity-60"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="h-4 w-4 shrink-0 rounded-full bg-blue-500" />
+                          <span className="font-semibold text-foreground">Mâle</span>
+                        </div>
+                        {maleSetupInfo ? (
+                          <div className="text-xs text-muted-foreground space-y-1 border-t border-border pt-3">
+                            <p><strong>Effectif mis en place:</strong> {maleSetupInfo.effectifMisEnPlace.toLocaleString()}</p>
+                            <p><strong>Date mise en place:</strong> {maleSetupInfo.dateMiseEnPlace}</p>
+                            <p><strong>Souche:</strong> {maleSetupInfo.souche}</p>
+                            <p><strong>Fournisseur:</strong> {maleSetupInfo.origineFournisseur || "—"}</p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 border-t border-border pt-3">
+                            Non configuré dans Infos de Setup
+                          </p>
+                        )}
+                      </button>
+                      
+                      {/* Femelle card */}
+                      <button
+                        type="button"
+                        onClick={() => { 
+                          if (femelleHasEffectif) {
+                            setInitialSex("femelle"); 
+                            setActiveTab("femelle"); 
+                          }
+                        }}
+                        disabled={!femelleHasEffectif}
+                        className={`flex flex-col gap-3 p-6 rounded-xl border-2 transition-colors text-left ${
+                          femelleHasEffectif 
+                            ? "border-border bg-card hover:border-primary hover:bg-muted/50 cursor-pointer" 
+                            : "border-border/50 bg-muted/30 cursor-not-allowed opacity-60"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="h-4 w-4 shrink-0 rounded-full bg-rose-500" />
+                          <span className="font-semibold text-foreground">Femelle</span>
+                        </div>
+                        {femelleSetupInfo ? (
+                          <div className="text-xs text-muted-foreground space-y-1 border-t border-border pt-3">
+                            <p><strong>Effectif mis en place:</strong> {femelleSetupInfo.effectifMisEnPlace.toLocaleString()}</p>
+                            <p><strong>Date mise en place:</strong> {femelleSetupInfo.dateMiseEnPlace}</p>
+                            <p><strong>Souche:</strong> {femelleSetupInfo.souche}</p>
+                            <p><strong>Fournisseur:</strong> {femelleSetupInfo.origineFournisseur || "—"}</p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 border-t border-border pt-3">
+                            Non configuré dans Infos de Setup
+                          </p>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           ) : (
             <>
@@ -625,16 +824,37 @@ export default function SuiviTechniqueHebdomadaire() {
                     {tab.label}
                   </button>
                 ))}
-                {!otherSexEnabled && reportingFarmId != null && (
-                  <button
-                    type="button"
-                    onClick={() => setOtherSexDialogOpen(true)}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border border-dashed border-border bg-muted/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    Ajouter l'autre sexe
-                  </button>
-                )}
+                {!otherSexEnabled && reportingFarmId != null && (() => {
+                  const otherSex = initialSex === "male" ? "Femelle" : "Mâle";
+                  const otherSexHasSetupInfo = setupInfoData.some(
+                    info => info.building === selectedBatiment && info.sex === otherSex && info.effectifMisEnPlace > 0
+                  );
+                  
+                  return otherSexHasSetupInfo ? (
+                    <button
+                      type="button"
+                      onClick={() => setOtherSexDialogOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border border-dashed border-border bg-muted/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      Ajouter l'autre sexe
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
+                      <UserPlus className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                      <span className="text-amber-800 dark:text-amber-200 text-xs">
+                        Configurez d'abord {otherSex} dans <strong>Infos de Setup</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/infos-setup?farmId=${reportingFarmId}&lot=${encodeURIComponent(lotParam)}`)}
+                        className="ml-2 px-2 py-1 rounded-md bg-amber-600 dark:bg-amber-700 text-white text-xs font-medium hover:bg-amber-700 dark:hover:bg-amber-600 transition-colors"
+                      >
+                        Aller
+                      </button>
+                    </div>
+                  );
+                })()}
                 {canDeleteSexData && (
                   <button
                     type="button"
@@ -659,6 +879,8 @@ export default function SuiviTechniqueHebdomadaire() {
                     onRefreshStock={refreshStock}
                     stockRefreshKey={stockRefreshKey}
                     showSectionHeader={false}
+                    maleSetupInfo={getSetupInfoForBatimentSex(selectedBatiment, "Mâle")}
+                    femelleSetupInfo={getSetupInfoForBatimentSex(selectedBatiment, "Femelle")}
                   />
                 </div>
               )}
@@ -670,9 +892,8 @@ export default function SuiviTechniqueHebdomadaire() {
                     <AlertDialogDescription>
                       Voulez-vous activer le suivi pour{" "}
                       <strong>{initialSex === "male" ? "Femelle" : "Mâle"}</strong> dans ce bâtiment ?{" "}
-                      <strong>Toutes les données seront vides</strong> (setup, effectif de départ, hebdo, production,
-                      consommation, performances) — vous devrez tout renseigner. Seul le tableau Stock affichera les
-                      valeurs du premier sexe dans ce bâtiment.
+                      Les données de setup (effectif, souche, fournisseur) seront pré-remplies depuis <strong>Infos de Setup</strong>.
+                      Les tableaux hebdomadaires (production, consommation, performances) seront vides et devront être renseignés.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
@@ -690,7 +911,7 @@ export default function SuiviTechniqueHebdomadaire() {
                           Activation…
                         </>
                       ) : (
-                          "Activer (données vides)"
+                          "Activer"
                         )}
                     </AlertDialogAction>
                   </AlertDialogFooter>
