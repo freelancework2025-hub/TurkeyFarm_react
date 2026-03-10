@@ -110,6 +110,9 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   const { isReadOnly, canCreate, canUpdate, canDelete } = useAuth();
   const { toast } = useToast();
 
+  // Determine if this is the first week (S1) or subsequent weeks (S2+)
+  const isFirstWeek = previousSemaine(semaine) === null;
+
   const [effectifDepart, setEffectifDepart] = useState<string>("");
   /** True when effectif départ was loaded from API (already saved). RESPONSABLE_FERME cannot modify after save (permission.mdc). */
   const [hasSavedEffectif, setHasSavedEffectif] = useState(false);
@@ -140,7 +143,43 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
           try {
             const stock = await api.suiviStock.get({ farmId, lot, semaine: prev, sex, batiment: batiment ?? undefined });
             if (stock?.effectifRestantFinSemaine != null) {
-              setEffectifDepart(String(stock.effectifRestantFinSemaine));
+              const calculatedEffectif = String(stock.effectifRestantFinSemaine);
+              setEffectifDepart(calculatedEffectif);
+              
+              // For weeks 2+: automatically save the calculated effectif départ
+              if (!isFirstWeek && (canCreate || canUpdate)) {
+                try {
+                  // Create a minimal record with just the calculated effectif départ
+                  const autoSaveData: SuiviTechniqueHebdoRequest[] = [{
+                    lot,
+                    sex,
+                    batiment,
+                    semaine,
+                    effectifDepart: stock.effectifRestantFinSemaine,
+                    recordDate: today,
+                    ageJour: null,
+                    mortaliteNbre: null,
+                    consoEauL: null,
+                    tempMin: null,
+                    tempMax: null,
+                    vaccination: null,
+                    traitement: null,
+                    observation: null,
+                  }];
+                  
+                  await api.suiviTechniqueHebdo.saveBatch(autoSaveData, farmId);
+                  setHasSavedEffectif(true);
+                  toast({ 
+                    title: "Effectif départ calculé", 
+                    description: `Effectif départ de ${semaine} automatiquement calculé et enregistré: ${calculatedEffectif}`,
+                    duration: 3000
+                  });
+                  onSaveSuccess?.();
+                } catch (error) {
+                  console.warn("Auto-save of calculated effectif failed:", error);
+                  // Don't show error to user - they can still manually save if needed
+                }
+              }
             }
           } catch {
             // ignore: keep empty or effectifInitial placeholder
@@ -281,9 +320,9 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   /** RESPONSABLE_FERME cannot update after save: once effectif départ was saved, they cannot modify it (permission.mdc). */
   const canSaveEffectif =
     (canCreate || canUpdate) && effectifEligibleRowCount > 0 && (canUpdate || !hasSavedEffectif);
-  /** Effectif input read-only when: full read-only, or effectif was already saved and user cannot update (e.g. RESPONSABLE_FERME). */
+  /** Effectif input read-only when: full read-only, or effectif was already saved and user cannot update (e.g. RESPONSABLE_FERME), or it's week 2+ (auto-calculated). */
   const effectifInputReadOnly =
-    isReadOnly || (hasSavedEffectif && !canUpdate);
+    isReadOnly || (hasSavedEffectif && !canUpdate) || !isFirstWeek;
 
   /** Save only effectif départ de la semaine. Respects permission.mdc: create for new rows, update for existing (RESPONSABLE_FERME cannot update). */
   const handleSaveEffectifDepart = async () => {
@@ -414,7 +453,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             readOnly={effectifInputReadOnly}
           />
         </div>
-        {!isReadOnly && (canCreate || canUpdate) && (
+        {!isReadOnly && (canCreate || canUpdate) && isFirstWeek && (
           <button
             type="button"
             onClick={handleSaveEffectifDepart}
@@ -429,6 +468,12 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             {savingEffectif ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Enregistrer effectif
           </button>
+        )}
+        {!isReadOnly && !isFirstWeek && effectifDepart && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-md text-sm font-medium">
+            <Save className="w-4 h-4" />
+            Auto-enregistré
+          </div>
         )}
       </div>
 

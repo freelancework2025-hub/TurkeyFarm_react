@@ -49,7 +49,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
   const [customBatiment, setCustomBatiment] = useState("");
   const [useCustomBatiment, setUseCustomBatiment] = useState(false);
 
-  /** Load setup for this (farm, lot, semaine, sex, batiment). When none exists, pre-populate from presetSetupInfo if available. */
+  /** Load setup for this (farm, lot, semaine, sex, batiment). When none exists, pre-populate from presetSetupInfo if available and auto-save. */
   const load = useCallback(async () => {
     setLoading(true);
     const batimentForApi = batimentFromPage ? effectiveBatiment : "B1";
@@ -67,7 +67,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
           heureMiseEnPlace: existing.heureMiseEnPlace || null,
           dateMiseEnPlace: existing.dateMiseEnPlace || null,
           souche: existing.souche || "PREMIUM",
-          effectifMisEnPlace: existing.effectifMisEnPlace || null,
+          effectifMisEnPlace: presetSetupInfo?.effectifMisEnPlace ?? existing.effectifMisEnPlace ?? null,
           batiment: existing.batiment || effectiveBatiment,
         });
         if (!batimentFromPage && existing.batiment && !BATIMENTS.includes(existing.batiment)) {
@@ -78,7 +78,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
         // No existing suivi setup - pre-populate from presetSetupInfo (from InfosSetup page) if available
         setHasExistingSetup(false);
         if (presetSetupInfo) {
-          setFormData({
+          const prefilledData = {
             lot,
             semaine,
             sex,
@@ -90,7 +90,25 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
             souche: presetSetupInfo.souche || "PREMIUM",
             effectifMisEnPlace: presetSetupInfo.effectifMisEnPlace || null,
             batiment: batimentFromPage ? effectiveBatiment : (presetSetupInfo.building || "B1"),
-          });
+          };
+          setFormData(prefilledData);
+          
+          // Auto-save: If data from InfosSetup exists and user has create permission, automatically save it
+          if (canCreate && !isReadOnly) {
+            try {
+              const saved = await api.suiviTechniqueSetup.save(prefilledData, farmId);
+              setHasExistingSetup(true);
+              toast({ 
+                title: "Configuration auto-enregistrée", 
+                description: "Les données depuis Infos de Setup ont été automatiquement enregistrées pour cette semaine." 
+              });
+              onSetupSaved?.(saved);
+              onSaveSuccess?.();
+            } catch (error) {
+              // If auto-save fails, just show the form - user can manually save later
+              console.warn("Auto-save failed, user can manually save:", error);
+            }
+          }
         } else {
           setFormData({
             lot,
@@ -146,7 +164,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
     } finally {
       setLoading(false);
     }
-  }, [farmId, lot, semaine, sex, effectiveBatiment, batimentFromPage, presetSetupInfo]);
+  }, [farmId, lot, semaine, sex, effectiveBatiment, batimentFromPage, presetSetupInfo, canCreate, isReadOnly, toast, onSetupSaved, onSaveSuccess]);
 
   useEffect(() => {
     load();
@@ -172,6 +190,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
       semaine,
       sex,
       batiment: batimentFromPage ? effectiveBatiment : (useCustomBatiment ? customBatiment : formData.batiment),
+      effectifMisEnPlace: presetSetupInfo?.effectifMisEnPlace ?? formData.effectifMisEnPlace,
     };
 
     setSaving(true);
@@ -208,10 +227,16 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
             Configuration initiale pour le lot {lot}
             {batimentFromPage && ` — Bâtiment ${effectiveBatiment}`}
           </p>
+          {hasExistingSetup && presetSetupInfo && (
+            <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
+              <Info className="w-3 h-3" />
+              ✓ Configuration auto-enregistrée depuis Infos de Setup
+            </p>
+          )}
           {!hasExistingSetup && presetSetupInfo && (
             <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
               <Info className="w-3 h-3" />
-              Données pré-remplies depuis Infos de Setup — vérifiez et enregistrez pour confirmer.
+              Données pré-remplies depuis Infos de Setup (auto-enregistrement en cours...)
             </p>
           )}
           {!hasExistingSetup && !presetSetupInfo && (
@@ -220,7 +245,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
             </p>
           )}
         </div>
-        {!formReadOnly && (
+        {!formReadOnly && !hasExistingSetup && (
           <button
             onClick={handleSave}
             disabled={!canEditSetup || saving}
@@ -310,18 +335,24 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
           </select>
         </div>
 
-        {/* Effectif mis en place (effectif de départ) — required when adding the other sex in the same batiment */}
+        {/* Effectif mis en place — always from InfosSetup page, read-only here */}
         <div className="space-y-1.5">
           <label className="text-sm font-medium text-foreground">Effectif mis en place</label>
-          <input
-            type="number"
-            value={formData.effectifMisEnPlace ?? ""}
-            onChange={(e) => handleChange("effectifMisEnPlace", e.target.value ? parseInt(e.target.value) : null)}
-            placeholder="0"
-            min="0"
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            readOnly={formReadOnly}
-          />
+          <div className="relative">
+            <input
+              type="number"
+              value={presetSetupInfo?.effectifMisEnPlace ?? formData.effectifMisEnPlace ?? ""}
+              readOnly
+              placeholder="0"
+              min="0"
+              className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-sm cursor-not-allowed"
+            />
+            {presetSetupInfo && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Valeur définie dans Infos de Setup (non modifiable ici)
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Bâtiment: read-only when selected from page, else dropdown + custom */}
