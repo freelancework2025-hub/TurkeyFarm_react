@@ -440,7 +440,47 @@ export default function InfosSetup() {
   };
 
   const removeRow = (id: string) => {
-    if (rows.length > 1) setRows((prev) => prev.filter((r) => r.id !== id));
+    if (rows.length <= 1) return;
+    const rowToRemove = rows.find((r) => r.id === id);
+    const isSaved = rowToRemove && isSavedRow(rowToRemove.id);
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    if (isSaved && rowToRemove && canDelete) {
+      // Persist deletion: save remaining rows via replaceBatch (removes deleted row from backend)
+      const remaining = rows.filter((r) => r.id !== id);
+      const toSend: SetupInfoRequest[] = remaining
+        .filter((r) =>
+          r.lot.trim() !== "" &&
+          r.dateMiseEnPlace &&
+          r.effectifMisEnPlace.trim() !== "" &&
+          r.origineFournisseur.trim() !== ""
+        )
+        .map((r) => ({
+          lot: r.lot.trim(),
+          dateMiseEnPlace: r.dateMiseEnPlace,
+          heureMiseEnPlace: r.heureMiseEnPlace,
+          building: r.building,
+          sex: r.sex,
+          effectifMisEnPlace: parseInt(r.effectifMisEnPlace, 10) || 0,
+          typeElevage: r.typeElevage,
+          origineFournisseur: r.origineFournisseur.trim(),
+          dateEclosion: r.dateEclosion,
+          souche: r.souche,
+        }));
+      api.setupInfo
+        .replaceBatch(toSend, reportingFarmId ?? undefined, selectedLot)
+        .then(() => {
+          toast({ title: "Ligne supprimée", description: "La ligne a été supprimée." });
+          load();
+        })
+        .catch(() => {
+          toast({
+            title: "Erreur",
+            description: "Impossible de supprimer la ligne.",
+            variant: "destructive",
+          });
+          load(); // Reload to restore state
+        });
+    }
   };
 
   const addNewBuilding = (building: string) => {
@@ -714,7 +754,7 @@ export default function InfosSetup() {
                         <th>Origine/Fournisseur</th>
                         <th>Date d'éclosion</th>
                         <th>Souche</th>
-                        {!isReadOnly && canDelete ? <th className="w-10">Actions</th> : null}
+                        {!isReadOnly && (canDelete || isResponsableTechnique) ? <th className="w-10">Actions</th> : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -817,19 +857,16 @@ export default function InfosSetup() {
                                 ))}
                               </select>
                             </td>
-                            {!isReadOnly && canDelete && !saved ? (
+                            {!isReadOnly && (canDelete || isResponsableTechnique) ? (
                               <td>
                                 <button
                                   onClick={() => removeRow(row.id)}
                                   className="text-muted-foreground hover:text-destructive transition-colors p-1"
                                   disabled={rows.length <= 1}
+                                  title="Supprimer la ligne"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
-                              </td>
-                            ) : (!isReadOnly && canDelete && saved) ? (
-                              <td>
-                                {/* Empty cell for saved rows - no delete button */}
                               </td>
                             ) : null}
                           </tr>
@@ -847,7 +884,7 @@ export default function InfosSetup() {
                         <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
                           Total Général : <span className="text-accent">{totalMale + totalFemale}</span>
                         </td>
-                        {!isReadOnly && canDelete ? <td></td> : null}
+                        {!isReadOnly && (canDelete || isResponsableTechnique) ? <td></td> : null}
                       </tr>
                     </tfoot>
                   </table>

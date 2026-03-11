@@ -197,7 +197,7 @@ export default function ReportingJournalier() {
               </button>
               <EffectifMisEnPlace farmId={reportingFarmId} lot={lotParam || undefined} />
               <DailyReportTable
-                key={selectedDate ?? undefined}
+                key={lotParam ? `${lotParam}-${selectedDate ?? "overview"}` : selectedDate ?? undefined}
                 initialDate={selectedDate ?? undefined}
                 farmId={reportingFarmId}
                 lot={lotParam || undefined}

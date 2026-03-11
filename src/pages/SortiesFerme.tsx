@@ -35,8 +35,24 @@ const TYPES_WITH_DESIGNATION_DROPDOWN = [
   "Vente Dinde Vive",
 ];
 
+const TYPES_WITHOUT_NBRE_DINDE = [
+  "Vente Aliment",
+  "Fumier",
+  "Divers",
+];
+
 function typeUsesDesignationDropdown(type: string): boolean {
   return TYPES_WITH_DESIGNATION_DROPDOWN.includes(type);
+}
+
+function typeDisablesNbreDinde(type: string): boolean {
+  return TYPES_WITHOUT_NBRE_DINDE.includes(type);
+}
+
+/** Convert string to number, handling commas and empty values */
+function toNum(s: string): number {
+  const n = parseFloat(String(s).replace(",", "."));
+  return Number.isNaN(n) ? 0 : n;
 }
 
 /** Semaine selector options (S1..S24), like LivraisonGaz */
@@ -194,10 +210,10 @@ export default function SortiesFerme() {
     if (showFarmSelector || !hasLotInUrl || !hasSemaineInUrl) return;
     setLoading(true);
     try {
+      // Load ALL sorties for the lot (not filtered by semaine) so cumulative calculation can access all weeks
       const list = await api.sorties.list({
         farmId: pageFarmId ?? undefined,
         lot: lotParam.trim() || undefined,
-        semaine: parseSemaineToNum(selectedSemaine) ?? undefined,
       });
       const normalizedSemaine = (v: number | string | null | undefined): string => {
         if (v == null) return "";
@@ -276,10 +292,18 @@ export default function SortiesFerme() {
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
-    const currentRows = rows.filter((r) => (r.semaine || "").trim() === selectedSemaine);
-    const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
-    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
+    
+    // Get the rows as they appear in the display (filtered and sorted by date)
+    const currentRows = rows
+      .filter((r) => (r.semaine || "").trim() === selectedSemaine)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    
+    // Find the last row in the display order (the one with the latest date)
+    const lastDisplayRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
+    const nextDate = lastDisplayRow?.date?.trim() ? addOneDay(lastDisplayRow.date) : today;
     const newRow = { ...emptyRow(lotParam.trim(), selectedSemaine), date: nextDate };
+    
+    // Simply append to the array - the display sorting will put it in the right place
     setRows((prev) => [...prev, newRow]);
   };
 
@@ -392,6 +416,52 @@ export default function SortiesFerme() {
     return orig != null && !rowDataEqual(r, orig);
   });
   const hasSomethingToSave = (canCreate && firstUnsaved && firstUnsaved.date.trim() !== "") || hasModifiedSavedRows;
+
+  // Calculate totals for the current week
+  const weekTotal = (() => {
+    const t = { nbre_dinde: 0, qte_brute_kg: 0, prix_kg: 0, montant_ttc: 0 };
+    for (const r of currentRows) {
+      t.nbre_dinde += toNum(r.nbre_dinde);
+      // Only include qte_brute_kg, prix_kg, and montant_ttc for rows that have nbre_dinde
+      if (r.nbre_dinde.trim() !== "") {
+        t.qte_brute_kg += toNum(r.qte_brute_kg);
+        t.prix_kg += toNum(r.prix_kg);
+        t.montant_ttc += toNum(r.montant_ttc);
+      }
+    }
+    return t;
+  })();
+
+  // Calculate cumulative totals up to the current week
+  const cumulForSelectedSemaine = (() => {
+    const t = { nbre_dinde: 0, qte_brute_kg: 0, prix_kg: 0, montant_ttc: 0 };
+    
+    // Get all semaines and sort them
+    const sems = new Set(rows.map((r) => (r.semaine || "").trim()).filter(Boolean));
+    const semOrder = Array.from(sems).sort((a, b) => {
+      const numA = parseInt(a.replace(/^S?(\d+)$/i, "$1"), 10);
+      const numB = parseInt(b.replace(/^S?(\d+)$/i, "$1"), 10);
+      if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+      return a.localeCompare(b);
+    });
+    
+    const idx = semOrder.indexOf(selectedSemaine);
+    const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
+    
+    for (const sem of semsUpTo) {
+      const weekRows = rows.filter((r) => (r.semaine || "").trim() === sem);
+      for (const r of weekRows) {
+        t.nbre_dinde += toNum(r.nbre_dinde);
+        // Only include qte_brute_kg, prix_kg, and montant_ttc for rows that have nbre_dinde
+        if (r.nbre_dinde.trim() !== "") {
+          t.qte_brute_kg += toNum(r.qte_brute_kg);
+          t.prix_kg += toNum(r.prix_kg);
+          t.montant_ttc += toNum(r.montant_ttc);
+        }
+      }
+    }
+    return t;
+  })();
 
   return (
     <AppLayout>
@@ -620,71 +690,97 @@ export default function SortiesFerme() {
                         </td>
                       </tr>
                     ) : (
-                      currentRows.map((row, rowIndex) => {
-                        const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                        const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
-                        const showDelete = row.serverId != null ? canDelete : canCreate;
-                        return (
-                          <tr key={row.id}>
-                            <td>
-                              <input type="date" value={row.date} onChange={(e) => updateRow(row.id, "date", e.target.value)} disabled={rowReadOnly} />
-                            </td>
-                            <td>
-                              <input type="text" value={row.client} onChange={(e) => updateRow(row.id, "client", e.target.value)} placeholder="—" className="min-w-[100px]" disabled={rowReadOnly} />
-                            </td>
-                            <td>
-                              <input type="text" value={row.num_bl} onChange={(e) => updateRow(row.id, "num_bl", e.target.value)} placeholder="—" disabled={rowReadOnly} />
-                            </td>
-                            <td>
-                              <select value={row.type} onChange={(e) => updateRow(row.id, "type", e.target.value)} className="w-full min-w-[140px] bg-transparent border-0 outline-none text-sm" disabled={rowReadOnly}>
-                                {TYPES.map((t) => (
-                                  <option key={t} value={t}>{t}</option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="min-w-[120px]">
-                              {typeUsesDesignationDropdown(row.type) ? (
-                                <select
-                                  value={row.designation}
-                                  onChange={(e) => updateRow(row.id, "designation", e.target.value)}
-                                  className="w-full bg-transparent border-0 outline-none text-sm"
-                                  disabled={rowReadOnly}
-                                >
-                                  <option value="">—</option>
-                                  {DESIGNATION_OPTIONS.map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
+                      <>
+                        {currentRows.map((row, rowIndex) => {
+                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
+                          const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
+                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                          return (
+                            <tr key={row.id}>
+                              <td>
+                                <input type="date" value={row.date} onChange={(e) => updateRow(row.id, "date", e.target.value)} disabled={rowReadOnly} />
+                              </td>
+                              <td>
+                                <input type="text" value={row.client} onChange={(e) => updateRow(row.id, "client", e.target.value)} placeholder="—" className="min-w-[100px]" disabled={rowReadOnly} />
+                              </td>
+                              <td>
+                                <input type="text" value={row.num_bl} onChange={(e) => updateRow(row.id, "num_bl", e.target.value)} placeholder="—" disabled={rowReadOnly} />
+                              </td>
+                              <td>
+                                <select value={row.type} onChange={(e) => updateRow(row.id, "type", e.target.value)} className="w-full min-w-[140px] bg-transparent border-0 outline-none text-sm" disabled={rowReadOnly}>
+                                  {TYPES.map((t) => (
+                                    <option key={t} value={t}>{t}</option>
                                   ))}
                                 </select>
-                              ) : (
-                                <input
-                                  type="text"
-                                  value={row.designation}
-                                  onChange={(e) => updateRow(row.id, "designation", e.target.value)}
-                                  placeholder="—"
-                                  disabled={rowReadOnly}
-                                />
-                              )}
-                            </td>
-                            <td>
-                              <input type="number" value={row.nbre_dinde} onChange={(e) => updateRow(row.id, "nbre_dinde", e.target.value)} placeholder="—" disabled={rowReadOnly} />
-                            </td>
-                            <td>
-                              <input type="number" value={row.qte_brute_kg} onChange={(e) => updateRow(row.id, "qte_brute_kg", e.target.value)} placeholder="—" step="0.1" disabled={rowReadOnly} />
-                            </td>
-                            <td>
-                              <input type="number" value={row.prix_kg} onChange={(e) => updateRow(row.id, "prix_kg", e.target.value)} placeholder="—" step="0.01" disabled={rowReadOnly} />
-                            </td>
-                            <td className="font-semibold text-sm">{row.montant_ttc || "0.00"}</td>
-                            <td>
-                              {showDelete && (
-                                <button onClick={() => removeRow(row.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1" disabled={currentRows.length <= MIN_TABLE_ROWS}>
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })
+                              </td>
+                              <td className="min-w-[120px]">
+                                {typeUsesDesignationDropdown(row.type) ? (
+                                  <select
+                                    value={row.designation}
+                                    onChange={(e) => updateRow(row.id, "designation", e.target.value)}
+                                    className="w-full bg-transparent border-0 outline-none text-sm"
+                                    disabled={rowReadOnly}
+                                  >
+                                    <option value="">—</option>
+                                    {DESIGNATION_OPTIONS.map((opt) => (
+                                      <option key={opt} value={opt}>{opt}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    value={row.designation}
+                                    onChange={(e) => updateRow(row.id, "designation", e.target.value)}
+                                    placeholder="—"
+                                    disabled={rowReadOnly}
+                                  />
+                                )}
+                              </td>
+                              <td>
+                                <input type="number" value={row.nbre_dinde} onChange={(e) => updateRow(row.id, "nbre_dinde", e.target.value)} placeholder="—" disabled={rowReadOnly || typeDisablesNbreDinde(row.type)} />
+                              </td>
+                              <td>
+                                <input type="number" value={row.qte_brute_kg} onChange={(e) => updateRow(row.id, "qte_brute_kg", e.target.value)} placeholder="—" step="0.1" disabled={rowReadOnly} />
+                              </td>
+                              <td>
+                                <input type="number" value={row.prix_kg} onChange={(e) => updateRow(row.id, "prix_kg", e.target.value)} placeholder="—" step="0.01" disabled={rowReadOnly} />
+                              </td>
+                              <td className="font-semibold text-sm">{row.montant_ttc || "0.00"}</td>
+                              <td>
+                                {showDelete && (
+                                  <button onClick={() => removeRow(row.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1" disabled={currentRows.length <= MIN_TABLE_ROWS}>
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {currentRows.length > 0 && (
+                          <>
+                            <tr className="bg-muted/60">
+                              <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                                TOTAL {selectedSemaine}
+                              </td>
+                              <td className="font-semibold text-sm">{weekTotal.nbre_dinde}</td>
+                              <td className="font-semibold text-sm">{weekTotal.qte_brute_kg.toFixed(1)}</td>
+                              <td className="font-semibold text-sm">{weekTotal.prix_kg.toFixed(2)}</td>
+                              <td className="font-semibold text-sm">{weekTotal.montant_ttc.toFixed(2)}</td>
+                              <td></td>
+                            </tr>
+                            <tr className="bg-muted/50">
+                              <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                                CUMUL
+                              </td>
+                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.nbre_dinde}</td>
+                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.qte_brute_kg.toFixed(1)}</td>
+                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.prix_kg.toFixed(2)}</td>
+                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.montant_ttc.toFixed(2)}</td>
+                              <td></td>
+                            </tr>
+                          </>
+                        )}
+                      </>
                     )}
                   </tbody>
                 </table>

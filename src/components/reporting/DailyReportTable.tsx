@@ -268,7 +268,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
     } finally {
       setLoading(false);
     }
-  }, [initialDate, farmId, isReadOnly, placementDateForLot, isNewReport, createEmptyRowsFromSetup]);
+  }, [initialDate, farmId, lot, isReadOnly, placementDateForLot, isNewReport, createEmptyRowsFromSetup]);
 
   useEffect(() => {
     load();

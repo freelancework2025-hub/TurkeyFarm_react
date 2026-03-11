@@ -214,7 +214,7 @@ export default function WeeklyProductionSummaryContent({
     return Number.isNaN(pct) ? null : pct;
   }, [aggregatedRows]);
 
-  // CONSOMME ALIMENT (semaine) and CUMUL: read from database via resume-summary API (only (batiment, sex) with stock saved).
+  // CONSOMME ALIMENT (semaine) and CUMUL: from resume-summary API (backend computes from stock ± livraisons for S1 and S2+; livraisons may be 0).
   // Per-sex values = sum across B1+B2+B3+... (all active batiments) for each sex.
   const aggregatedConsommation = useMemo(() => {
     if (resumeConsoSummary != null) {

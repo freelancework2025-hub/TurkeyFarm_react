@@ -12,8 +12,8 @@ interface ConsumptionRow {
   unit?: string;
 }
 
-// Rule: B1 = Stock_prev + Livraisons_sexe − Stock_actuel. B2+ = Stock_transfer − Stock_actuel
-// (Stock_transfer = stock from last active batiment of same sex in the semaine). CUMUL = 0 until CONSOMMATION computed.
+// Backend computes consommation_aliment_kg and cumul from DB (stock_aliment_hebdo + aliment_movement). React only reads from API; no client-side calculation.
+// Rule (backend): B1 = Stock_prev + Livraisons − Stock_actuel; B2+ = Stock_transfer − Stock_actuel. CUMUL = week-only sum.
 const ROWS: ConsumptionRow[] = [
   { key: "consommation_aliment", label: "CONSOMMATION ALIMENT", editable: false, unit: "kg" },
   { key: "cumul_aliment", label: "CUMUL ALIMENT CONSOMMÉ", editable: false, unit: "kg" },
@@ -51,7 +51,8 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
     }
   }, [farmId, lot, semaine, sex, batiment, toast, refreshKey]);
 
-  // Refetch when refreshKey changes (e.g. after stock aliment save) so CONSOMMATION ALIMENT — S1 updates.
+  // Refetch when refreshKey changes (e.g. after stock aliment save) so CONSOMMATION ALIMENT updates for S1 and S2+.
+  // Backend computes conso from stock (and livraisons when present); livraisons may be 0 — we display the returned value (including 0).
   useEffect(() => {
     load();
   }, [load]);
@@ -76,6 +77,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
 
   const readOnlyCell = "px-4 py-2 text-sm text-center tabular-nums bg-muted/40";
 
+  // Display backend value as-is: 0 and any positive number are valid (conso computed from stock ± livraisons).
   const formatValue = (val: number | null | undefined, unit?: string): string => {
     if (val == null || Number.isNaN(val)) return "—";
     const s = Number.isInteger(val) ? String(val) : val.toFixed(2).replace(".", ",");

@@ -6,3 +6,4 @@ export { MiniTrendChart, type TrendDataPoint } from "./MiniTrendChart";
 export { WaterConsumptionLineChart, type DailyWaterDataPoint } from "./WaterConsumptionLineChart";
 export { MortalityLineChart, type DailyMortalityDataPoint } from "./MortalityLineChart";
 export { WeekOverWeekTable, type WoWRow } from "./WeekOverWeekTable";
+export { DailyMetricsCard } from "./DailyMetricsCard";

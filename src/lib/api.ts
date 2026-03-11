@@ -329,6 +329,17 @@ export const api = {
       }),
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/daily-reports/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+    /** Get dashboard summary for the latest day (lot optional - if not provided, finds most recent lot automatically) */
+    getDashboardSummary: (farmId?: number | null, lot?: string | null, token?: string | null) => {
+      const params = new URLSearchParams();
+      if (farmId != null) params.set("farmId", String(farmId));
+      if (lot != null && lot.trim() !== "") params.set("lot", lot.trim());
+      const queryString = params.toString();
+      return apiFetch<DailyDashboardSummary>(
+        `/api/daily-reports/dashboard-summary${queryString ? `?${queryString}` : ""}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
   },
   /** Sorties Ferme — optional farmId, lot and semaine for filtering */
   sorties: {
@@ -921,7 +932,7 @@ export const api = {
         }
       ),
   },
-  /** Suivi de Consommation Hebdomadaire — conso aliment semaine (saisie), cumul, indice eau/aliment, conso kg/j (computed). Lot → Semaine → Batiment. */
+  /** Suivi de Consommation Hebdomadaire — consommation and cumul are computed in backend from DB; get() returns those values for display. Lot → Semaine → Batiment. */
   suiviConsommationHebdo: {
     get: (params: { farmId: number; lot: string; semaine: string; sex: string; batiment?: string | null }, token?: string | null) => {
       const search = new URLSearchParams();
@@ -1811,7 +1822,7 @@ export interface SuiviConsommationHebdoRequest {
   consommationAlimentKg?: number | null;
 }
 
-/** Suivi de Consommation Hebdo — response (cumul, totalEau, indice, conso kg/j computed) */
+/** Suivi de Consommation Hebdo — response. All values are computed in the backend from DB (stock + livraisons). Frontend must only read; never calculate consommation or cumul on the client. */
 export interface SuiviConsommationHebdoResponse {
   id?: number;
   farmId: number;
@@ -1819,7 +1830,9 @@ export interface SuiviConsommationHebdoResponse {
   semaine: string;
   sex: string;
   batiment?: string | null;
+  /** Backend-computed (Stock_prev + Livraisons - Stock_current). Read-only. */
   consommationAlimentSemaine?: number | null;
+  /** Backend-computed week-only cumul. Read-only. */
   cumulAlimentConsomme?: number | null;
   totalEauSemaineL?: number | null;
   indiceEauAliment?: number | null;
@@ -1829,7 +1842,7 @@ export interface SuiviConsommationHebdoResponse {
   updatedAt?: string;
 }
 
-/** Resume page consumption summary — CONSOMME ALIMENT (semaine) and CUMUL from DB, only (batiment, sex) with stock saved. Per-sex = sum across B1+B2+B3+... */
+/** Resume page consumption summary — CONSOMME ALIMENT and CUMUL computed in backend from DB; frontend reads only. Per-sex = sum across B1+B2+B3+... */
 export interface ConsoResumeSummary {
   consoAlimentSemaineSum?: number | null;
   cumulAlimentConsommeSum?: number | null;
@@ -1966,4 +1979,32 @@ export interface PerformanceNormeResponse {
   version?: number;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Effectif initial (Effectif Mis en Place) per building and sex for the lot */
+export interface DailyEffectifInitialEntry {
+  building: string;
+  sex: string;
+  effectifInitial: number;
+}
+
+/** Daily Dashboard Summary — aggregated metrics from the latest day's report */
+export interface DailyDashboardSummary {
+  reportDate: string;
+  ageJour?: number | null;
+  semaine?: number | null;
+  lot: string;
+  sexMetrics: DailySexMetrics[];
+  totalMortality: number;
+  /** Effectif initial per bâtiment/sex (same as Effectif Mis en Place in Reporting Journalier) */
+  effectifInitialByBuildingSex?: DailyEffectifInitialEntry[];
+}
+
+export interface DailySexMetrics {
+  sex: string;
+  mortalityCount: number;
+  waterConsumption: number;
+  tempMin?: number | null;
+  tempMax?: number | null;
+  traitement?: string | null;
 }

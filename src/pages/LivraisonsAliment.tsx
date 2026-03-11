@@ -103,6 +103,7 @@ export default function LivraisonsAliment() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
@@ -469,6 +470,43 @@ export default function LivraisonsAliment() {
     }
   };
 
+  /** True if row has minimum content to be saved (date + at least one of designation, supplier, qte, deliveryNoteNumber). */
+  const hasRowContent = (row: LivraisonRow) =>
+    (row.designation?.trim() ?? "") !== "" ||
+    (row.supplier?.trim() ?? "") !== "" ||
+    (row.qte?.trim() ?? "") !== "" ||
+    (row.deliveryNoteNumber?.trim() ?? "") !== "";
+
+  /** Save all unsaved rows that have date and content. */
+  const saveAllUnsavedRows = async () => {
+    if (!lotFilter.trim() || !selectedSemaine) {
+      toast({ title: "Lot et semaine requis", description: "Indiquez le lot et la semaine.", variant: "destructive" });
+      return;
+    }
+    const unsavedWithData = currentRows.filter(
+      (r) => r.serverId == null && r.date?.trim() && hasRowContent(r) && canCreate
+    );
+    if (unsavedWithData.length === 0) {
+      toast({
+        title: "Rien à enregistrer",
+        description: "Remplissez la date et au moins un champ (désignation, fournisseur, quantité ou N° BL) pour une ou plusieurs lignes.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSavingAll(true);
+    try {
+      for (const row of unsavedWithData) {
+        await saveRow(row);
+      }
+      if (unsavedWithData.length > 1) {
+        toast({ title: "Enregistrement terminé", description: `${unsavedWithData.length} ligne(s) enregistrée(s).` });
+      }
+    } finally {
+      setSavingAll(false);
+    }
+  };
+
   /** Rows for the selected semaine only; sorted by date (day 1, day 2, ...). */
   const currentRows = selectedSemaine
     ? [...rows.filter((r) => (r.sem || "").trim() === selectedSemaine)].sort(
@@ -691,15 +729,37 @@ export default function LivraisonsAliment() {
                     </p>
                   )}
                 </div>
-                {canCreate && (
-                  <button
-                    type="button"
-                    onClick={addRow}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                  >
-                    <Plus className="w-4 h-4" /> Ligne
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {(canCreate || canUpdate) && !isReadOnly && (
+                    <button
+                      type="button"
+                      onClick={saveAllUnsavedRows}
+                      disabled={
+                        loading ||
+                        savingAll ||
+                        !currentRows.some((r) => r.serverId == null && r.date?.trim() && hasRowContent(r) && canCreate)
+                      }
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none transition-opacity"
+                      title="Enregistrer toutes les lignes remplies (date + au moins un champ)"
+                    >
+                      {savingAll ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Check className="w-4 h-4" />
+                      )}
+                      Enregistrer
+                    </button>
+                  )}
+                  {canCreate && (
+                    <button
+                      type="button"
+                      onClick={addRow}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
+                    >
+                      <Plus className="w-4 h-4" /> Ligne
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="overflow-x-auto">

@@ -1,8 +1,15 @@
 /**
  * Tableau de bord — Single unified dashboard with real KPIs from database.
- * Tracks suivi technique, production, and costs per farm/lot/semaine.
+ * 
+ * Role-based views:
+ * - RESPONSABLE_TECHNIQUE & ADMINISTRATEUR: See weekly aggregated metrics (existing view)
+ * - RESPONSABLE_FERME & BACKOFFICE_EMPLOYER: See daily metrics from the latest saved day
+ * 
+ * Data sources:
+ * - Weekly: suiviCoutHebdo.getResumeSummary, suiviConsommationHebdo.getResumeSummary, suiviTechniqueHebdo.list
+ * - Daily: dailyReports.getDashboardSummary
+ * 
  * Farm-specific data isolation: Responsable Ferme sees only their farm.
- * Data sources: suiviCoutHebdo.getResumeSummary, suiviConsommationHebdo.getResumeSummary, suiviTechniqueHebdo.list
  */
 
 import { useState, useEffect, useMemo } from "react";
@@ -12,6 +19,7 @@ import {
   KPICard,
   WaterConsumptionLineChart,
   MortalityLineChart,
+  DailyMetricsCard,
 } from "@/components/dashboard";
 import type {
   DashboardFilters,
@@ -26,16 +34,30 @@ import {
   DollarSign,
   Building2,
   ClipboardList,
+  Loader2,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, type DailyDashboardSummary } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { MagicCard } from "@/components/ui/magic-card";
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
 
 export default function Dashboard() {
-  const { canAccessAllFarms, isResponsableFerme, selectedFarmId, selectedFarm } =
-    useAuth();
+  const { 
+    canAccessAllFarms, 
+    isResponsableFerme, 
+    selectedFarmId, 
+    selectedFarm,
+    isResponsableTechnique,
+    isAdministrateur,
+    isBackofficeEmployer,
+  } = useAuth();
+
+  // Determine which dashboard view to show
+  // Weekly view: RT and Admin
+  // Daily view: Responsable Ferme and Backoffice
+  const showWeeklyDashboard = isResponsableTechnique || isAdministrateur;
+  const showDailyDashboard = isResponsableFerme || isBackofficeEmployer;
 
   const [filters, setFilters] = useState<DashboardFilters>(() => ({
     farmId: isResponsableFerme ? selectedFarmId : null,
@@ -51,8 +73,28 @@ export default function Dashboard() {
   const effectiveFarmId =
     filters.farmId ?? (isResponsableFerme ? selectedFarmId : null);
   const hasFarmContext = !!effectiveFarmId;
-  const canFetchData =
-    hasFarmContext && !!filters.lot && !!filters.week;
+
+  // For daily dashboard (Responsable Ferme & Backoffice): always show last day of last lot.
+  // When backoffice has no farm selected, use first farm so data loads immediately.
+  const effectiveFarmIdForDaily =
+    effectiveFarmId ?? (showDailyDashboard && farms.length > 0 ? farms[0]?.id ?? null : null);
+  
+  // Weekly dashboard requires farm + lot + week
+  const canFetchWeeklyData = showWeeklyDashboard && hasFarmContext && !!filters.lot && !!filters.week;
+  
+  // Daily dashboard requires only farm (lot is auto-determined: last day of last lot)
+  const canFetchDailyData = showDailyDashboard && !!effectiveFarmIdForDaily;
+  
+  // Legacy for backwards compatibility
+  const canFetchData = canFetchWeeklyData;
+  
+  // Only Responsable Technique and Administrateur can see pricing information
+  const canSeePricing = isResponsableTechnique || isAdministrateur;
+
+  // Daily dashboard state
+  const [dailySummary, setDailySummary] = useState<DailyDashboardSummary | null>(null);
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyError, setDailyError] = useState<string | null>(null);
 
   useEffect(() => {
     if (canAccessAllFarms) {
@@ -90,6 +132,10 @@ export default function Dashboard() {
   >([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Mean INDICE DE CONSOMMATION RÉEL across bâtiments, by sex (weekly dashboard). */
+  const [indiceMeanBySex, setIndiceMeanBySex] = useState<{ male: number | null; female: number | null } | null>(null);
+  /** Mean INDICE DE CONSOMMATION RÉEL across bâtiments, by sex (daily dashboard — Responsable Ferme). */
+  const [dailyIndiceMeanBySex, setDailyIndiceMeanBySex] = useState<{ male: number | null; female: number | null } | null>(null);
 
   useEffect(() => {
     if (!canFetchData || !effectiveFarmId || !filters.lot || !filters.week) {
@@ -152,6 +198,112 @@ export default function Dashboard() {
     filters.lot,
     filters.week,
   ]);
+
+  // Fetch mean INDICE DE CONSOMMATION RÉEL by sex (one value per sex = average over bâtiments)
+  useEffect(() => {
+    if (!canFetchWeeklyData || !effectiveFarmId || !filters.lot || !filters.week) {
+      setIndiceMeanBySex(null);
+      return;
+    }
+    const sexes = ["Mâle", "Femelle"] as const;
+    const promises: Array<{ sex: string; batiment: string }> = [];
+    for (const sex of sexes) {
+      for (const batiment of DEFAULT_BATIMENTS) {
+        promises.push({ sex, batiment });
+      }
+    }
+    Promise.all(
+      promises.map(({ sex, batiment }) =>
+        api.suiviPerformancesHebdo
+          .get({
+            farmId: effectiveFarmId,
+            lot: filters.lot!,
+            semaine: filters.week!,
+            sex,
+            batiment,
+          })
+          .then((res) => ({ sex, value: res.indiceConsommationReel ?? null }))
+          .catch(() => ({ sex, value: null }))
+      )
+    ).then((results) => {
+      const maleValues = results.filter((r) => r.sex === "Mâle" && r.value != null).map((r) => r.value as number);
+      const femaleValues = results.filter((r) => r.sex === "Femelle" && r.value != null).map((r) => r.value as number);
+      const mean = (arr: number[]) =>
+        arr.length === 0 ? null : arr.reduce((a, b) => a + b, 0) / arr.length;
+      setIndiceMeanBySex({
+        male: mean(maleValues),
+        female: mean(femaleValues),
+      });
+    });
+  }, [canFetchWeeklyData, effectiveFarmId, filters.lot, filters.week]);
+
+  // Fetch daily dashboard data (lot = null → backend returns last day of last lot)
+  useEffect(() => {
+    if (!canFetchDailyData || !effectiveFarmIdForDaily) {
+      setDailySummary(null);
+      setDailyLoading(false);
+      return;
+    }
+
+    setDailyLoading(true);
+    setDailyError(null);
+
+    api.dailyReports
+      .getDashboardSummary(effectiveFarmIdForDaily, null) // null = last day of last lot
+      .then((data) => {
+        setDailySummary(data);
+      })
+      .catch((err) => {
+        setDailyError(err?.message ?? "Erreur lors du chargement des données journalières.");
+        setDailySummary(null);
+      })
+      .finally(() => setDailyLoading(false));
+  }, [canFetchDailyData, effectiveFarmIdForDaily]);
+
+  // Fetch mean INDICE DE CONSOMMATION RÉEL by sex for daily dashboard (lot + semaine from last day)
+  useEffect(() => {
+    if (!showDailyDashboard || !effectiveFarmIdForDaily || !dailySummary?.lot || !dailySummary?.semaine) {
+      setDailyIndiceMeanBySex(null);
+      return;
+    }
+    const lot = dailySummary.lot;
+    const s = dailySummary.semaine;
+    const semaine = s != null ? (typeof s === "number" ? `S${s}` : String(s).startsWith("S") ? String(s) : `S${s}`) : "";
+    if (!semaine) {
+      setDailyIndiceMeanBySex(null);
+      return;
+    }
+    const sexes = ["Mâle", "Femelle"] as const;
+    const promises: Array<{ sex: string; batiment: string }> = [];
+    for (const sex of sexes) {
+      for (const batiment of DEFAULT_BATIMENTS) {
+        promises.push({ sex, batiment });
+      }
+    }
+    Promise.all(
+      promises.map(({ sex, batiment }) =>
+        api.suiviPerformancesHebdo
+          .get({
+            farmId: effectiveFarmIdForDaily,
+            lot,
+            semaine,
+            sex,
+            batiment,
+          })
+          .then((res) => ({ sex, value: res.indiceConsommationReel ?? null }))
+          .catch(() => ({ sex, value: null }))
+      )
+    ).then((results) => {
+      const maleValues = results.filter((r) => r.sex === "Mâle" && r.value != null).map((r) => r.value as number);
+      const femaleValues = results.filter((r) => r.sex === "Femelle" && r.value != null).map((r) => r.value as number);
+      const mean = (arr: number[]) =>
+        arr.length === 0 ? null : arr.reduce((a, b) => a + b, 0) / arr.length;
+      setDailyIndiceMeanBySex({
+        male: mean(maleValues),
+        female: mean(femaleValues),
+      });
+    });
+  }, [showDailyDashboard, effectiveFarmIdForDaily, dailySummary?.lot, dailySummary?.semaine]);
 
   const { totalMortality, effectifDepart, mortalityPct } = useMemo(() => {
     if (!hebdoList.length) {
@@ -250,153 +402,243 @@ export default function Dashboard() {
               Tableau de bord
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Suivi des indicateurs hebdomadaires - Production, mortalité, consommation et coûts
+              {showWeeklyDashboard
+                ? "Suivi des indicateurs hebdomadaires - Production, mortalité, consommation et coûts"
+                : "Dernier jour enregistré (dernier lot) — métriques quotidiennes"}
             </p>
           </div>
 
-          <DashboardFilterBar
-            filters={filters}
-            onFiltersChange={setFilters}
-            farms={farms}
-            lots={lots}
-            showFarmSelector={showFarmSelector}
-            fixedFarmId={fixedFarmId}
-          />
+          {/* Only show filter bar for weekly dashboard users */}
+          {showWeeklyDashboard && (
+            <DashboardFilterBar
+              filters={filters}
+              onFiltersChange={setFilters}
+              farms={farms}
+              lots={lots}
+              showFarmSelector={showFarmSelector}
+              fixedFarmId={fixedFarmId}
+            />
+          )}
 
-          {showFarmSelector && !hasFarmContext && (
+          {showFarmSelector && !hasFarmContext && !(showDailyDashboard && effectiveFarmIdForDaily) && (
             <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 py-16 animate-in fade-in duration-300">
                 <Building2 className="h-16 w-16 text-muted-foreground" />
                 <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
                   Choisissez une ferme
                 </h2>
                 <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
-                  Sélectionnez une ferme, un lot et une semaine pour afficher les métriques.
+                  {showWeeklyDashboard
+                    ? "Sélectionnez une ferme, un lot et une semaine pour afficher les métriques."
+                    : "Sélectionnez une ferme pour afficher les métriques quotidiennes."}
                 </p>
               </div>
           )}
 
-          {hasFarmContext && !canFetchData && (
-            <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 py-16 animate-in fade-in duration-300">
-                <ClipboardList className="h-16 w-16 text-muted-foreground" />
-                <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
-                  Lot et semaine requis
-                </h2>
-                <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
-                  Sélectionnez un lot et une semaine, puis cliquez sur Appliquer pour charger les données.
-                </p>
-              </div>
-          )}
-
-          {loading && canFetchData && (
-            <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-              <span>Chargement des données…</span>
-            </div>
-          )}
-
-          {error && (
-            <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
-              {error}
-            </div>
-          )}
-
-          {!loading && canFetchData && !error && costsSummary != null && (
+          {/* Weekly Dashboard View (RT & Admin) */}
+          {showWeeklyDashboard && (
             <>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                  <KPICard
-                    label="Total oiseaux produits"
-                      value={costsSummary.totalNbreProduction ?? 0}
-                      icon={Bird}
-                      animateValue
-                    />
-                  </MagicCard>
-                <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                    <KPICard
-                      label="Poids vif produit"
-                      value={costsSummary.poidsVifProduitKg ?? 0}
-                      unit="kg"
-                      icon={Scale}
-                      animateValue
-                    />
-                  </MagicCard>
-                <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                    <KPICard
-                      label="Mortalité cumulative"
-                      value={
-                        mortalityPct != null
-                          ? `${mortalityPct.toFixed(2)}%`
-                          : totalMortality > 0
-                          ? `${totalMortality} (sans %)`
-                          : "-"
-                      }
-                      icon={HeartPulse}
-                      status={
-                        mortalityPct != null
-                          ? mortalityPct > 3
-                            ? "danger"
-                            : "success"
-                          : "neutral"
-                      }
-                    />
-                  </MagicCard>
-                <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                    <KPICard
-                      label="Consommation aliment"
-                      value={
-                        consoAlimentKg != null
-                          ? consoAlimentKg.toLocaleString("fr-FR", {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 1,
-                            })
-                          : "-"
-                      }
-                      unit="kg/sem"
-                      icon={Wheat}
-                    />
-                  </MagicCard>
-              </div>
+              {hasFarmContext && !canFetchWeeklyData && (
+                <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 py-16 animate-in fade-in duration-300">
+                    <ClipboardList className="h-16 w-16 text-muted-foreground" />
+                    <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
+                      Lot et semaine requis
+                    </h2>
+                    <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
+                      Sélectionnez un lot et une semaine, puis cliquez sur Appliquer pour charger les données.
+                    </p>
+                  </div>
+              )}
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                    <KPICard
-                      label="Effectif restant fin de semaine"
-                      value={costsSummary.effectifRestantFinSemaine ?? 0}
-                      icon={Bird}
-                      animateValue
-                    />
-                  </MagicCard>
-                <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                  <KPICard
-                    label="Prix de revient / sujet"
-                    value={costsSummary.prixRevientParSujet != null ? String(Number(costsSummary.prixRevientParSujet).toFixed(2)) + " DH" : "-"}
-                    icon={DollarSign}
-                  />
-                </MagicCard>
-                <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                  <KPICard
-                    label="Prix de revient / kg"
-                    value={costsSummary.prixRevientParKg != null ? String(Number(costsSummary.prixRevientParKg).toFixed(2)) + " DH" : "-"}
-                    icon={DollarSign}
-                  />
-                </MagicCard>
-              </div>
+              {loading && canFetchWeeklyData && (
+                <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                  <span>Chargement des données…</span>
+                </div>
+              )}
 
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
-                  <WaterConsumptionLineChart
-                    data={dailyWaterData}
-                    semaine={filters.week ?? ""}
-                  />
-                </MagicCard>
-                <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
-                  <MortalityLineChart
-                    data={dailyMortalityData}
-                    semaine={filters.week ?? ""}
-                  />
-                </MagicCard>
-              </div>
+              {error && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
+                  {error}
+                </div>
+              )}
 
+              {!loading && canFetchWeeklyData && !error && costsSummary != null && (
+                <>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                      <KPICard
+                        label="Total oiseaux produits"
+                          value={costsSummary.totalNbreProduction ?? 0}
+                          icon={Bird}
+                          animateValue
+                        />
+                      </MagicCard>
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Mortalité cumulative"
+                          value={
+                            mortalityPct != null
+                              ? `${mortalityPct.toFixed(2)}%`
+                              : totalMortality > 0
+                              ? `${totalMortality} (sans %)`
+                              : "-"
+                          }
+                          icon={HeartPulse}
+                          status={
+                            mortalityPct != null
+                              ? mortalityPct > 3
+                                ? "danger"
+                                : "success"
+                              : "neutral"
+                          }
+                        />
+                      </MagicCard>
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Consommation aliment"
+                          value={
+                            consoAlimentKg != null
+                              ? consoAlimentKg.toLocaleString("fr-FR", {
+                                  minimumFractionDigits: 0,
+                                  maximumFractionDigits: 1,
+                                })
+                              : "-"
+                          }
+                          unit="kg/sem"
+                          icon={Wheat}
+                        />
+                      </MagicCard>
+                  </div>
+
+                  {/* Moyenne INDICE DE CONSOMMATION RÉEL par sexe (moyenne entre les bâtiments). Nécessite: suivi consommation + poids vif produit (stock) pour la semaine. */}
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div title={indiceMeanBySex?.male == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
+                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Moy. INDICE DE CONSOMMATION RÉEL — Mâle"
+                          value={indiceMeanBySex?.male != null ? Number(indiceMeanBySex.male.toFixed(2)) : "-"}
+                          icon={Scale}
+                        />
+                      </MagicCard>
+                    </div>
+                    <div title={indiceMeanBySex?.female == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
+                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Moy. INDICE DE CONSOMMATION RÉEL — Femelle"
+                          value={indiceMeanBySex?.female != null ? Number(indiceMeanBySex.female.toFixed(2)) : "-"}
+                          icon={Scale}
+                        />
+                      </MagicCard>
+                    </div>
+                  </div>
+
+                  <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${canSeePricing ? 'lg:grid-cols-3' : 'lg:grid-cols-1'}`}>
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Effectif restant fin de semaine"
+                          value={costsSummary.effectifRestantFinSemaine ?? 0}
+                          icon={Bird}
+                          animateValue
+                        />
+                      </MagicCard>
+                    {canSeePricing && (
+                      <>
+                        <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                          <KPICard
+                            label="Prix de revient / sujet"
+                            value={costsSummary.prixRevientParSujet != null ? String(Number(costsSummary.prixRevientParSujet).toFixed(2)) + " DH" : "-"}
+                            icon={DollarSign}
+                          />
+                        </MagicCard>
+                        <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                          <KPICard
+                            label="Prix de revient / kg"
+                            value={costsSummary.prixRevientParKg != null ? String(Number(costsSummary.prixRevientParKg).toFixed(2)) + " DH" : "-"}
+                            icon={DollarSign}
+                          />
+                        </MagicCard>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
+                      <WaterConsumptionLineChart
+                        data={dailyWaterData}
+                        semaine={filters.week ?? ""}
+                      />
+                    </MagicCard>
+                    <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
+                      <MortalityLineChart
+                        data={dailyMortalityData}
+                        semaine={filters.week ?? ""}
+                      />
+                    </MagicCard>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* Daily Dashboard View (Responsable Ferme & Backoffice) */}
+          {showDailyDashboard && (
+            <>
+              {dailyLoading && (
+                <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                  <span>Chargement des métriques quotidiennes…</span>
+                </div>
+              )}
+
+              {dailyError && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
+                  {dailyError}
+                </div>
+              )}
+
+              {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && dailySummary && (
+                <>
+                  {showFarmSelector && filters.farmId !== effectiveFarmIdForDaily && (
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Affichage : <strong>{farms.find((f) => f.id === effectiveFarmIdForDaily)?.name ?? "Ferme"}</strong> — dernier jour du dernier lot
+                    </p>
+                  )}
+                  {/* Moyenne INDICE DE CONSOMMATION RÉEL par sexe (même semaine que le rapport du jour). Nécessite: suivi consommation + poids vif produit (stock). */}
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 mb-6">
+                    <div title={dailyIndiceMeanBySex?.male == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
+                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Moy. INDICE DE CONSOMMATION RÉEL — Mâle"
+                          value={dailyIndiceMeanBySex?.male != null ? Number(dailyIndiceMeanBySex.male.toFixed(2)) : "-"}
+                          icon={Scale}
+                        />
+                      </MagicCard>
+                    </div>
+                    <div title={dailyIndiceMeanBySex?.female == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
+                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Moy. INDICE DE CONSOMMATION RÉEL — Femelle"
+                          value={dailyIndiceMeanBySex?.female != null ? Number(dailyIndiceMeanBySex.female.toFixed(2)) : "-"}
+                          icon={Scale}
+                        />
+                      </MagicCard>
+                    </div>
+                  </div>
+                  <DailyMetricsCard data={dailySummary} />
+                </>
+              )}
+
+              {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && !dailySummary && (
+                <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 py-16 animate-in fade-in duration-300">
+                    <ClipboardList className="h-16 w-16 text-muted-foreground" />
+                    <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
+                      Aucune donnée disponible
+                    </h2>
+                    <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
+                      Aucun rapport journalier n'a été enregistré pour cette ferme.
+                    </p>
+                  </div>
+              )}
             </>
           )}
         </div>
