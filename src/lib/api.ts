@@ -802,6 +802,53 @@ export const api = {
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/depenses-divers/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
   },
+  /** Planning de Vaccination — RT/Admin only. List by farm and lot. */
+  vaccinationPlanning: {
+    list: (params: { farmId?: number | null; lot: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("lot", params.lot);
+      if (params.farmId != null) search.set("farmId", String(params.farmId));
+      return apiFetch<VaccinationPlanningResponse[]>(
+        `/api/vaccination-planning?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    get: (id: number, token?: string | null) =>
+      apiFetch<VaccinationPlanningResponse>(`/api/vaccination-planning/${id}`, { token: token ?? getStoredToken() }),
+    create: (body: VaccinationPlanningRequest, token?: string | null) =>
+      apiFetch<VaccinationPlanningResponse>("/api/vaccination-planning", {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    createBatch: (body: VaccinationPlanningRequest[], farmId?: number | null, token?: string | null) =>
+      apiFetch<VaccinationPlanningResponse[]>(
+        farmId != null ? `/api/vaccination-planning/batch?farmId=${farmId}` : "/api/vaccination-planning/batch",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      ),
+    replace: (params: { lot: string; farmId?: number | null }, body: VaccinationPlanningRequest[], token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("lot", params.lot);
+      if (params.farmId != null) search.set("farmId", String(params.farmId));
+      return apiFetch<VaccinationPlanningResponse[]>(`/api/vaccination-planning/replace?${search.toString()}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      });
+    },
+    update: (id: number, body: VaccinationPlanningRequest, token?: string | null) =>
+      apiFetch<VaccinationPlanningResponse>(`/api/vaccination-planning/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+        token: token ?? getStoredToken(),
+      }),
+    delete: (id: number, token?: string | null) =>
+      apiFetch<void>(`/api/vaccination-planning/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+  },
   /** Liste des employés — global list, not scoped by farm */
   employers: {
     list: (token?: string | null) =>
@@ -1711,6 +1758,36 @@ export interface DepenseDiversResponse {
   prixPerUnit?: number | null;
   montant?: number | null;
   version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Planning de Vaccination — request (RT/Admin only) */
+export interface VaccinationPlanningRequest {
+  farmId?: number | null;
+  lot: string;
+  ordre: number;
+  age: string;
+  planDate?: string | null;
+  motif?: string | null;
+  vaccinTraitement?: string | null;
+  quantite?: string | null;
+  administration?: string | null;
+  remarques?: string | null;
+}
+
+export interface VaccinationPlanningResponse {
+  id: number;
+  farmId: number;
+  lot: string;
+  ordre: number;
+  age: string;
+  planDate?: string | null;
+  motif?: string | null;
+  vaccinTraitement?: string | null;
+  quantite?: string | null;
+  administration?: string | null;
+  remarques?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

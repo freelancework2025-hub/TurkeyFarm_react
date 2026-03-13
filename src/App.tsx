@@ -11,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import ReportingJournalier from "./pages/ReportingJournalier";
 import SuiviTechniqueHebdomadaire from "./pages/SuiviTechniqueHebdomadaire";
 import InfosSetup from "./pages/InfosSetup";
+import PlanningVaccination from "./pages/PlanningVaccination";
 import ResumeProductionHebdoPage from "./pages/ResumeProductionHebdoPage";
 import ResumeCoutsHebdoPage from "./pages/ResumeCoutsHebdoPage";
 import SortiesFerme from "./pages/SortiesFerme";
@@ -75,6 +76,17 @@ const App = () => (
                 <ProtectedRoute>
                   <InfosSetup />
                 </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/planning-vaccination"
+              element={
+                <RoleRestrictedRoute
+                  allowedRoles={["ADMINISTRATEUR", "RESPONSABLE_TECHNIQUE"]}
+                  redirectTo="/dashboard"
+                >
+                  <PlanningVaccination />
+                </RoleRestrictedRoute>
               }
             />
             <Route

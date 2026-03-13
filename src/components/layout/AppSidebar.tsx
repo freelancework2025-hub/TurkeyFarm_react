@@ -28,7 +28,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const NAV_SECTIONS = [
+const NAV_SECTIONS_BASE = [
   {
     label: "Tableau de bord",
     icon: LayoutDashboard,
@@ -56,6 +56,7 @@ const NAV_SECTIONS = [
       { label: "Données mises en place", path: "/infos-setup" },
       { label: "Reporting Journalier", path: "/reporting-journalier" },
       { label: "Suivi Technique Hebdo", path: "/suivi-technique-hebdomadaire" },
+      { label: "Planning de vaccination", path: "/planning-vaccination", rolesOnly: ["ADMINISTRATEUR", "RESPONSABLE_TECHNIQUE"] as const },
     ],
   },
   {
@@ -80,16 +81,25 @@ const NAV_SECTIONS = [
 export default function AppSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { logout, isUserManager, hasFullAccess, isBackofficeEmployer } = useAuth();
+  const { logout, isUserManager, hasFullAccess, isBackofficeEmployer, user } = useAuth();
   const showEmployesLink = hasFullAccess || isBackofficeEmployer;
   const [openSections, setOpenSections] = useState<string[]>(["Suivi charge", "Suivi technique", "Suivi de sortie"]);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
 
-  const navSections = NAV_SECTIONS.filter(
-    (s) => s.path !== "/utilisateurs" || isUserManager
-  );
+  const userRoles = new Set((user?.roles ?? []).map((r) => r.name ?? ""));
+
+  const navSections = NAV_SECTIONS_BASE.map((section) => {
+    if (section.path !== undefined && section.path !== "/utilisateurs") return section;
+    if (section.path === "/utilisateurs" && !isUserManager) return null;
+    if (!section.children) return section;
+    const filteredChildren = section.children.filter((child: { label: string; path: string; rolesOnly?: readonly string[] }) => {
+      if (!child.rolesOnly) return true;
+      return child.rolesOnly.some((role) => userRoles.has(role));
+    });
+    return { ...section, children: filteredChildren };
+  }).filter(Boolean) as typeof NAV_SECTIONS_BASE;
 
   const openLogoutDialog = () => {
     setMobileOpen(false);
