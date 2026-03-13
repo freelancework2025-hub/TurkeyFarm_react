@@ -100,7 +100,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
               setHasExistingSetup(true);
               toast({ 
                 title: "Configuration auto-enregistrée", 
-                description: "Les données depuis Infos de Setup ont été automatiquement enregistrées pour cette semaine." 
+                description: "Les données depuis Données mises en place ont été automatiquement enregistrées pour cette semaine." 
               });
               onSetupSaved?.(saved);
               onSaveSuccess?.();
@@ -197,7 +197,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
     try {
       const saved = await api.suiviTechniqueSetup.save(dataToSave, farmId);
       setHasExistingSetup(true);
-      toast({ title: "Configuration enregistrée", description: "Les informations de setup ont été sauvegardées." });
+      toast({ title: "Configuration enregistrée", description: "Les données mises en place ont été sauvegardées." });
       onSetupSaved?.(saved);
       onSaveSuccess?.();
     } catch {
@@ -211,7 +211,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
     return (
       <div className="bg-card rounded-lg border border-border shadow-sm p-6 flex items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="w-5 h-5 animate-spin" />
-        <span>Chargement des informations de setup…</span>
+        <span>Chargement des données mises en place…</span>
       </div>
     );
   }
@@ -221,7 +221,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
       <div className="flex items-center justify-between px-5 py-4 border-b border-border">
         <div>
           <h3 className="text-base font-display font-bold text-foreground">
-            Infos de Setup — {sex}
+            Données mises en place — {sex}
           </h3>
           <p className="text-xs text-muted-foreground">
             Configuration initiale pour le lot {lot}
@@ -230,13 +230,13 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
           {hasExistingSetup && presetSetupInfo && (
             <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
               <Info className="w-3 h-3" />
-              ✓ Configuration auto-enregistrée depuis Infos de Setup
+              ✓ Configuration auto-enregistrée depuis Données mises en place
             </p>
           )}
           {!hasExistingSetup && presetSetupInfo && (
             <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
               <Info className="w-3 h-3" />
-              Données pré-remplies depuis Infos de Setup (auto-enregistrement en cours...)
+              Données pré-remplies depuis Données mises en place (auto-enregistrement en cours...)
             </p>
           )}
           {!hasExistingSetup && !presetSetupInfo && (
@@ -349,7 +349,7 @@ export default function SuiviSetupForm({ farmId, lot, semaine, sex, selectedBati
             />
             {presetSetupInfo && (
               <p className="text-xs text-muted-foreground mt-1">
-                Valeur définie dans Infos de Setup (non modifiable ici)
+                Valeur définie dans Données mises en place (non modifiable ici)
               </p>
             )}
           </div>

@@ -166,10 +166,12 @@ export default function Dashboard() {
   } = useAuth();
 
   // Determine which dashboard view to show
-  // Weekly view: RT and Admin
-  // Daily view: Responsable Ferme and Backoffice (can also access hebdo via entry)
+  // RT-like workflow (entry → farm selection → daily/hebdo): RT, Admin, AND Backoffice (same navigation, Backoffice read-only)
+  const useRtaLikeWorkflow = isResponsableTechnique || isAdministrateur || isBackofficeEmployer;
+  // Weekly-specific: RT and Admin (e.g. canSeePricing)
   const showWeeklyDashboard = isResponsableTechnique || isAdministrateur;
-  const showDailyDashboard = isResponsableFerme || isBackofficeEmployer;
+  // RF-only: Responsable Ferme has fixed farm, uses simplified entry (du jour / hebdo) with rfView
+  const showDailyDashboard = isResponsableFerme;
 
   // Responsable Ferme / Backoffice: entry → "Dashboard du jour" or "Dashboard hebdomadaire"
   type RfDashboardView = "entry" | "daily" | "hebdo";
@@ -206,31 +208,35 @@ export default function Dashboard() {
     filters.farmId ?? (isResponsableFerme ? selectedFarmId : null);
   const hasFarmContext = !!effectiveFarmId;
 
-  // For daily dashboard: Responsable Ferme/Backoffice use effectiveFarmId; RT/Admin in "daily" sub-view use selectedFarmIdForDaily.
+  // For daily dashboard: RF uses effectiveFarmId; RT/Admin/Backoffice in "daily" sub-view use selectedFarmIdForDaily.
   const effectiveFarmIdForDaily =
-    showWeeklyDashboard && rtaView === "daily" && selectedFarmIdForDaily != null
+    useRtaLikeWorkflow && rtaView === "daily" && selectedFarmIdForDaily != null
       ? selectedFarmIdForDaily
       : effectiveFarmId ?? (showDailyDashboard && farms.length > 0 ? farms[0]?.id ?? null : null);
   
   // Weekly dashboard requires farm + lot + week
-  // Also true for Responsable Ferme/Backoffice when in hebdo flow with lot + week selected
+  // Also true for: RF in hebdo flow; Backoffice in weekly flow (rtaView=weekly, hebdoStep=dashboard)
   const isRfInHebdoDashboard =
     showDailyDashboard && rfView === "hebdo" && hebdoStep === "dashboard" && !!effectiveFarmId && !!hebdoLot && !!hebdoWeek;
+  const isBackofficeInHebdoDashboard =
+    isBackofficeEmployer && rtaView === "weekly" && hebdoStep === "dashboard" && !!hebdoFarmId && !!hebdoLot && !!hebdoWeek;
   const canFetchWeeklyData =
-    (showWeeklyDashboard && hasFarmContext && !!filters.lot && !!filters.week) || isRfInHebdoDashboard;
+    (showWeeklyDashboard && hasFarmContext && !!filters.lot && !!filters.week) ||
+    isRfInHebdoDashboard ||
+    isBackofficeInHebdoDashboard;
   
-  // Daily dashboard: Responsable Ferme/Backoffice always; RT/Admin when in "daily" sub-view with a farm selected
+  // Daily dashboard: RF when rfView=daily; RT/Admin/Backoffice when rtaView=daily with farm selected
   const canFetchDailyData =
-    (showDailyDashboard && !!effectiveFarmIdForDaily) ||
-    (showWeeklyDashboard && rtaView === "daily" && !!selectedFarmIdForDaily);
+    (showDailyDashboard && rfView === "daily" && !!effectiveFarmIdForDaily) ||
+    (useRtaLikeWorkflow && rtaView === "daily" && !!selectedFarmIdForDaily);
   
   // Legacy for backwards compatibility — weekly fetch uses effectiveFarmId, filters, or hebdo* for RF
   const canFetchData = canFetchWeeklyData;
   const effectiveFarmIdForWeekly =
-    isRfInHebdoDashboard ? effectiveFarmId : (filters.farmId ?? effectiveFarmId);
-  const effectiveLotForWeekly = isRfInHebdoDashboard ? hebdoLot : filters.lot;
-  const effectiveWeekForWeekly = isRfInHebdoDashboard ? hebdoWeek : filters.week;
-  const effectiveSexForWeekly = isRfInHebdoDashboard ? hebdoSex : filters.sex ?? hebdoSex;
+    isRfInHebdoDashboard ? effectiveFarmId : isBackofficeInHebdoDashboard ? hebdoFarmId : (filters.farmId ?? effectiveFarmId);
+  const effectiveLotForWeekly = isRfInHebdoDashboard || isBackofficeInHebdoDashboard ? hebdoLot : filters.lot;
+  const effectiveWeekForWeekly = isRfInHebdoDashboard || isBackofficeInHebdoDashboard ? hebdoWeek : filters.week;
+  const effectiveSexForWeekly = isRfInHebdoDashboard || isBackofficeInHebdoDashboard ? hebdoSex : filters.sex ?? hebdoSex;
   
   // Only Responsable Technique and Administrateur can see pricing information
   const canSeePricing = isResponsableTechnique || isAdministrateur;
@@ -297,11 +303,11 @@ export default function Dashboard() {
   const [setupInfoRows, setSetupInfoRows] = useState<{ building: string; sex: string; effectifMisEnPlace?: number | null }[]>([]);
 
   // Fetch SetupInfo (InfosSetup) to derive batiments per sex for moyenne INDICE DE CONSOMMATION
-  const isDailyModeForSetup = !showWeeklyDashboard || rtaView === "daily";
-  const isRfHebdoMode = showDailyDashboard && rfView === "hebdo";
+  const isDailyViewForSetup = (showDailyDashboard && rfView === "daily") || (useRtaLikeWorkflow && rtaView === "daily");
+  const isHebdoViewForSetup = (showDailyDashboard && rfView === "hebdo") || (isBackofficeEmployer && rtaView === "weekly");
   useEffect(() => {
-    const farmId = isDailyModeForSetup ? effectiveFarmIdForDaily : effectiveFarmId;
-    const lot = isRfHebdoMode && hebdoLot ? hebdoLot : isDailyModeForSetup ? dailySummary?.lot : filters.lot;
+    const farmId = isDailyViewForSetup ? effectiveFarmIdForDaily : (isHebdoViewForSetup ? effectiveFarmIdForWeekly : effectiveFarmId);
+    const lot = isDailyViewForSetup ? dailySummary?.lot : (isHebdoViewForSetup ? effectiveLotForWeekly : filters.lot);
     if (!farmId || !lot) {
       setSetupInfoRows([]);
       return;
@@ -317,13 +323,14 @@ export default function Dashboard() {
       })
       .catch(() => setSetupInfoRows([]));
   }, [
-    isDailyModeForSetup,
-    isRfHebdoMode,
+    isDailyViewForSetup,
+    isHebdoViewForSetup,
     effectiveFarmId,
     effectiveFarmIdForDaily,
+    effectiveFarmIdForWeekly,
+    effectiveLotForWeekly,
     filters.lot,
     dailySummary?.lot,
-    hebdoLot,
   ]);
 
   useEffect(() => {
@@ -483,7 +490,7 @@ export default function Dashboard() {
   }, [canFetchDailyData, effectiveFarmIdForDaily]);
 
   // Moyen indice de conso aliment par sexe (daily) = (somme indices batiments du sexe) / nb TOTAL batiments
-  const showDailyIndice = showDailyDashboard || (showWeeklyDashboard && rtaView === "daily");
+  const showDailyIndice = showDailyDashboard || (useRtaLikeWorkflow && rtaView === "daily");
   useEffect(() => {
     if (!showDailyIndice || !effectiveFarmIdForDaily || !dailySummary?.lot || !dailySummary?.semaine) {
       setDailyIndiceMeanBySex(null);
@@ -645,17 +652,22 @@ export default function Dashboard() {
             <div>
               <h1 className="font-display text-2xl font-bold text-foreground md:text-3xl">
                 Tableau de bord
+                {isBackofficeEmployer && (
+                  <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    Consultation seule
+                  </span>
+                )}
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
                 {showDailyDashboard && rfView === "entry"
                   ? "Choisissez un type de tableau de bord"
-                  : showWeeklyDashboard && rtaView === "entry"
+                  : useRtaLikeWorkflow && rtaView === "entry"
                     ? "Choisissez un type de tableau de bord"
-                    : showWeeklyDashboard && rtaView === "daily-farms"
+                    : useRtaLikeWorkflow && rtaView === "daily-farms"
                       ? "Sélectionnez une ferme pour le dashboard du jour"
-                      : showWeeklyDashboard && rtaView === "daily"
+                      : useRtaLikeWorkflow && rtaView === "daily"
                         ? "Dernier jour enregistré (dernier lot) — métriques quotidiennes"
-                        : (showWeeklyDashboard && rtaView === "weekly") || (showDailyDashboard && rfView === "hebdo")
+                        : (useRtaLikeWorkflow && rtaView === "weekly") || (showDailyDashboard && rfView === "hebdo")
                           ? hebdoStep === "dashboard"
                             ? "Suivi des indicateurs hebdomadaires - Production, mortalité, consommation (données filtrées par sexe)"
                             : "Sélectionnez les critères pour afficher les métriques"
@@ -664,12 +676,14 @@ export default function Dashboard() {
                             : "Dernier jour enregistré (dernier lot) — métriques quotidiennes"}
               </p>
             </div>
-            {/* Back navigation for RT/Admin or RF in hebdo */}
-            {((showWeeklyDashboard && rtaView !== "entry") || (showDailyDashboard && rfView === "hebdo")) && (
+            {/* Back navigation for RT/Admin, RF in hebdo, or RF in daily (Dashboard du jour) */}
+            {((useRtaLikeWorkflow && rtaView !== "entry") || (showDailyDashboard && (rfView === "hebdo" || rfView === "daily"))) && (
               <button
                 type="button"
                 onClick={() => {
-                  if (showDailyDashboard && rfView === "hebdo") {
+                  if (showDailyDashboard && rfView === "daily") {
+                    setRfView("entry");
+                  } else if (showDailyDashboard && rfView === "hebdo") {
                     if (hebdoStep === "dashboard") setHebdoStep("sex");
                     else if (hebdoStep === "sex") { setHebdoStep("week"); setHebdoSex(null); }
                     else if (hebdoStep === "week") { setHebdoStep("lot"); setHebdoWeek(null); }
@@ -692,7 +706,7 @@ export default function Dashboard() {
           </div>
 
           {/* RT/Admin: Entry — two cards: Dashboard du jour / Dashboard hebdomadaire */}
-          {showWeeklyDashboard && rtaView === "entry" && (
+          {useRtaLikeWorkflow && rtaView === "entry" && (
             <div className="grid gap-6 sm:grid-cols-2 lg:gap-8">
               <button
                 type="button"
@@ -751,7 +765,7 @@ export default function Dashboard() {
           )}
 
           {/* RT/Admin: Farm selection for Dashboard du jour */}
-          {showWeeklyDashboard && rtaView === "daily-farms" && (
+          {useRtaLikeWorkflow && rtaView === "daily-farms" && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 Cliquez sur une ferme pour afficher le dashboard du dernier jour du dernier lot.
@@ -791,7 +805,7 @@ export default function Dashboard() {
           )}
 
           {/* Weekly Dashboard: Card-based filter flow (farm → lot → week → sex → dashboard) */}
-          {showWeeklyDashboard && rtaView === "weekly" && hebdoStep !== "dashboard" && (
+          {useRtaLikeWorkflow && rtaView === "weekly" && hebdoStep !== "dashboard" && (
             <div className="space-y-6">
               {/* Breadcrumb */}
               <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -931,7 +945,7 @@ export default function Dashboard() {
           )}
 
           {/* Weekly Dashboard View (RT & Admin, or RF/Backoffice in hebdo) — metrics when hebdoStep === 'dashboard' */}
-          {((showWeeklyDashboard && rtaView === "weekly") || (showDailyDashboard && rfView === "hebdo")) && hebdoStep === "dashboard" && (
+          {((useRtaLikeWorkflow && rtaView === "weekly") || (showDailyDashboard && rfView === "hebdo")) && hebdoStep === "dashboard" && (
             <>
               {/* Selection summary badge */}
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm">
@@ -1092,7 +1106,7 @@ export default function Dashboard() {
                     <Separator />
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {(hebdoSex == null || hebdoSex === "Mâle") && (
-                    <div title="Moyen = (indice B1 + indice B3 + …) / nombre de bâtiments Mâle dans Infos de Setup.">
+                    <div title="Moyen = (indice B1 + indice B3 + …) / nombre de bâtiments Mâle dans Données mises en place.">
                       <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
                         <KPICard
                           label="Moy. Indice de Consommation aliment — Mâle"
@@ -1103,7 +1117,7 @@ export default function Dashboard() {
                     </div>
                     )}
                     {(hebdoSex == null || hebdoSex === "Femelle") && (
-                    <div title="Moyen = (indice B2 + indice B4 + …) / nombre de bâtiments Femelle dans Infos de Setup.">
+                    <div title="Moyen = (indice B2 + indice B4 + …) / nombre de bâtiments Femelle dans Données mises en place.">
                       <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
                         <KPICard
                           label="Moy. Indice de Consommation aliment — Femelle"
@@ -1335,7 +1349,7 @@ export default function Dashboard() {
           )}
 
           {/* Daily Dashboard View (Responsable Ferme & Backoffice when rfView=daily, or RT/Admin in "daily" sub-view) */}
-          {((showDailyDashboard && rfView === "daily") || (showWeeklyDashboard && rtaView === "daily")) && (
+          {((showDailyDashboard && rfView === "daily") || (useRtaLikeWorkflow && rtaView === "daily")) && (
             <>
               {dailyLoading && (
                 <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
@@ -1352,7 +1366,7 @@ export default function Dashboard() {
 
               {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && dailySummary && (
                 <>
-                  {((showFarmSelector && filters.farmId !== effectiveFarmIdForDaily) || (showWeeklyDashboard && rtaView === "daily")) && (
+                  {((showFarmSelector && filters.farmId !== effectiveFarmIdForDaily) || (useRtaLikeWorkflow && rtaView === "daily")) && (
                     <p className="text-sm text-muted-foreground mb-2">
                       Affichage : <strong>{farms.find((f) => f.id === effectiveFarmIdForDaily)?.name ?? "Ferme"}</strong> — dernier jour du dernier lot
                     </p>
@@ -1412,7 +1426,7 @@ export default function Dashboard() {
                           </div>
                           <Separator />
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                          <div title="Moyen = (indice B1 + indice B3 + …) / nombre total de tous les bâtiments (Mâle + Femelle) dans Infos de Setup.">
+                          <div title="Moyen = (indice B1 + indice B3 + …) / nombre total de tous les bâtiments (Mâle + Femelle) dans Données mises en place.">
                             <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
                               <KPICard
                                 label="Moy. Indice de Consommation aliment — Mâle"
@@ -1421,7 +1435,7 @@ export default function Dashboard() {
                               />
                             </MagicCard>
                           </div>
-                          <div title="Moyen = (indice B2 + indice B4 + …) / nombre total de tous les bâtiments (Mâle + Femelle) dans Infos de Setup.">
+                          <div title="Moyen = (indice B2 + indice B4 + …) / nombre total de tous les bâtiments (Mâle + Femelle) dans Données mises en place.">
                             <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
                               <KPICard
                                 label="Moy. Indice de Consommation aliment — Femelle"

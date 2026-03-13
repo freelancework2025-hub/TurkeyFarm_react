@@ -88,7 +88,7 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
               Effectif Mis en Place
             </h2>
             <p className="text-xs text-muted-foreground">
-              Données issues de la configuration initiale (Infos de Setup)
+              Données issues de la configuration initiale (Données mises en place)
             </p>
           </div>
         </div>
@@ -96,7 +96,7 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
           <Info className="w-8 h-8" />
           <p className="text-sm text-center">
             Aucune configuration de setup trouvée pour ce lot.<br />
-            Veuillez d'abord configurer les informations de setup dans la page "Infos de Setup".
+            Veuillez d'abord configurer les données mises en place dans la page "Données mises en place".
           </p>
         </div>
       </div>
@@ -112,10 +112,10 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
           </h2>
           <p className="text-xs text-muted-foreground">
             {allFarmsMode
-              ? "Données issues de la configuration initiale — Infos de Setup (toutes fermes)"
+              ? "Données issues de la configuration initiale — Données mises en place (toutes fermes)"
               : selectedFarmName
                 ? `Ferme : ${selectedFarmName} — Données issues de la configuration initiale`
-                : "Données issues de la configuration initiale (Infos de Setup)"}
+                : "Données issues de la configuration initiale (Données mises en place)"}
           </p>
         </div>
       </div>

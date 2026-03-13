@@ -274,6 +274,9 @@ export default function InfosSetup() {
     canUpdate,
     canDelete
   } = useAuth();
+
+  /** Only Responsable Technique and Administrateur can fill/edit setup info; others can only view. */
+  const canFillSetupInfo = isResponsableTechnique || isAdministrateur;
   
   const { toast } = useToast();
   
@@ -329,13 +332,6 @@ export default function InfosSetup() {
   // Load setup information for the selected lot
   const load = useCallback(async () => {
     if (!hasLotInUrl) return;
-    
-    console.log("🔍 InfosSetup - Starting data load with:", {
-      hasLotInUrl,
-      reportingFarmId,
-      selectedLot,
-      urlFarmId
-    });
     
     setLoading(true);
     try {
@@ -408,7 +404,7 @@ export default function InfosSetup() {
       setAvailableBuildings(combined);
 
       let finalRows: SetupRow[];
-      if (isReadOnly) {
+      if (!canFillSetupInfo) {
         finalRows = setupRows;
       } else if (setupRows.length) {
         const empty = emptyRow(selectedLot, combined);
@@ -419,7 +415,7 @@ export default function InfosSetup() {
       }
       
       console.log("🎯 InfosSetup - Final rows to display:", {
-        isReadOnly,
+        canFillSetupInfo,
         setupRowsCount: setupRows.length,
         finalRowsCount: finalRows.length,
         finalRows
@@ -432,7 +428,7 @@ export default function InfosSetup() {
     } finally {
       setLoading(false);
     }
-  }, [reportingFarmId, selectedLot, hasLotInUrl, isReadOnly]);
+  }, [reportingFarmId, selectedLot, hasLotInUrl, canFillSetupInfo]);
 
   useEffect(() => {
     console.log("🔄 InfosSetup - useEffect triggered, calling load()");
@@ -561,8 +557,8 @@ export default function InfosSetup() {
   };
 
   const handleSave = async () => {
-    if (!canCreate) {
-      toast({ title: "Non autorisé", description: "Vous ne pouvez pas créer de données.", variant: "destructive" });
+    if (!canFillSetupInfo) {
+      toast({ title: "Non autorisé", description: "Seuls le responsable technique et l'administrateur peuvent renseigner les données mises en place.", variant: "destructive" });
       return;
     }
 
@@ -630,7 +626,7 @@ export default function InfosSetup() {
       }
 
       toast({ 
-        title: "Informations de setup enregistrées", 
+        title: "Données mises en place enregistrées", 
         description: `${toSend.length} ligne(s) enregistrée(s).` 
       });
       await load();
@@ -639,7 +635,7 @@ export default function InfosSetup() {
     } catch {
       toast({
         title: "Erreur",
-        description: "Impossible d'enregistrer les informations de setup.",
+        description: "Impossible d'enregistrer les données mises en place.",
         variant: "destructive",
       });
     } finally {
@@ -659,7 +655,7 @@ export default function InfosSetup() {
       <AppLayout>
         <div className="bg-card rounded-lg border border-border shadow-sm p-8 flex items-center justify-center gap-2 text-muted-foreground">
           <Loader2 className="w-5 h-5 animate-spin" />
-          <span>Chargement des informations de setup…</span>
+          <span>Chargement des données mises en place…</span>
         </div>
       </AppLayout>
     );
@@ -668,10 +664,10 @@ export default function InfosSetup() {
   return (
     <AppLayout>
       <div className="page-header">
-        <h1>Infos de Setup</h1>
+        <h1>Données mises en place</h1>
         <p>
           Configuration initiale de l'élevage — Informations de base réutilisables pour tout le lot
-          {isReadOnly && (
+          {!canFillSetupInfo && (
             <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               Consultation seule
             </span>
@@ -682,9 +678,9 @@ export default function InfosSetup() {
       {showFarmSelector ? (
         <div className="space-y-6">
           <p className="text-sm text-muted-foreground">
-            {isReadOnly
-              ? "Choisissez une ferme pour consulter les informations de setup. Vous pouvez changer de ferme sans vous déconnecter."
-              : "Choisissez une ferme pour consulter et gérer les informations de setup. Vous pouvez changer de ferme sans vous déconnecter."}
+            {!canFillSetupInfo
+              ? "Choisissez une ferme pour consulter les données mises en place. Vous pouvez changer de ferme sans vous déconnecter."
+              : "Choisissez une ferme pour consulter et gérer les données mises en place. Vous pouvez changer de ferme sans vous déconnecter."}
           </p>
           {farmsLoading ? (
             <div className="bg-card rounded-lg border border-border shadow-sm p-12 flex items-center justify-center gap-2 text-muted-foreground">
@@ -734,9 +730,9 @@ export default function InfosSetup() {
               loading={lotsLoading}
               onSelectLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
               onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
-              canCreate={!isReadOnly}
-              title="Choisir un lot — Infos de Setup"
-              emptyMessage="Aucun lot. Créez d'abord un lot pour configurer les informations de setup."
+              canCreate={canFillSetupInfo}
+              title="Choisir un lot — Données mises en place"
+              emptyMessage="Aucun lot. Créez d'abord un lot pour configurer les données mises en place."
             />
           ) : (
             <>
@@ -755,7 +751,7 @@ export default function InfosSetup() {
                 <div className="flex items-center justify-between px-5 py-4 border-b border-border">
                   <div>
                     <h2 className="text-lg font-display font-bold text-foreground">
-                      Informations de Setup
+                      Données mises en place
                     </h2>
                     <p className="text-xs text-muted-foreground">
                       {allFarmsMode
@@ -765,7 +761,7 @@ export default function InfosSetup() {
                           : "Configuration initiale de l'élevage — informations réutilisables"}
                     </p>
                   </div>
-                  {!isReadOnly && (
+                  {canFillSetupInfo && (
                     <div className="flex gap-2">
                       <button
                         onClick={addRow}
@@ -775,7 +771,7 @@ export default function InfosSetup() {
                       </button>
                       <button
                         onClick={handleSave}
-                        disabled={!canCreate || saving}
+                        disabled={saving}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                       >
                         {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -798,13 +794,13 @@ export default function InfosSetup() {
                         <th>Origine/Fournisseur</th>
                         <th>Date d'éclosion</th>
                         <th>Souche</th>
-                        {!isReadOnly && (canDelete || isResponsableTechnique) ? <th className="w-10">Actions</th> : null}
+                        {canFillSetupInfo ? <th className="w-10">Actions</th> : null}
                       </tr>
                     </thead>
                     <tbody>
                       {rows.map((row) => {
                         const saved = isSavedRow(row.id);
-                        const readOnly = isReadOnly || (saved && !canUpdate);
+                        const readOnly = !canFillSetupInfo || (saved && !canUpdate);
                         return (
                           <tr key={row.id}>
                             <td>
@@ -901,7 +897,7 @@ export default function InfosSetup() {
                                 ))}
                               </select>
                             </td>
-                            {!isReadOnly && (canDelete || isResponsableTechnique) ? (
+                            {canFillSetupInfo ? (
                               <td>
                                 <button
                                   onClick={() => removeRow(row.id)}
@@ -928,7 +924,7 @@ export default function InfosSetup() {
                         <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
                           Total Général : <span className="text-accent">{totalMale + totalFemale}</span>
                         </td>
-                        {!isReadOnly && (canDelete || isResponsableTechnique) ? <td></td> : null}
+                        {canFillSetupInfo ? <td></td> : null}
                       </tr>
                     </tfoot>
                   </table>

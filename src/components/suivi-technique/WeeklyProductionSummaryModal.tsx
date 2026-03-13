@@ -176,10 +176,10 @@ export default function WeeklyProductionSummaryModal({
           </div>
         ) : (
           <div className="overflow-y-auto space-y-6 pr-2">
-            {/* 1. Infos de Setup — combined */}
+            {/* 1. Données mises en place — combined */}
             <div className="bg-card rounded-lg border border-border shadow-sm p-5">
               <h3 className="text-base font-display font-bold text-foreground mb-3">
-                Infos de Setup — Configuration initiale pour le lot {lot}
+                Données mises en place — Configuration initiale pour le lot {lot}
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-1.5">

@@ -683,15 +683,15 @@ export default function SuiviTechniqueHebdomadaire() {
                     {noSetupInfo ? (
                       <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
                         <p className="text-sm text-amber-800 dark:text-amber-200">
-                          <strong>Aucune configuration trouvée.</strong> Veuillez d'abord configurer les informations de setup 
-                          (effectif mis en place) dans la page <strong>"Infos de Setup"</strong> pour ce bâtiment ({selectedBatiment}).
+                          <strong>Aucune configuration trouvée.</strong> Veuillez d'abord configurer les données mises en place 
+                          (effectif mis en place) dans la page <strong>"Données mises en place"</strong> pour ce bâtiment ({selectedBatiment}).
                         </p>
                         <button
                           type="button"
                           onClick={() => navigate(`/infos-setup?farmId=${reportingFarmId}&lot=${encodeURIComponent(lotParam)}`)}
                           className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-md bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition-colors"
                         >
-                          Aller à Infos de Setup
+                          Aller à Données mises en place
                         </button>
                       </div>
                     ) : (
@@ -731,7 +731,7 @@ export default function SuiviTechniqueHebdomadaire() {
                           </div>
                         ) : (
                           <p className="text-xs text-amber-600 dark:text-amber-400 border-t border-border pt-3">
-                            Non configuré dans Infos de Setup
+                            Non configuré dans Données mises en place
                           </p>
                         )}
                       </button>
@@ -765,7 +765,7 @@ export default function SuiviTechniqueHebdomadaire() {
                           </div>
                         ) : (
                           <p className="text-xs text-amber-600 dark:text-amber-400 border-t border-border pt-3">
-                            Non configuré dans Infos de Setup
+                            Non configuré dans Données mises en place
                           </p>
                         )}
                       </button>
@@ -843,7 +843,7 @@ export default function SuiviTechniqueHebdomadaire() {
                     <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
                       <UserPlus className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                       <span className="text-amber-800 dark:text-amber-200 text-xs">
-                        Configurez d'abord {otherSex} dans <strong>Infos de Setup</strong>
+                        Configurez d'abord {otherSex} dans <strong>Données mises en place</strong>
                       </span>
                       <button
                         type="button"
@@ -892,7 +892,7 @@ export default function SuiviTechniqueHebdomadaire() {
                     <AlertDialogDescription>
                       Voulez-vous activer le suivi pour{" "}
                       <strong>{initialSex === "male" ? "Femelle" : "Mâle"}</strong> dans ce bâtiment ?{" "}
-                      Les données de setup (effectif, souche, fournisseur) seront pré-remplies depuis <strong>Infos de Setup</strong>.
+                      Les données de setup (effectif, souche, fournisseur) seront pré-remplies depuis <strong>Données mises en place</strong>.
                       Les tableaux hebdomadaires (production, consommation, performances) seront vides et devront être renseignés.
                     </AlertDialogDescription>
                   </AlertDialogHeader>

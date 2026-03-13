@@ -53,7 +53,7 @@ const NAV_SECTIONS = [
     label: "Suivi technique",
     icon: ClipboardList,
     children: [
-      { label: "Infos de Setup", path: "/infos-setup" },
+      { label: "Données mises en place", path: "/infos-setup" },
       { label: "Reporting Journalier", path: "/reporting-journalier" },
       { label: "Suivi Technique Hebdo", path: "/suivi-technique-hebdomadaire" },
     ],
