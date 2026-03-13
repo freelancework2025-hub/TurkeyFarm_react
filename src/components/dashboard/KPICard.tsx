@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { cn } from "@/lib/utils";
 import { TrendingUp, TrendingDown, Minus, LucideIcon } from "lucide-react";
 import { NumberTicker } from "@/components/ui/number-ticker";
@@ -10,7 +11,8 @@ export interface KPICardProps {
   trend?: TrendDirection;
   trendValue?: string;
   unit?: string;
-  icon?: LucideIcon;
+  /** Lucide icon or custom component that accepts className (e.g. two-birds icon) */
+  icon?: LucideIcon | ComponentType<{ className?: string }>;
   status?: "success" | "warning" | "danger" | "neutral";
   className?: string;
   /** Animate number with NumberTicker (only for numeric values) */

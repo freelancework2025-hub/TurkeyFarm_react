@@ -66,6 +66,26 @@ function isSavedRow(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
+/** Returns the first (building, sex) combo not yet used by any row. Ensures new rows don't violate uq_setup_info_farm_lot_building_sex. */
+function getFirstUnusedBuildingSex(
+  existingRows: SetupRow[],
+  availableBuildings: string[],
+  sexes: string[]
+): { building: string; sex: string } {
+  const used = new Set(existingRows.map((r) => `${r.building}|${r.sex}`));
+  const buildings = availableBuildings.length > 0 ? availableBuildings : BUILDINGS;
+  for (const sex of sexes) {
+    for (const building of buildings) {
+      const key = `${building}|${sex}`;
+      if (!used.has(key)) return { building, sex };
+    }
+  }
+  return {
+    building: buildings[0],
+    sex: sexes[0],
+  };
+}
+
 // BuildingCombobox component for selecting or creating buildings
 interface BuildingComboboxProps {
   value: string;
@@ -387,7 +407,16 @@ export default function InfosSetup() {
       
       setAvailableBuildings(combined);
 
-      const finalRows = isReadOnly ? setupRows : (setupRows.length ? [...setupRows, emptyRow(selectedLot, combined)] : [emptyRow(selectedLot, combined)]);
+      let finalRows: SetupRow[];
+      if (isReadOnly) {
+        finalRows = setupRows;
+      } else if (setupRows.length) {
+        const empty = emptyRow(selectedLot, combined);
+        const { building, sex } = getFirstUnusedBuildingSex(setupRows, combined, SEXES);
+        finalRows = [...setupRows, { ...empty, building, sex }];
+      } else {
+        finalRows = [emptyRow(selectedLot, combined)];
+      }
       
       console.log("🎯 InfosSetup - Final rows to display:", {
         isReadOnly,
@@ -423,6 +452,7 @@ export default function InfosSetup() {
 
   const addRow = () => {
     const last = rows[rows.length - 1];
+    const { building, sex } = getFirstUnusedBuildingSex(rows, availableBuildings, SEXES);
     setRows((prev) => [
       ...prev,
       {
@@ -431,6 +461,8 @@ export default function InfosSetup() {
         lot: last?.lot ?? selectedLot ?? "1",
         dateMiseEnPlace: last?.dateMiseEnPlace ?? new Date().toISOString().split("T")[0],
         heureMiseEnPlace: last?.heureMiseEnPlace ?? "08:00",
+        building,
+        sex,
         typeElevage: last?.typeElevage ?? "DINDE CHAIR",
         origineFournisseur: last?.origineFournisseur ?? "",
         dateEclosion: last?.dateEclosion ?? new Date().toISOString().split("T")[0],
@@ -553,6 +585,18 @@ export default function InfosSetup() {
         dateEclosion: r.dateEclosion,
         souche: r.souche,
       }));
+
+    const keys = toSend.map((r) => `${r.building}|${r.sex}`);
+    const duplicateKeys = keys.filter((k, i) => keys.indexOf(k) !== i);
+    if (duplicateKeys.length > 0) {
+      const labels = [...new Set(duplicateKeys)].map((k) => k.replace("|", " - "));
+      toast({
+        title: "Combinaison en double",
+        description: `Chaque ligne doit avoir une combinaison Bâtiment/Sexe unique. Double(s) : ${labels.join(", ")}`,
+        variant: "destructive",
+      });
+      return;
+    }
 
     if (toSend.length === 0) {
       toast({ 

@@ -15,7 +15,6 @@
 import { useState, useEffect, useMemo } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
-  DashboardFilterBar,
   KPICard,
   WaterConsumptionLineChart,
   MortalityLineChart,
@@ -35,12 +34,125 @@ import {
   Building2,
   ClipboardList,
   Loader2,
+  Calendar,
+  CalendarRange,
+  ArrowLeft,
+  ChevronRight,
+  Hash,
+  Layers,
 } from "lucide-react";
 import { api, type DailyDashboardSummary } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { MagicCard } from "@/components/ui/magic-card";
+import { Separator } from "@/components/ui/separator";
+
+/** Icon for "Indice de Consommation aliment par bâtiment" — Wheat (feed) + Building2 (bâtiment) */
+function IndiceBatimentSectionIcon() {
+  return (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center gap-0.5 rounded-lg bg-amber-500/10">
+      <Wheat className="h-5 w-5 text-amber-600" />
+      <Building2 className="h-4 w-4 text-amber-600/80 -ml-1" />
+    </div>
+  );
+}
+
+/** Icon for "Moy. Indice de Consommation aliment" (Mâle + Femelle) — Wheat in blue + pink */
+function MoyIndiceSectionIcon() {
+  return (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center gap-0.5 rounded-lg bg-primary/10">
+      <Wheat className="h-4 w-4 text-blue-500" />
+      <Wheat className="h-4 w-4 text-pink-500" />
+    </div>
+  );
+}
+
+/** Icon for "Prix de revient" section — DollarSign (cost/unit price) */
+function PrixRevientSectionIcon() {
+  return (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
+      <DollarSign className="h-5 w-5 text-emerald-600" />
+    </div>
+  );
+}
+
+/** Two birds icon (blue + pink) for "Les deux" and effectif KPI cards */
+function TwoBirdsIcon({ className }: { className?: string }) {
+  return (
+    <div className={`flex items-center justify-center gap-0.5 ${className ?? ""}`}>
+      <Bird className="h-4 w-4 shrink-0 text-blue-500" />
+      <Bird className="h-4 w-4 shrink-0 text-pink-500" />
+    </div>
+  );
+}
+
+/** Single bird in red for Mortalité cumulative */
+function RedBirdIcon({ className }: { className?: string }) {
+  return <Bird className={`h-5 w-5 text-red-500 ${className ?? ""}`} />;
+}
+
+/** Wheat icon in blue for Moy. Indice de Consommation aliment — Mâle (describes feed consumption) */
+function MoyIndiceMaleIcon({ className }: { className?: string }) {
+  return <Wheat className={`h-5 w-5 text-blue-500 ${className ?? ""}`} />;
+}
+
+/** Wheat icon in pink for Moy. Indice de Consommation aliment — Femelle (describes feed consumption) */
+function MoyIndiceFemelleIcon({ className }: { className?: string }) {
+  return <Wheat className={`h-5 w-5 text-pink-500 ${className ?? ""}`} />;
+}
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
+const HEBDO_WEEKS = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+
+/** Normalize building name to standard format (B1, B2, etc.) — matches SuiviTechniqueHebdomadaire */
+function normalizeBatimentName(name: string): string {
+  if (!name) return name;
+  const trimmed = name.trim();
+  if (/^B\d+$/.test(trimmed)) return trimmed;
+  const match = trimmed.match(/^Bâtiment\s*0*(\d+)$/i);
+  return match ? `B${match[1]}` : trimmed;
+}
+
+/** Empty daily summary when the farm has no report data — show dashboard cards with no data instead of error */
+const EMPTY_DAILY_SUMMARY: DailyDashboardSummary = {
+  reportDate: "",
+  lot: "",
+  sexMetrics: [],
+  totalMortality: 0,
+  ageJour: null,
+  semaine: null,
+  effectifInitialByBuildingSex: [],
+};
+
+/** Batiment order for display (B1=1, B2=2, B3=3, B4=4). */
+function batimentOrder(b: string): number {
+  const m = /^B(\d+)$/i.exec((b ?? "").trim());
+  return m ? parseInt(m[1], 10) : 999;
+}
+
+/** Build batiments per sex from InfosSetup. Returns { male, female, totalCount } — totalCount = nb unique batiments (male ∪ female). */
+function batimentsBySexFromSetupInfo(rows: { building: string; sex: string; effectifMisEnPlace?: number | null }[]): {
+  male: string[];
+  female: string[];
+  totalCount: number;
+} {
+  const male = new Set<string>();
+  const female = new Set<string>();
+  const all = new Set<string>();
+  for (const r of rows) {
+    const effectif = r.effectifMisEnPlace ?? 0;
+    if (!(effectif > 0)) continue;
+    const b = (r.building ?? "").trim();
+    if (!b) continue;
+    all.add(b);
+    if (r.sex === "Mâle") male.add(b);
+    else if (r.sex === "Femelle") female.add(b);
+  }
+  return {
+    male: Array.from(male).sort(),
+    female: Array.from(female).sort(),
+    totalCount: all.size,
+  };
+}
 
 export default function Dashboard() {
   const { 
@@ -55,9 +167,29 @@ export default function Dashboard() {
 
   // Determine which dashboard view to show
   // Weekly view: RT and Admin
-  // Daily view: Responsable Ferme and Backoffice
+  // Daily view: Responsable Ferme and Backoffice (can also access hebdo via entry)
   const showWeeklyDashboard = isResponsableTechnique || isAdministrateur;
   const showDailyDashboard = isResponsableFerme || isBackofficeEmployer;
+
+  // Responsable Ferme / Backoffice: entry → "Dashboard du jour" or "Dashboard hebdomadaire"
+  type RfDashboardView = "entry" | "daily" | "hebdo";
+  const [rfView, setRfView] = useState<RfDashboardView>("entry");
+
+  // RT/Admin: entry → choose "Dashboard du jour" or "Dashboard hebdomadaire"
+  // - du jour → daily-farms (farm cards) → daily (dashboard for selected farm, last day of lot)
+  // - hebdomadaire → weekly (current filter + content)
+  type RtaDashboardView = "entry" | "daily-farms" | "daily" | "weekly";
+  const [rtaView, setRtaView] = useState<RtaDashboardView>("entry");
+  const [selectedFarmIdForDaily, setSelectedFarmIdForDaily] = useState<number | null>(null);
+
+  // Dashboard hebdomadaire: card-based step flow (farm → lot → week → sex → dashboard)
+  type HebdoStep = "farm" | "lot" | "week" | "sex" | "dashboard";
+  const [hebdoStep, setHebdoStep] = useState<HebdoStep>("farm");
+  const [hebdoFarmId, setHebdoFarmId] = useState<number | null>(null);
+  const [hebdoLot, setHebdoLot] = useState<string | null>(null);
+  const [hebdoWeek, setHebdoWeek] = useState<string | null>(null);
+  const [hebdoSex, setHebdoSex] = useState<string | null>(null);
+  const [lotsForHebdo, setLotsForHebdo] = useState<string[]>([]);
 
   const [filters, setFilters] = useState<DashboardFilters>(() => ({
     farmId: isResponsableFerme ? selectedFarmId : null,
@@ -74,19 +206,31 @@ export default function Dashboard() {
     filters.farmId ?? (isResponsableFerme ? selectedFarmId : null);
   const hasFarmContext = !!effectiveFarmId;
 
-  // For daily dashboard (Responsable Ferme & Backoffice): always show last day of last lot.
-  // When backoffice has no farm selected, use first farm so data loads immediately.
+  // For daily dashboard: Responsable Ferme/Backoffice use effectiveFarmId; RT/Admin in "daily" sub-view use selectedFarmIdForDaily.
   const effectiveFarmIdForDaily =
-    effectiveFarmId ?? (showDailyDashboard && farms.length > 0 ? farms[0]?.id ?? null : null);
+    showWeeklyDashboard && rtaView === "daily" && selectedFarmIdForDaily != null
+      ? selectedFarmIdForDaily
+      : effectiveFarmId ?? (showDailyDashboard && farms.length > 0 ? farms[0]?.id ?? null : null);
   
   // Weekly dashboard requires farm + lot + week
-  const canFetchWeeklyData = showWeeklyDashboard && hasFarmContext && !!filters.lot && !!filters.week;
+  // Also true for Responsable Ferme/Backoffice when in hebdo flow with lot + week selected
+  const isRfInHebdoDashboard =
+    showDailyDashboard && rfView === "hebdo" && hebdoStep === "dashboard" && !!effectiveFarmId && !!hebdoLot && !!hebdoWeek;
+  const canFetchWeeklyData =
+    (showWeeklyDashboard && hasFarmContext && !!filters.lot && !!filters.week) || isRfInHebdoDashboard;
   
-  // Daily dashboard requires only farm (lot is auto-determined: last day of last lot)
-  const canFetchDailyData = showDailyDashboard && !!effectiveFarmIdForDaily;
+  // Daily dashboard: Responsable Ferme/Backoffice always; RT/Admin when in "daily" sub-view with a farm selected
+  const canFetchDailyData =
+    (showDailyDashboard && !!effectiveFarmIdForDaily) ||
+    (showWeeklyDashboard && rtaView === "daily" && !!selectedFarmIdForDaily);
   
-  // Legacy for backwards compatibility
+  // Legacy for backwards compatibility — weekly fetch uses effectiveFarmId, filters, or hebdo* for RF
   const canFetchData = canFetchWeeklyData;
+  const effectiveFarmIdForWeekly =
+    isRfInHebdoDashboard ? effectiveFarmId : (filters.farmId ?? effectiveFarmId);
+  const effectiveLotForWeekly = isRfInHebdoDashboard ? hebdoLot : filters.lot;
+  const effectiveWeekForWeekly = isRfInHebdoDashboard ? hebdoWeek : filters.week;
+  const effectiveSexForWeekly = isRfInHebdoDashboard ? hebdoSex : filters.sex ?? hebdoSex;
   
   // Only Responsable Technique and Administrateur can see pricing information
   const canSeePricing = isResponsableTechnique || isAdministrateur;
@@ -114,6 +258,15 @@ export default function Dashboard() {
     }
   }, [effectiveFarmId]);
 
+  // Fetch lots for hebdo farm selection (when in weekly flow with farm selected)
+  useEffect(() => {
+    if (hebdoFarmId && rtaView === "weekly") {
+      api.farms.lots(hebdoFarmId).then((data) => setLotsForHebdo(data ?? [])).catch(() => setLotsForHebdo([]));
+    } else {
+      setLotsForHebdo([]);
+    }
+  }, [hebdoFarmId, rtaView]);
+
   useEffect(() => {
     if (isResponsableFerme && selectedFarmId && filters.farmId !== selectedFarmId) {
       setFilters((f) => ({ ...f, farmId: selectedFarmId }));
@@ -132,13 +285,52 @@ export default function Dashboard() {
   >([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Mean INDICE DE CONSOMMATION RÉEL across bâtiments, by sex (weekly dashboard). */
+  /** Moyen d'indice de Consommation aliment par sexe (weekly) = (indice B1 + indice B3 + …) / nb bâtiments. */
   const [indiceMeanBySex, setIndiceMeanBySex] = useState<{ male: number | null; female: number | null } | null>(null);
-  /** Mean INDICE DE CONSOMMATION RÉEL across bâtiments, by sex (daily dashboard — Responsable Ferme). */
+  /** Indice de conso par (batiment, sex) — affiché au-dessus des moyennes (weekly). */
+  const [indiceByBatiment, setIndiceByBatiment] = useState<{ batiment: string; sex: string; value: number | null }[]>([]);
+  /** Moyen d'indice de Consommation aliment par sexe (daily dashboard — Responsable Ferme). */
   const [dailyIndiceMeanBySex, setDailyIndiceMeanBySex] = useState<{ male: number | null; female: number | null } | null>(null);
+  /** Indice de conso par (batiment, sex) — daily dashboard. */
+  const [dailyIndiceByBatiment, setDailyIndiceByBatiment] = useState<{ batiment: string; sex: string; value: number | null }[]>([]);
+  /** SetupInfo from InfosSetup — batiments par sexe pour le calcul du moyen d'indice de conso aliment */
+  const [setupInfoRows, setSetupInfoRows] = useState<{ building: string; sex: string; effectifMisEnPlace?: number | null }[]>([]);
+
+  // Fetch SetupInfo (InfosSetup) to derive batiments per sex for moyenne INDICE DE CONSOMMATION
+  const isDailyModeForSetup = !showWeeklyDashboard || rtaView === "daily";
+  const isRfHebdoMode = showDailyDashboard && rfView === "hebdo";
+  useEffect(() => {
+    const farmId = isDailyModeForSetup ? effectiveFarmIdForDaily : effectiveFarmId;
+    const lot = isRfHebdoMode && hebdoLot ? hebdoLot : isDailyModeForSetup ? dailySummary?.lot : filters.lot;
+    if (!farmId || !lot) {
+      setSetupInfoRows([]);
+      return;
+    }
+    api.setupInfo
+      .list(farmId, lot)
+      .then((rows) => {
+        const normalized = (rows ?? []).map((r) => ({
+          ...r,
+          building: normalizeBatimentName(r.building ?? ""),
+        }));
+        setSetupInfoRows(normalized);
+      })
+      .catch(() => setSetupInfoRows([]));
+  }, [
+    isDailyModeForSetup,
+    isRfHebdoMode,
+    effectiveFarmId,
+    effectiveFarmIdForDaily,
+    filters.lot,
+    dailySummary?.lot,
+    hebdoLot,
+  ]);
 
   useEffect(() => {
-    if (!canFetchData || !effectiveFarmId || !filters.lot || !filters.week) {
+    const farmId = effectiveFarmIdForWeekly ?? effectiveFarmId;
+    const lot = effectiveLotForWeekly ?? filters.lot;
+    const week = effectiveWeekForWeekly ?? filters.week;
+    if (!canFetchData || !farmId || !lot || !week) {
       setCostsSummary(null);
       setConsoSummary(null);
       setHebdoList([]);
@@ -148,37 +340,53 @@ export default function Dashboard() {
 
     setLoading(true);
     setError(null);
-    const batimentsStr = DEFAULT_BATIMENTS.join(",");
+
+    const { male: batimentsMale, female: batimentsFemale } = batimentsBySexFromSetupInfo(setupInfoRows);
+    const batimentsMaleSafe = batimentsMale.length > 0 ? batimentsMale : DEFAULT_BATIMENTS;
+    const batimentsFemaleSafe = batimentsFemale.length > 0 ? batimentsFemale : DEFAULT_BATIMENTS;
+    const batimentsAll = [...new Set([...batimentsMaleSafe, ...batimentsFemaleSafe])];
+
+    const selectedSex = effectiveSexForWeekly ?? filters.sex ?? hebdoSex;
+    const batimentsToUse: string[] =
+      selectedSex === "Mâle" ? batimentsMaleSafe : selectedSex === "Femelle" ? batimentsFemaleSafe : batimentsAll;
+    const batimentsStr = batimentsToUse.join(",");
 
     const hebdoMalePromise = api.suiviTechniqueHebdo.list({
-      farmId: effectiveFarmId,
-      lot: filters.lot,
+      farmId: farmId,
+      lot,
       sex: "Mâle",
-      semaine: filters.week,
+      semaine: week,
     });
     const hebdoFemellePromise = api.suiviTechniqueHebdo.list({
-      farmId: effectiveFarmId,
-      lot: filters.lot,
+      farmId: farmId,
+      lot,
       sex: "Femelle",
-      semaine: filters.week,
+      semaine: week,
     });
 
     Promise.all([
       api.suiviCoutHebdo.getResumeSummary({
-        farmId: effectiveFarmId,
-        lot: filters.lot,
-        semaine: filters.week,
+        farmId: farmId,
+        lot,
+        semaine: week,
         batiments: batimentsStr,
       }),
       api.suiviConsommationHebdo.getResumeSummary({
-        farmId: effectiveFarmId,
-        lot: filters.lot,
-        semaine: filters.week,
-        batiments: DEFAULT_BATIMENTS,
+        farmId: farmId,
+        lot,
+        semaine: week,
+        batiments: batimentsToUse,
       }),
-      Promise.all([hebdoMalePromise, hebdoFemellePromise]).then(([male, femelle]) =>
-        [...(male ?? []), ...(femelle ?? [])]
-      ),
+      Promise.all([hebdoMalePromise, hebdoFemellePromise]).then(([male, femelle]) => {
+        const merged = [...(male ?? []), ...(femelle ?? [])];
+        if (selectedSex === "Mâle") {
+          return merged.filter((r) => r.sex === "Mâle" && batimentsMaleSafe.includes(r.batiment ?? ""));
+        }
+        if (selectedSex === "Femelle") {
+          return merged.filter((r) => r.sex === "Femelle" && batimentsFemaleSafe.includes(r.batiment ?? ""));
+        }
+        return merged;
+      }),
     ])
       .then(([costs, conso, hebdo]) => {
         setCostsSummary(costs);
@@ -197,45 +405,57 @@ export default function Dashboard() {
     effectiveFarmId,
     filters.lot,
     filters.week,
+    filters.sex,
+    hebdoSex,
+    setupInfoRows,
   ]);
 
-  // Fetch mean INDICE DE CONSOMMATION RÉEL by sex (one value per sex = average over bâtiments)
+  // Moyen indice de conso aliment par sexe = (somme indices batiments du sexe) / nb TOTAL batiments (male + femelle)
+  const indiceLot = effectiveLotForWeekly ?? filters.lot;
+  const indiceWeek = effectiveWeekForWeekly ?? filters.week;
   useEffect(() => {
-    if (!canFetchWeeklyData || !effectiveFarmId || !filters.lot || !filters.week) {
+    if (!canFetchWeeklyData || !effectiveFarmIdForWeekly || !indiceLot || !indiceWeek) {
       setIndiceMeanBySex(null);
+      setIndiceByBatiment([]);
       return;
     }
-    const sexes = ["Mâle", "Femelle"] as const;
-    const promises: Array<{ sex: string; batiment: string }> = [];
-    for (const sex of sexes) {
-      for (const batiment of DEFAULT_BATIMENTS) {
-        promises.push({ sex, batiment });
-      }
+    const { male: batimentsMale, female: batimentsFemale, totalCount } = batimentsBySexFromSetupInfo(setupInfoRows);
+    const batimentsM = batimentsMale.length > 0 ? batimentsMale : DEFAULT_BATIMENTS;
+    const batimentsF = batimentsFemale.length > 0 ? batimentsFemale : DEFAULT_BATIMENTS;
+    const divisor = totalCount > 0 ? totalCount : DEFAULT_BATIMENTS.length;
+    const promises: Array<{ sex: string; batiment: string }> = [
+      ...batimentsM.map((batiment) => ({ sex: "Mâle" as const, batiment })),
+      ...batimentsF.map((batiment) => ({ sex: "Femelle" as const, batiment })),
+    ];
+    if (promises.length === 0) {
+      setIndiceMeanBySex(null);
+      return;
     }
     Promise.all(
       promises.map(({ sex, batiment }) =>
         api.suiviPerformancesHebdo
           .get({
-            farmId: effectiveFarmId,
-            lot: filters.lot!,
-            semaine: filters.week!,
+            farmId: effectiveFarmIdForWeekly ?? effectiveFarmId,
+            lot: indiceLot,
+            semaine: indiceWeek,
             sex,
             batiment,
           })
-          .then((res) => ({ sex, value: res.indiceConsommationReel ?? null }))
-          .catch(() => ({ sex, value: null }))
+          .then((res) => ({ batiment, sex, value: res.indiceConsommationReel ?? null }))
+          .catch(() => ({ batiment, sex, value: null }))
       )
     ).then((results) => {
       const maleValues = results.filter((r) => r.sex === "Mâle" && r.value != null).map((r) => r.value as number);
       const femaleValues = results.filter((r) => r.sex === "Femelle" && r.value != null).map((r) => r.value as number);
-      const mean = (arr: number[]) =>
-        arr.length === 0 ? null : arr.reduce((a, b) => a + b, 0) / arr.length;
+      const mean = (arr: number[], div: number) =>
+        arr.length === 0 || div <= 0 ? null : arr.reduce((a, b) => a + b, 0) / div;
       setIndiceMeanBySex({
-        male: mean(maleValues),
-        female: mean(femaleValues),
+        male: mean(maleValues, divisor),
+        female: mean(femaleValues, divisor),
       });
+      setIndiceByBatiment(results.map((r) => ({ batiment: r.batiment, sex: r.sex, value: r.value })));
     });
-  }, [canFetchWeeklyData, effectiveFarmId, filters.lot, filters.week]);
+  }, [canFetchWeeklyData, effectiveFarmIdForWeekly, effectiveFarmId, indiceLot, indiceWeek, setupInfoRows]);
 
   // Fetch daily dashboard data (lot = null → backend returns last day of last lot)
   useEffect(() => {
@@ -251,19 +471,23 @@ export default function Dashboard() {
     api.dailyReports
       .getDashboardSummary(effectiveFarmIdForDaily, null) // null = last day of last lot
       .then((data) => {
-        setDailySummary(data);
+        setDailySummary(data ?? EMPTY_DAILY_SUMMARY);
+        setDailyError(null);
       })
-      .catch((err) => {
-        setDailyError(err?.message ?? "Erreur lors du chargement des données journalières.");
-        setDailySummary(null);
+      .catch(() => {
+        // No data or empty/invalid response (e.g. "Unexpected end of JSON input") → show empty cards
+        setDailySummary(EMPTY_DAILY_SUMMARY);
+        setDailyError(null);
       })
       .finally(() => setDailyLoading(false));
   }, [canFetchDailyData, effectiveFarmIdForDaily]);
 
-  // Fetch mean INDICE DE CONSOMMATION RÉEL by sex for daily dashboard (lot + semaine from last day)
+  // Moyen indice de conso aliment par sexe (daily) = (somme indices batiments du sexe) / nb TOTAL batiments
+  const showDailyIndice = showDailyDashboard || (showWeeklyDashboard && rtaView === "daily");
   useEffect(() => {
-    if (!showDailyDashboard || !effectiveFarmIdForDaily || !dailySummary?.lot || !dailySummary?.semaine) {
+    if (!showDailyIndice || !effectiveFarmIdForDaily || !dailySummary?.lot || !dailySummary?.semaine) {
       setDailyIndiceMeanBySex(null);
+      setDailyIndiceByBatiment([]);
       return;
     }
     const lot = dailySummary.lot;
@@ -273,12 +497,17 @@ export default function Dashboard() {
       setDailyIndiceMeanBySex(null);
       return;
     }
-    const sexes = ["Mâle", "Femelle"] as const;
-    const promises: Array<{ sex: string; batiment: string }> = [];
-    for (const sex of sexes) {
-      for (const batiment of DEFAULT_BATIMENTS) {
-        promises.push({ sex, batiment });
-      }
+    const { male: batimentsMale, female: batimentsFemale, totalCount } = batimentsBySexFromSetupInfo(setupInfoRows);
+    const batimentsM = batimentsMale.length > 0 ? batimentsMale : DEFAULT_BATIMENTS;
+    const batimentsF = batimentsFemale.length > 0 ? batimentsFemale : DEFAULT_BATIMENTS;
+    const divisor = totalCount > 0 ? totalCount : DEFAULT_BATIMENTS.length;
+    const promises: Array<{ sex: string; batiment: string }> = [
+      ...batimentsM.map((batiment) => ({ sex: "Mâle" as const, batiment })),
+      ...batimentsF.map((batiment) => ({ sex: "Femelle" as const, batiment })),
+    ];
+    if (promises.length === 0) {
+      setDailyIndiceMeanBySex(null);
+      return;
     }
     Promise.all(
       promises.map(({ sex, batiment }) =>
@@ -290,20 +519,21 @@ export default function Dashboard() {
             sex,
             batiment,
           })
-          .then((res) => ({ sex, value: res.indiceConsommationReel ?? null }))
-          .catch(() => ({ sex, value: null }))
+          .then((res) => ({ batiment, sex, value: res.indiceConsommationReel ?? null }))
+          .catch(() => ({ batiment, sex, value: null }))
       )
     ).then((results) => {
       const maleValues = results.filter((r) => r.sex === "Mâle" && r.value != null).map((r) => r.value as number);
       const femaleValues = results.filter((r) => r.sex === "Femelle" && r.value != null).map((r) => r.value as number);
-      const mean = (arr: number[]) =>
-        arr.length === 0 ? null : arr.reduce((a, b) => a + b, 0) / arr.length;
+      const mean = (arr: number[], div: number) =>
+        arr.length === 0 || div <= 0 ? null : arr.reduce((a, b) => a + b, 0) / div;
       setDailyIndiceMeanBySex({
-        male: mean(maleValues),
-        female: mean(femaleValues),
+        male: mean(maleValues, divisor),
+        female: mean(femaleValues, divisor),
       });
+      setDailyIndiceByBatiment(results.map((r) => ({ batiment: r.batiment, sex: r.sex, value: r.value })));
     });
-  }, [showDailyDashboard, effectiveFarmIdForDaily, dailySummary?.lot, dailySummary?.semaine]);
+  }, [showDailyIndice, effectiveFarmIdForDaily, dailySummary?.lot, dailySummary?.semaine, setupInfoRows]);
 
   const { totalMortality, effectifDepart, mortalityPct } = useMemo(() => {
     if (!hebdoList.length) {
@@ -328,6 +558,20 @@ export default function Dashboard() {
       effectifDepart > 0 ? (totalMortality / effectifDepart) * 100 : null;
     return { totalMortality, effectifDepart, mortalityPct };
   }, [hebdoList]);
+
+  /** Effectif mis en place — sum from SetupInfo (InfosSetup). When sex selected, only sum rows for that sex. */
+  const selectedSexForEffectif = effectiveSexForWeekly ?? filters.sex ?? hebdoSex;
+  const effectifMisEnPlace = useMemo(() => {
+    if (!setupInfoRows.length) return 0;
+    const rows = setupInfoRows.filter((r) => (r.effectifMisEnPlace ?? 0) > 0);
+    const filtered =
+      selectedSexForEffectif === "Mâle"
+        ? rows.filter((r) => r.sex === "Mâle")
+        : selectedSexForEffectif === "Femelle"
+          ? rows.filter((r) => r.sex === "Femelle")
+          : rows;
+    return filtered.reduce((sum, r) => sum + (r.effectifMisEnPlace ?? 0), 0);
+  }, [setupInfoRows, selectedSexForEffectif]);
 
   const consoAlimentKg = consoSummary?.consoAlimentSemaineSum != null
     ? Number(consoSummary.consoAlimentSemaineSum)
@@ -397,57 +641,313 @@ export default function Dashboard() {
         </div>
 
         <div className="space-y-6">
-          <div>
-            <h1 className="font-display text-2xl font-bold text-foreground md:text-3xl">
-              Tableau de bord
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {showWeeklyDashboard
-                ? "Suivi des indicateurs hebdomadaires - Production, mortalité, consommation et coûts"
-                : "Dernier jour enregistré (dernier lot) — métriques quotidiennes"}
-            </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="font-display text-2xl font-bold text-foreground md:text-3xl">
+                Tableau de bord
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {showDailyDashboard && rfView === "entry"
+                  ? "Choisissez un type de tableau de bord"
+                  : showWeeklyDashboard && rtaView === "entry"
+                    ? "Choisissez un type de tableau de bord"
+                    : showWeeklyDashboard && rtaView === "daily-farms"
+                      ? "Sélectionnez une ferme pour le dashboard du jour"
+                      : showWeeklyDashboard && rtaView === "daily"
+                        ? "Dernier jour enregistré (dernier lot) — métriques quotidiennes"
+                        : (showWeeklyDashboard && rtaView === "weekly") || (showDailyDashboard && rfView === "hebdo")
+                          ? hebdoStep === "dashboard"
+                            ? "Suivi des indicateurs hebdomadaires - Production, mortalité, consommation (données filtrées par sexe)"
+                            : "Sélectionnez les critères pour afficher les métriques"
+                          : showWeeklyDashboard
+                            ? "Suivi des indicateurs hebdomadaires"
+                            : "Dernier jour enregistré (dernier lot) — métriques quotidiennes"}
+              </p>
+            </div>
+            {/* Back navigation for RT/Admin or RF in hebdo */}
+            {((showWeeklyDashboard && rtaView !== "entry") || (showDailyDashboard && rfView === "hebdo")) && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (showDailyDashboard && rfView === "hebdo") {
+                    if (hebdoStep === "dashboard") setHebdoStep("sex");
+                    else if (hebdoStep === "sex") { setHebdoStep("week"); setHebdoSex(null); }
+                    else if (hebdoStep === "week") { setHebdoStep("lot"); setHebdoWeek(null); }
+                    else if (hebdoStep === "lot") { setRfView("entry"); setHebdoLot(null); setHebdoFarmId(null); }
+                  } else if (rtaView === "weekly") {
+                    if (hebdoStep === "dashboard") setHebdoStep("sex");
+                    else if (hebdoStep === "sex") { setHebdoStep("week"); setHebdoSex(null); }
+                    else if (hebdoStep === "week") { setHebdoStep("lot"); setHebdoWeek(null); }
+                    else if (hebdoStep === "lot") { setHebdoStep("farm"); setHebdoLot(null); setHebdoFarmId(null); }
+                    else setRtaView("entry");
+                  } else if (rtaView === "daily") setRtaView("daily-farms");
+                  else if (rtaView === "daily-farms") setRtaView("entry");
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted/80 focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Retour
+              </button>
+            )}
           </div>
 
-          {/* Only show filter bar for weekly dashboard users */}
-          {showWeeklyDashboard && (
-            <DashboardFilterBar
-              filters={filters}
-              onFiltersChange={setFilters}
-              farms={farms}
-              lots={lots}
-              showFarmSelector={showFarmSelector}
-              fixedFarmId={fixedFarmId}
-            />
-          )}
-
-          {showFarmSelector && !hasFarmContext && !(showDailyDashboard && effectiveFarmIdForDaily) && (
-            <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 py-16 animate-in fade-in duration-300">
-                <Building2 className="h-16 w-16 text-muted-foreground" />
-                <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
-                  Choisissez une ferme
-                </h2>
-                <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
-                  {showWeeklyDashboard
-                    ? "Sélectionnez une ferme, un lot et une semaine pour afficher les métriques."
-                    : "Sélectionnez une ferme pour afficher les métriques quotidiennes."}
-                </p>
-              </div>
-          )}
-
-          {/* Weekly Dashboard View (RT & Admin) */}
-          {showWeeklyDashboard && (
-            <>
-              {hasFarmContext && !canFetchWeeklyData && (
-                <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 py-16 animate-in fade-in duration-300">
-                    <ClipboardList className="h-16 w-16 text-muted-foreground" />
-                    <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
-                      Lot et semaine requis
+          {/* RT/Admin: Entry — two cards: Dashboard du jour / Dashboard hebdomadaire */}
+          {showWeeklyDashboard && rtaView === "entry" && (
+            <div className="grid gap-6 sm:grid-cols-2 lg:gap-8">
+              <button
+                type="button"
+                onClick={() => setRtaView("daily-farms")}
+                className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-2xl"
+              >
+                <MagicCard className="rounded-2xl border border-border bg-card p-0 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-lg group-hover:shadow-primary/5">
+                  <div className="flex flex-col p-6 sm:p-8">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <Calendar className="h-7 w-7" />
+                    </div>
+                    <h2 className="mt-4 font-display text-xl font-semibold text-foreground sm:text-2xl">
+                      Dashboard du jour
                     </h2>
-                    <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
-                      Sélectionnez un lot et une semaine, puis cliquez sur Appliquer pour charger les données.
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Consultez les métriques du dernier jour enregistré par ferme. Choisissez une ferme pour afficher le même tableau de bord que le responsable de ferme.
                     </p>
+                    <span className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-primary">
+                      Entrer
+                      <ChevronRight className="h-4 w-4" />
+                    </span>
                   </div>
+                </MagicCard>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRtaView("weekly");
+                  setHebdoStep("farm");
+                  setHebdoFarmId(null);
+                  setHebdoLot(null);
+                  setHebdoWeek(null);
+                  setHebdoSex(null);
+                }}
+                className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-2xl"
+              >
+                <MagicCard className="rounded-2xl border border-border bg-card p-0 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-lg group-hover:shadow-primary/5">
+                  <div className="flex flex-col p-6 sm:p-8">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <CalendarRange className="h-7 w-7" />
+                    </div>
+                    <h2 className="mt-4 font-display text-xl font-semibold text-foreground sm:text-2xl">
+                      Dashboard hebdomadaire
+                    </h2>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Suivi des indicateurs par lot et par semaine : production, mortalité, consommation et coûts.
+                    </p>
+                    <span className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-primary">
+                      Entrer
+                      <ChevronRight className="h-4 w-4" />
+                    </span>
+                  </div>
+                </MagicCard>
+              </button>
+            </div>
+          )}
+
+          {/* RT/Admin: Farm selection for Dashboard du jour */}
+          {showWeeklyDashboard && rtaView === "daily-farms" && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Cliquez sur une ferme pour afficher le dashboard du dernier jour du dernier lot.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {farms.map((farm) => (
+                  <button
+                    key={farm.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedFarmIdForDaily(farm.id);
+                      setRtaView("daily");
+                    }}
+                    className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
+                  >
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                          <Building2 className="h-6 w-6 text-primary" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-foreground truncate">{farm.name}</p>
+                          <p className="text-xs text-muted-foreground">{farm.code}</p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      </div>
+                    </MagicCard>
+                  </button>
+                ))}
+              </div>
+              {farms.length === 0 && !canAccessAllFarms && (
+                <div className="rounded-xl border border-dashed border-border bg-muted/20 py-12 text-center text-sm text-muted-foreground">
+                  Aucune ferme disponible.
+                </div>
               )}
+            </div>
+          )}
+
+          {/* Weekly Dashboard: Card-based filter flow (farm → lot → week → sex → dashboard) */}
+          {showWeeklyDashboard && rtaView === "weekly" && hebdoStep !== "dashboard" && (
+            <div className="space-y-6">
+              {/* Breadcrumb */}
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <span className={hebdoStep === "farm" ? "font-medium text-foreground" : ""}>1. Ferme</span>
+                <ChevronRight className="h-4 w-4" />
+                <span className={hebdoStep === "lot" ? "font-medium text-foreground" : ""}>2. Lot</span>
+                <ChevronRight className="h-4 w-4" />
+                <span className={hebdoStep === "week" ? "font-medium text-foreground" : ""}>3. Semaine</span>
+                <ChevronRight className="h-4 w-4" />
+                <span className={hebdoStep === "sex" ? "font-medium text-foreground" : ""}>4. Sexe</span>
+              </div>
+
+              {/* Step 1: Farm cards */}
+              {hebdoStep === "farm" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">Choisissez une ferme</p>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {farms.map((farm) => (
+                      <button
+                        key={farm.id}
+                        type="button"
+                        onClick={() => { setHebdoFarmId(farm.id); setHebdoStep("lot"); }}
+                        className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
+                      >
+                        <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                              <Building2 className="h-6 w-6 text-primary" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-foreground truncate">{farm.name}</p>
+                              <p className="text-xs text-muted-foreground">{farm.code}</p>
+                            </div>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          </div>
+                        </MagicCard>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Lot cards */}
+              {hebdoStep === "lot" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Choisissez un lot pour <strong>{farms.find((f) => f.id === hebdoFarmId)?.name ?? "cette ferme"}</strong>
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {lotsForHebdo.map((lotName) => (
+                      <button
+                        key={lotName}
+                        type="button"
+                        onClick={() => { setHebdoLot(lotName); setHebdoStep("week"); }}
+                        className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
+                      >
+                        <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
+                              <Layers className="h-6 w-6 text-emerald-600" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-foreground">{lotName}</p>
+                            </div>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          </div>
+                        </MagicCard>
+                      </button>
+                    ))}
+                  </div>
+                  {lotsForHebdo.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-border bg-muted/20 py-8 text-center text-sm text-muted-foreground">
+                      Aucun lot disponible.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step 3: Week boxes */}
+              {hebdoStep === "week" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Choisissez la semaine pour le lot <strong>{hebdoLot}</strong>
+                  </p>
+                  <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
+                    {HEBDO_WEEKS.map((w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        onClick={() => { setHebdoWeek(w); setHebdoStep("sex"); }}
+                        className="group rounded-lg border border-border bg-card px-3 py-2.5 text-center font-medium transition-all hover:border-primary/50 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      >
+                        <span className="text-foreground group-hover:text-primary">{w}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Step 4: Sex cards (Both, Mâle, Femelle) */}
+              {hebdoStep === "sex" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Choisissez le sexe pour <strong>{hebdoLot}</strong> — {hebdoWeek}
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    {[
+                      { value: null, label: "Les deux (Mâle + Femelle)", icon: TwoBirdsIcon, iconClassName: "h-full w-full flex items-center justify-center gap-0.5" },
+                      { value: "Mâle", label: "Mâle", icon: Bird, iconClassName: "h-6 w-6 text-blue-500" },
+                      { value: "Femelle", label: "Femelle", icon: Bird, iconClassName: "h-6 w-6 text-pink-500" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => {
+                          setHebdoSex(opt.value);
+                          setFilters({ farmId: hebdoFarmId, lot: hebdoLot, week: hebdoWeek, sex: opt.value });
+                          setHebdoStep("dashboard");
+                        }}
+                        className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
+                      >
+                        <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/10">
+                              <opt.icon className={"iconClassName" in opt ? opt.iconClassName : "h-6 w-6 text-primary"} />
+                            </div>
+                            <p className="font-semibold text-foreground">{opt.label}</p>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground ml-auto" />
+                          </div>
+                        </MagicCard>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Weekly Dashboard View (RT & Admin, or RF/Backoffice in hebdo) — metrics when hebdoStep === 'dashboard' */}
+          {((showWeeklyDashboard && rtaView === "weekly") || (showDailyDashboard && rfView === "hebdo")) && hebdoStep === "dashboard" && (
+            <>
+              {/* Selection summary badge */}
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm">
+                <span className="font-medium text-muted-foreground">Filtre actif :</span>
+                <span className="font-medium text-foreground">
+                  {farms.find((f) => f.id === (hebdoFarmId ?? effectiveFarmId))?.name ?? selectedFarm?.name ?? "—"}
+                </span>
+                <span className="text-muted-foreground">•</span>
+                <span className="font-medium text-foreground">{hebdoLot ?? "—"}</span>
+                <span className="text-muted-foreground">•</span>
+                <span className="font-medium text-foreground">{hebdoWeek ?? "—"}</span>
+                <span className="text-muted-foreground">•</span>
+                <span className="font-medium text-foreground">
+                  {hebdoSex == null ? "Les deux (Mâle + Femelle)" : hebdoSex}
+                </span>
+              </div>
 
               {loading && canFetchWeeklyData && (
                 <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
@@ -464,26 +964,49 @@ export default function Dashboard() {
 
               {!loading && canFetchWeeklyData && !error && costsSummary != null && (
                 <>
+                  {/* Effectif départ, Effectif mis en place, Effectif restant fin de semaine — filtrés par sexe quand Mâle/Femelle sélectionné */}
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                      <KPICard
+                        label={`Effectif départ de ${filters.week ?? hebdoWeek ?? ""}`}
+                        value={effectifDepart}
+                        icon={TwoBirdsIcon}
+                        animateValue
+                      />
+                    </MagicCard>
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                      <KPICard
+                        label="Effectif mis en place"
+                        value={effectifMisEnPlace}
+                        icon={TwoBirdsIcon}
+                        animateValue
+                      />
+                    </MagicCard>
+                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                      <KPICard
+                        label="Effectif restant fin de semaine"
+                        value={costsSummary.effectifRestantFinSemaine ?? 0}
+                        icon={TwoBirdsIcon}
+                        animateValue
+                      />
+                    </MagicCard>
+                  </div>
+
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
                       <KPICard
-                        label="Total oiseaux produits"
+                        label="Total des oiseaux livrés"
                           value={costsSummary.totalNbreProduction ?? 0}
-                          icon={Bird}
+                          icon={TwoBirdsIcon}
                           animateValue
                         />
                       </MagicCard>
                     <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
                         <KPICard
                           label="Mortalité cumulative"
-                          value={
-                            mortalityPct != null
-                              ? `${mortalityPct.toFixed(2)}%`
-                              : totalMortality > 0
-                              ? `${totalMortality} (sans %)`
-                              : "-"
-                          }
-                          icon={HeartPulse}
+                          value={totalMortality}
+                          icon={RedBirdIcon}
+                          animateValue
                           status={
                             mortalityPct != null
                               ? mortalityPct > 3
@@ -510,68 +1033,133 @@ export default function Dashboard() {
                       </MagicCard>
                   </div>
 
-                  {/* Moyenne INDICE DE CONSOMMATION RÉEL par sexe (moyenne entre les bâtiments). Nécessite: suivi consommation + poids vif produit (stock) pour la semaine. */}
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div title={indiceMeanBySex?.male == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
-                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                        <KPICard
-                          label="Moy. INDICE DE CONSOMMATION RÉEL — Mâle"
-                          value={indiceMeanBySex?.male != null ? Number(indiceMeanBySex.male.toFixed(2)) : "-"}
-                          icon={Scale}
-                        />
-                      </MagicCard>
+                  {/* INDICE DE CONSOMMATION par bâtiment et sexe (semaine) — filtered by selected sex when Mâle/Femelle */}
+                  {(() => {
+                    const indiceFiltered = hebdoSex != null
+                      ? indiceByBatiment.filter((r) => r.sex === hebdoSex)
+                      : indiceByBatiment;
+                    return indiceFiltered.length > 0 && (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <IndiceBatimentSectionIcon />
+                        <div>
+                          <h3 className="text-base font-semibold text-foreground">
+                            Indice de Consommation aliment par bâtiment ({filters.week ?? ""})
+                            {hebdoSex != null && ` — ${hebdoSex}`}
+                          </h3>
+                          <p className="text-xs text-muted-foreground">
+                            {hebdoSex != null ? `Bâtiments avec ${hebdoSex}` : "Par bâtiment et sexe"}
+                          </p>
+                        </div>
+                      </div>
+                      <Separator />
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                        {[...indiceFiltered]
+                          .sort((a, b) => batimentOrder(a.batiment) - batimentOrder(b.batiment))
+                          .map(({ batiment, sex, value }) => (
+                          <MagicCard
+                            key={`${batiment}-${sex}`}
+                            className="rounded-xl border border-border bg-card p-4 animate-in fade-in duration-300"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Building2 className="h-4 w-4 text-primary shrink-0" />
+                              <span className="text-xs font-medium text-muted-foreground truncate">
+                                {batiment} — {sex}
+                              </span>
+                            </div>
+                            <p className="mt-1.5 text-xl font-bold text-foreground">
+                              {value != null ? Number(value).toFixed(2) : "-"}
+                            </p>
+                          </MagicCard>
+                        ))}
+                      </div>
                     </div>
-                    <div title={indiceMeanBySex?.female == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
-                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                        <KPICard
-                          label="Moy. INDICE DE CONSOMMATION RÉEL — Femelle"
-                          value={indiceMeanBySex?.female != null ? Number(indiceMeanBySex.female.toFixed(2)) : "-"}
-                          icon={Scale}
-                        />
-                      </MagicCard>
-                    </div>
-                  </div>
+                    );
+                  })()}
 
-                  <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${canSeePricing ? 'lg:grid-cols-3' : 'lg:grid-cols-1'}`}>
-                    <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                  {/* Moyen = (indice B1 + indice B3 + …) / nb total. When sex selected, show only that sex. */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-3">
+                      <MoyIndiceSectionIcon />
+                      <div>
+                        <h3 className="text-base font-semibold text-foreground">
+                          Moy. Indice de Consommation aliment
+                          {hebdoSex != null ? ` — ${hebdoSex}` : " — Mâle & Femelle"}
+                        </h3>
+                        <p className="text-xs text-muted-foreground">Moyenne par sexe</p>
+                      </div>
+                    </div>
+                    <Separator />
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {(hebdoSex == null || hebdoSex === "Mâle") && (
+                    <div title="Moyen = (indice B1 + indice B3 + …) / nombre de bâtiments Mâle dans Infos de Setup.">
+                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
                         <KPICard
-                          label="Effectif restant fin de semaine"
-                          value={costsSummary.effectifRestantFinSemaine ?? 0}
-                          icon={Bird}
-                          animateValue
+                          label="Moy. Indice de Consommation aliment — Mâle"
+                          value={indiceMeanBySex?.male != null ? Number(indiceMeanBySex.male.toFixed(2)) : "-"}
+                          icon={MoyIndiceMaleIcon}
                         />
                       </MagicCard>
-                    {canSeePricing && (
-                      <>
-                        <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                          <KPICard
-                            label="Prix de revient / sujet"
-                            value={costsSummary.prixRevientParSujet != null ? String(Number(costsSummary.prixRevientParSujet).toFixed(2)) + " DH" : "-"}
-                            icon={DollarSign}
-                          />
-                        </MagicCard>
-                        <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                          <KPICard
-                            label="Prix de revient / kg"
-                            value={costsSummary.prixRevientParKg != null ? String(Number(costsSummary.prixRevientParKg).toFixed(2)) + " DH" : "-"}
-                            icon={DollarSign}
-                          />
-                        </MagicCard>
-                      </>
+                    </div>
+                    )}
+                    {(hebdoSex == null || hebdoSex === "Femelle") && (
+                    <div title="Moyen = (indice B2 + indice B4 + …) / nombre de bâtiments Femelle dans Infos de Setup.">
+                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                        <KPICard
+                          label="Moy. Indice de Consommation aliment — Femelle"
+                          value={indiceMeanBySex?.female != null ? Number(indiceMeanBySex.female.toFixed(2)) : "-"}
+                          icon={MoyIndiceFemelleIcon}
+                        />
+                      </MagicCard>
+                    </div>
                     )}
                   </div>
+                  </div>
+
+                  {(hebdoSex != null || canSeePricing) && (
+                    <div className="space-y-4">
+                      {canSeePricing && (
+                        <>
+                          <div className="flex items-center gap-3">
+                            <PrixRevientSectionIcon />
+                            <div>
+                              <h3 className="text-base font-semibold text-foreground">Prix de revient</h3>
+                              <p className="text-xs text-muted-foreground">Coûts unitaires par sujet et par kg</p>
+                            </div>
+                          </div>
+                          <Separator />
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                              <KPICard
+                                label="Prix de revient / sujet"
+                                value={costsSummary.prixRevientParSujet != null ? String(Number(costsSummary.prixRevientParSujet).toFixed(2)) + " DH" : "-"}
+                                icon={DollarSign}
+                              />
+                            </MagicCard>
+                            <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                              <KPICard
+                                label="Prix de revient / kg"
+                                value={costsSummary.prixRevientParKg != null ? String(Number(costsSummary.prixRevientParKg).toFixed(2)) + " DH" : "-"}
+                                icon={DollarSign}
+                              />
+                            </MagicCard>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                     <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
                       <WaterConsumptionLineChart
                         data={dailyWaterData}
-                        semaine={filters.week ?? ""}
+                        semaine={filters.week ?? hebdoWeek ?? ""}
                       />
                     </MagicCard>
                     <MagicCard className="rounded-xl border border-border bg-card p-6 animate-in fade-in duration-300">
                       <MortalityLineChart
                         data={dailyMortalityData}
-                        semaine={filters.week ?? ""}
+                        semaine={filters.week ?? hebdoWeek ?? ""}
                       />
                     </MagicCard>
                   </div>
@@ -580,8 +1168,174 @@ export default function Dashboard() {
             </>
           )}
 
-          {/* Daily Dashboard View (Responsable Ferme & Backoffice) */}
-          {showDailyDashboard && (
+          {/* Responsable Ferme / Backoffice: Entry — choose Dashboard du jour or Dashboard hebdomadaire */}
+          {showDailyDashboard && rfView === "entry" && (
+            <div className="grid gap-6 sm:grid-cols-2 lg:gap-8">
+              <button
+                type="button"
+                onClick={() => setRfView("daily")}
+                className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-2xl"
+              >
+                <MagicCard className="rounded-2xl border border-border bg-card p-0 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-lg group-hover:shadow-primary/5">
+                  <div className="flex flex-col p-6 sm:p-8">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <Calendar className="h-7 w-7" />
+                    </div>
+                    <h2 className="mt-4 font-display text-xl font-semibold text-foreground sm:text-2xl">
+                      Dashboard du jour
+                    </h2>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Consultez les métriques du dernier jour enregistré pour votre ferme.
+                    </p>
+                    <span className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-primary">
+                      Entrer
+                      <ChevronRight className="h-4 w-4" />
+                    </span>
+                  </div>
+                </MagicCard>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRfView("hebdo");
+                  setHebdoFarmId(effectiveFarmId ?? null);
+                  setHebdoStep("lot");
+                  setHebdoLot(null);
+                  setHebdoWeek(null);
+                  setHebdoSex(null);
+                }}
+                className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-2xl"
+              >
+                <MagicCard className="rounded-2xl border border-border bg-card p-0 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-lg group-hover:shadow-primary/5">
+                  <div className="flex flex-col p-6 sm:p-8">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <CalendarRange className="h-7 w-7" />
+                    </div>
+                    <h2 className="mt-4 font-display text-xl font-semibold text-foreground sm:text-2xl">
+                      Dashboard hebdomadaire
+                    </h2>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Suivi des indicateurs par lot et par semaine : production, mortalité, consommation. Données filtrées par sexe (Mâle / Femelle).
+                    </p>
+                    <span className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-primary">
+                      Entrer
+                      <ChevronRight className="h-4 w-4" />
+                    </span>
+                  </div>
+                </MagicCard>
+              </button>
+            </div>
+          )}
+
+          {/* RF Hebdo flow: lot → week → sex → dashboard (no farm step) */}
+          {showDailyDashboard && rfView === "hebdo" && hebdoStep !== "dashboard" && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <span className={hebdoStep === "lot" ? "font-medium text-foreground" : ""}>1. Lot</span>
+                <ChevronRight className="h-4 w-4" />
+                <span className={hebdoStep === "week" ? "font-medium text-foreground" : ""}>2. Semaine</span>
+                <ChevronRight className="h-4 w-4" />
+                <span className={hebdoStep === "sex" ? "font-medium text-foreground" : ""}>3. Sexe</span>
+              </div>
+              {hebdoStep === "lot" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">Choisissez un lot</p>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {lots.map((lotName) => (
+                      <button
+                        key={lotName}
+                        type="button"
+                        onClick={() => { setHebdoLot(lotName); setHebdoStep("week"); }}
+                        className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
+                      >
+                        <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
+                              <Layers className="h-6 w-6 text-emerald-600" />
+                            </div>
+                            <p className="font-semibold text-foreground">{lotName}</p>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground ml-auto" />
+                          </div>
+                        </MagicCard>
+                      </button>
+                    ))}
+                  </div>
+                  {lots.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-border bg-muted/20 py-8 text-center text-sm text-muted-foreground">
+                      Aucun lot disponible.
+                    </div>
+                  )}
+                </div>
+              )}
+              {hebdoStep === "week" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">Choisissez la semaine pour le lot <strong>{hebdoLot}</strong></p>
+                  <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
+                    {HEBDO_WEEKS.map((w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        onClick={() => { setHebdoWeek(w); setHebdoStep("sex"); }}
+                        className="group rounded-lg border border-border bg-card px-3 py-2.5 text-center font-medium transition-all hover:border-primary/50 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      >
+                        <span className="text-foreground group-hover:text-primary">{w}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {hebdoStep === "sex" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Choisissez le sexe pour <strong>{hebdoLot}</strong> — {hebdoWeek}
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    {[
+                      { value: null, label: "Les deux (Mâle + Femelle)", icon: TwoBirdsIcon, iconClassName: "h-full w-full flex items-center justify-center gap-0.5" },
+                      { value: "Mâle", label: "Mâle", icon: Bird, iconClassName: "h-6 w-6 text-blue-500" },
+                      { value: "Femelle", label: "Femelle", icon: Bird, iconClassName: "h-6 w-6 text-pink-500" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => {
+                          setHebdoSex(opt.value);
+                          setFilters({ farmId: effectiveFarmId ?? null, lot: hebdoLot ?? null, week: hebdoWeek ?? null, sex: opt.value ?? null });
+                          setHebdoStep("dashboard");
+                        }}
+                        className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
+                      >
+                        <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/10">
+                              <opt.icon className={"iconClassName" in opt ? opt.iconClassName : "h-6 w-6 text-primary"} />
+                            </div>
+                            <p className="font-semibold text-foreground">{opt.label}</p>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground ml-auto" />
+                          </div>
+                        </MagicCard>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (hebdoStep === "sex") { setHebdoStep("week"); setHebdoSex(null); }
+                  else if (hebdoStep === "week") { setHebdoStep("lot"); setHebdoWeek(null); }
+                  else if (hebdoStep === "lot") { setRfView("entry"); setHebdoLot(null); setHebdoFarmId(null); }
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted/80"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Retour
+              </button>
+            </div>
+          )}
+
+          {/* Daily Dashboard View (Responsable Ferme & Backoffice when rfView=daily, or RT/Admin in "daily" sub-view) */}
+          {((showDailyDashboard && rfView === "daily") || (showWeeklyDashboard && rtaView === "daily")) && (
             <>
               {dailyLoading && (
                 <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
@@ -598,33 +1352,89 @@ export default function Dashboard() {
 
               {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && dailySummary && (
                 <>
-                  {showFarmSelector && filters.farmId !== effectiveFarmIdForDaily && (
+                  {((showFarmSelector && filters.farmId !== effectiveFarmIdForDaily) || (showWeeklyDashboard && rtaView === "daily")) && (
                     <p className="text-sm text-muted-foreground mb-2">
                       Affichage : <strong>{farms.find((f) => f.id === effectiveFarmIdForDaily)?.name ?? "Ferme"}</strong> — dernier jour du dernier lot
                     </p>
                   )}
-                  {/* Moyenne INDICE DE CONSOMMATION RÉEL par sexe (même semaine que le rapport du jour). Nécessite: suivi consommation + poids vif produit (stock). */}
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 mb-6">
-                    <div title={dailyIndiceMeanBySex?.male == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
-                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                        <KPICard
-                          label="Moy. INDICE DE CONSOMMATION RÉEL — Mâle"
-                          value={dailyIndiceMeanBySex?.male != null ? Number(dailyIndiceMeanBySex.male.toFixed(2)) : "-"}
-                          icon={Scale}
-                        />
-                      </MagicCard>
-                    </div>
-                    <div title={dailyIndiceMeanBySex?.female == null ? "Calcul = Cumul aliment consommé / Poids vif produit. Saisir les données de consommation et le poids moyen réel (performances) pour afficher l'indice." : undefined}>
-                      <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
-                        <KPICard
-                          label="Moy. INDICE DE CONSOMMATION RÉEL — Femelle"
-                          value={dailyIndiceMeanBySex?.female != null ? Number(dailyIndiceMeanBySex.female.toFixed(2)) : "-"}
-                          icon={Scale}
-                        />
-                      </MagicCard>
-                    </div>
-                  </div>
-                  <DailyMetricsCard data={dailySummary} />
+                  {/* Daily dashboard (Responsable Ferme / Backoffice): Date, Lot, Âge, Semaine, Mortalité totale du jour, then Indice de Consommation directly below */}
+                  <DailyMetricsCard
+                    data={dailySummary}
+                    contentBelowMortality={
+                      <>
+                        {/* Indice de Consommation aliment par bâtiment + Moy. Mâle/Femelle — placed right below Mortalité totale du jour */}
+                        {dailyIndiceByBatiment.length > 0 && dailySummary?.semaine != null && (
+                          <div className="space-y-4 mb-6">
+                            <div className="flex items-center gap-3">
+                              <IndiceBatimentSectionIcon />
+                              <div>
+                                <h3 className="text-base font-semibold text-foreground">
+                                  Indice de Consommation aliment par bâtiment (
+                                  {typeof dailySummary.semaine === "number" ? `S${dailySummary.semaine}` : String(dailySummary.semaine)}
+                                  )
+                                </h3>
+                                <p className="text-xs text-muted-foreground">Par bâtiment et sexe</p>
+                              </div>
+                            </div>
+                            <Separator />
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                              {[...dailyIndiceByBatiment]
+                                .sort((a, b) => batimentOrder(a.batiment) - batimentOrder(b.batiment))
+                                .map(({ batiment, sex, value }) => (
+                                <MagicCard
+                                  key={`${batiment}-${sex}`}
+                                  className="rounded-xl border border-border bg-card p-4 animate-in fade-in duration-300"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <Building2 className="h-4 w-4 text-primary shrink-0" />
+                                    <span className="text-xs font-medium text-muted-foreground truncate">
+                                      {batiment} — {sex}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1.5 text-xl font-bold text-foreground">
+                                    {value != null ? Number(value).toFixed(2) : "-"}
+                                  </p>
+                                </MagicCard>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {/* Moyen = (indice B1 + indice B3 + …) / nb total bâtiments (Mâle + Femelle). */}
+                        <div className="space-y-4 mb-6">
+                          <div className="flex items-center gap-3">
+                            <MoyIndiceSectionIcon />
+                            <div>
+                              <h3 className="text-base font-semibold text-foreground">
+                                Moy. Indice de Consommation aliment — Mâle & Femelle
+                              </h3>
+                              <p className="text-xs text-muted-foreground">Moyenne par sexe</p>
+                            </div>
+                          </div>
+                          <Separator />
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <div title="Moyen = (indice B1 + indice B3 + …) / nombre total de tous les bâtiments (Mâle + Femelle) dans Infos de Setup.">
+                            <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                              <KPICard
+                                label="Moy. Indice de Consommation aliment — Mâle"
+                                value={dailyIndiceMeanBySex?.male != null ? Number(dailyIndiceMeanBySex.male.toFixed(2)) : "-"}
+                                icon={MoyIndiceMaleIcon}
+                              />
+                            </MagicCard>
+                          </div>
+                          <div title="Moyen = (indice B2 + indice B4 + …) / nombre total de tous les bâtiments (Mâle + Femelle) dans Infos de Setup.">
+                            <MagicCard className="rounded-xl border border-border bg-card p-5 animate-in fade-in duration-300">
+                              <KPICard
+                                label="Moy. Indice de Consommation aliment — Femelle"
+                                value={dailyIndiceMeanBySex?.female != null ? Number(dailyIndiceMeanBySex.female.toFixed(2)) : "-"}
+                                icon={MoyIndiceFemelleIcon}
+                              />
+                            </MagicCard>
+                          </div>
+                        </div>
+                        </div>
+                      </>
+                    }
+                  />
                 </>
               )}
 

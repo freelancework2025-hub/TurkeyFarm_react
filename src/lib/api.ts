@@ -98,6 +98,37 @@ export async function apiFetch<T>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * Like apiFetch but returns null when response is 204 or body is empty/invalid.
+ * Use for endpoints that may return "no data" (e.g. dashboard summary for a farm with no reports).
+ */
+async function apiFetchOrNull<T>(
+  path: string,
+  options: RequestInit & { token?: string | null; skipAuth?: boolean } = {}
+): Promise<T | null> {
+  const { token: optToken, skipAuth, ...rest } = options;
+  const token = skipAuth ? null : (optToken ?? getStoredToken());
+  const url = path.startsWith("http") ? path : `${getApiBase()}${path}`;
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    ...authHeader(null, token),
+    ...(rest.headers ?? {}),
+  };
+  const res = await fetch(url, { ...rest, headers, credentials: "include" });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(parseApiErrorMessage(text, res.status));
+  }
+  if (res.status === 204) return null;
+  const text = await res.text();
+  if (!text || !text.trim()) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
 export interface RegisterRequest {
   username: string;
   password: string;
@@ -329,13 +360,13 @@ export const api = {
       }),
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/daily-reports/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
-    /** Get dashboard summary for the latest day (lot optional - if not provided, finds most recent lot automatically) */
+    /** Get dashboard summary for the latest day (lot optional - if not provided, finds most recent lot automatically). Returns null when the farm has no report data (empty response). */
     getDashboardSummary: (farmId?: number | null, lot?: string | null, token?: string | null) => {
       const params = new URLSearchParams();
       if (farmId != null) params.set("farmId", String(farmId));
       if (lot != null && lot.trim() !== "") params.set("lot", lot.trim());
       const queryString = params.toString();
-      return apiFetch<DailyDashboardSummary>(
+      return apiFetchOrNull<DailyDashboardSummary>(
         `/api/daily-reports/dashboard-summary${queryString ? `?${queryString}` : ""}`,
         { token: token ?? getStoredToken() }
       );
