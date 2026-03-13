@@ -4,7 +4,7 @@ import { ArrowLeft, Loader2, Building2, Save, Plus, Trash2, ChevronDown } from "
 import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse, type SetupInfoRequest, type SetupInfoResponse } from "@/lib/api";
+import { api, type FarmResponse, type LotWithStatusResponse, type SetupInfoRequest, type SetupInfoResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
 const BUILDINGS = ["B1", "B2", "B3", "B4"];
@@ -285,6 +285,7 @@ export default function InfosSetup() {
   const [farms, setFarms] = useState<FarmResponse[]>([]);
   const [farmsLoading, setFarmsLoading] = useState(showFarmSelector);
   const [lots, setLots] = useState<string[]>([]);
+  const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
 
   const selectedLot = lotParam?.trim() || null;
@@ -310,14 +311,16 @@ export default function InfosSetup() {
   // For URL parameters, always use a farmId when available to ensure proper multi-tenant data isolation
   const urlFarmId = reportingFarmId ?? authSelectedFarmId;
 
-  // Function to refresh lots list
+  // Function to refresh lots list (with closed/open status for grey display and close/open actions)
   const refreshLots = useCallback(async () => {
     if (showFarmSelector || !reportingFarmId) return;
     setLotsLoading(true);
     try {
-      const list = await api.farms.lots(reportingFarmId);
-      setLots(list ?? []);
+      const withStatus = await api.farms.lotsWithStatus(reportingFarmId);
+      setLotsWithStatus(withStatus ?? []);
+      setLots((withStatus ?? []).map((x) => x.lot));
     } catch {
+      setLotsWithStatus([]);
       setLots([]);
     } finally {
       setLotsLoading(false);
@@ -325,14 +328,20 @@ export default function InfosSetup() {
   }, [showFarmSelector, reportingFarmId]);
 
   useEffect(() => {
-    if (hasLotInUrl) return;
+    if (!reportingFarmId) return;
     refreshLots();
-  }, [hasLotInUrl, refreshLots]);
+  }, [reportingFarmId, refreshLots]);
 
-  // Load setup information for the selected lot
+  /** When the selected lot is closed, no user can access its data; show message and lot selector only. */
+  const isSelectedLotClosed = Boolean(hasLotInUrl && selectedLot && lotsWithStatus.find((l) => l.lot === selectedLot)?.closed);
+
+  // Load setup information for the selected lot (skip when lot is closed — no data access)
   const load = useCallback(async () => {
     if (!hasLotInUrl) return;
-    
+    if (lotsWithStatus.find((l) => l.lot === selectedLot)?.closed) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       // Try to load existing setup info first
@@ -428,7 +437,7 @@ export default function InfosSetup() {
     } finally {
       setLoading(false);
     }
-  }, [reportingFarmId, selectedLot, hasLotInUrl, canFillSetupInfo]);
+  }, [reportingFarmId, selectedLot, hasLotInUrl, canFillSetupInfo, lotsWithStatus]);
 
   useEffect(() => {
     console.log("🔄 InfosSetup - useEffect triggered, calling load()");
@@ -727,13 +736,83 @@ export default function InfosSetup() {
           {!hasLotInUrl ? (
             <LotSelectorView
               existingLots={lots}
+              lotsWithStatus={lotsWithStatus.length > 0 ? lotsWithStatus : undefined}
               loading={lotsLoading}
-              onSelectLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
+              onSelectLot={(lot) => {
+                const status = lotsWithStatus.find((l) => l.lot === lot);
+                if (status?.closed) {
+                  toast({
+                    title: "Lot fermé",
+                    description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot });
+              }}
               onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
               canCreate={canFillSetupInfo}
+              canCloseOpen={canFillSetupInfo}
+              onCloseLot={async (lot) => {
+                if (!reportingFarmId) return;
+                await api.farms.closeLot(reportingFarmId, lot);
+                toast({ title: "Lot fermé", description: `Le lot ${lot} est maintenant fermé.` });
+                await refreshLots();
+              }}
+              onOpenLot={async (lot) => {
+                if (!reportingFarmId) return;
+                await api.farms.openLot(reportingFarmId, lot);
+                toast({ title: "Lot ouvert", description: `Le lot ${lot} est à nouveau accessible.` });
+                await refreshLots();
+              }}
               title="Choisir un lot — Données mises en place"
               emptyMessage="Aucun lot. Créez d'abord un lot pour configurer les données mises en place."
             />
+          ) : isSelectedLotClosed ? (
+            <>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-4 mb-6">
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                  Ce lot est fermé. Les données ne sont pas accessibles.
+                </p>
+                <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                  Choisissez un autre lot ci-dessous ou, si vous êtes responsable technique ou administrateur, survolez le lot fermé et cliquez sur &quot;Ouvrir le lot&quot;.
+                </p>
+              </div>
+              <LotSelectorView
+                existingLots={lots}
+                lotsWithStatus={lotsWithStatus.length > 0 ? lotsWithStatus : undefined}
+                loading={lotsLoading}
+                onSelectLot={(lot) => {
+                  const status = lotsWithStatus.find((l) => l.lot === lot);
+                  if (status?.closed) {
+                    toast({
+                      title: "Lot fermé",
+                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot });
+                }}
+                onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
+                canCreate={canFillSetupInfo}
+                canCloseOpen={canFillSetupInfo}
+                onCloseLot={async (lot) => {
+                  if (!reportingFarmId) return;
+                  await api.farms.closeLot(reportingFarmId, lot);
+                  toast({ title: "Lot fermé", description: `Le lot ${lot} est maintenant fermé.` });
+                  await refreshLots();
+                }}
+                onOpenLot={async (lot) => {
+                  if (!reportingFarmId) return;
+                  await api.farms.openLot(reportingFarmId, lot);
+                  toast({ title: "Lot ouvert", description: `Le lot ${lot} est à nouveau accessible.` });
+                  await refreshLots();
+                }}
+                title="Choisir un lot — Données mises en place"
+                emptyMessage="Aucun lot. Créez d'abord un lot pour configurer les données mises en place."
+              />
+            </>
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-4 mb-6">

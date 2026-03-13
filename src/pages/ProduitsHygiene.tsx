@@ -10,6 +10,7 @@ import {
   type FarmResponse,
   type LivraisonProduitHygieneResponse,
   type LivraisonProduitHygieneRequest,
+  type LotWithStatusResponse,
 } from "@/lib/api";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
@@ -119,8 +120,10 @@ export default function ProduitsHygiene() {
   /** True when Vide sanitaire was loaded from API (existing record). Used to enforce canUpdate for edits. */
   const [hasExistingVideSanitaire, setHasExistingVideSanitaire] = useState(false);
   const [lots, setLots] = useState<string[]>([]);
+  const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const isSelectedLotClosed = Boolean(lotFilter.trim() && lotsWithStatus.find((l) => l.lot === lotFilter.trim())?.closed);
   const [saving, setSaving] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
@@ -141,9 +144,12 @@ export default function ProduitsHygiene() {
     if (showFarmSelector || !pageFarmId) return;
     setLotsLoading(true);
     api.farms
-      .lots(pageFarmId)
-      .then((list) => setLots(list ?? []))
-      .catch(() => setLots([]))
+      .lotsWithStatus(pageFarmId)
+      .then((data) => {
+        setLotsWithStatus(data ?? []);
+        setLots((data ?? []).map((x) => x.lot));
+      })
+      .catch(() => { setLotsWithStatus([]); setLots([]); })
       .finally(() => setLotsLoading(false));
   }, [showFarmSelector, pageFarmId]);
 
@@ -208,7 +214,7 @@ export default function ProduitsHygiene() {
   );
 
   const loadMovements = useCallback(async () => {
-    if (showFarmSelector || !lotFilter.trim()) return;
+    if (showFarmSelector || !lotFilter.trim() || isSelectedLotClosed) return;
     setLoading(true);
     try {
       const list = await api.livraisonsProduitsHygiene.list({
@@ -275,7 +281,7 @@ export default function ProduitsHygiene() {
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, toast]);
+  }, [showFarmSelector, pageFarmId, lotFilter, toast, isSelectedLotClosed]);
 
   useEffect(() => {
     loadMovements();
@@ -630,7 +636,7 @@ export default function ProduitsHygiene() {
             <p className="text-sm text-muted-foreground">Aucune ferme disponible.</p>
           )}
         </div>
-      ) : !hasLotInUrl ? (
+      ) : !hasLotInUrl || isSelectedLotClosed ? (
         <>
           {canAccessAllFarms && isValidFarmId && (
             <button
@@ -642,10 +648,32 @@ export default function ProduitsHygiene() {
               Changer de ferme
             </button>
           )}
+          {isSelectedLotClosed && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-4 mb-6">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                Ce lot est fermé. Les données ne sont pas accessibles.
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                Choisissez un autre lot ci-dessous.
+              </p>
+            </div>
+          )}
           <LotSelectorView
             existingLots={lots}
+            lotsWithStatus={lotsWithStatus.length > 0 ? lotsWithStatus : undefined}
             loading={lotsLoading}
-            onSelectLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
+            onSelectLot={(lot) => {
+              const status = lotsWithStatus.find((l) => l.lot === lot);
+              if (status?.closed) {
+                toast({
+                  title: "Lot fermé",
+                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  variant: "destructive",
+                });
+                return;
+              }
+              setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
+            }}
             onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
             canCreate={canCreate}
             title="Choisir un lot — Produits Hygiène"

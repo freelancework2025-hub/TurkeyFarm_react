@@ -5,7 +5,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse, type SortieRequest, type SortieResponse } from "@/lib/api";
+import { api, type FarmResponse, type SortieRequest, type SortieResponse, type LotWithStatusResponse } from "@/lib/api";
 
 /**
  * Permission matrix (same as Reporting Journalier):
@@ -138,8 +138,10 @@ export default function SortiesFerme() {
   const [farms, setFarms] = useState<FarmResponse[]>([]);
   const [farmsLoading, setFarmsLoading] = useState(showFarmSelector);
   const [lots, setLots] = useState<string[]>([]);
+  const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [rows, setRows] = useState<SortieRow[]>([]);
+  const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
@@ -158,14 +160,17 @@ export default function SortiesFerme() {
   }, [showFarmSelector]);
 
   useEffect(() => {
-    if (showFarmSelector || !pageFarmId || hasLotInUrl) return;
+    if (showFarmSelector || !pageFarmId) return;
     setLotsLoading(true);
     api.farms
-      .lots(pageFarmId)
-      .then((list) => setLots(list ?? []))
-      .catch(() => setLots([]))
+      .lotsWithStatus(pageFarmId)
+      .then((data) => {
+        setLotsWithStatus(data ?? []);
+        setLots((data ?? []).map((x) => x.lot));
+      })
+      .catch(() => { setLotsWithStatus([]); setLots([]); })
       .finally(() => setLotsLoading(false));
-  }, [showFarmSelector, pageFarmId, hasLotInUrl]);
+  }, [showFarmSelector, pageFarmId]);
 
   const selectFarm = useCallback(
     (id: number) => setSearchParams({ farmId: String(id) }),
@@ -207,7 +212,7 @@ export default function SortiesFerme() {
   });
 
   const loadSorties = useCallback(async () => {
-    if (showFarmSelector || !hasLotInUrl || !hasSemaineInUrl) return;
+    if (showFarmSelector || !hasLotInUrl || !hasSemaineInUrl || isSelectedLotClosed) return;
     setLoading(true);
     try {
       // Load ALL sorties for the lot (not filtered by semaine) so cumulative calculation can access all weeks
@@ -284,7 +289,7 @@ export default function SortiesFerme() {
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, hasLotInUrl, hasSemaineInUrl, lotParam, selectedSemaine, isReadOnly, canCreate, toast]);
+  }, [showFarmSelector, pageFarmId, hasLotInUrl, hasSemaineInUrl, lotParam, selectedSemaine, isReadOnly, canCreate, toast, isSelectedLotClosed]);
 
   useEffect(() => {
     loadSorties();
@@ -526,16 +531,40 @@ export default function SortiesFerme() {
             </button>
           )}
 
-          {!hasLotInUrl ? (
-            <LotSelectorView
-              existingLots={lots}
-              loading={lotsLoading}
-              onSelectLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-              onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-              canCreate={canCreate}
-              title="Choisir un lot — Sorties Ferme"
-              emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
-            />
+          {!hasLotInUrl || isSelectedLotClosed ? (
+            <>
+              {isSelectedLotClosed && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-4 mb-6">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                    Ce lot est fermé. Les données ne sont pas accessibles.
+                  </p>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                    Choisissez un autre lot ci-dessous.
+                  </p>
+                </div>
+              )}
+              <LotSelectorView
+                existingLots={lots}
+                lotsWithStatus={lotsWithStatus.length > 0 ? lotsWithStatus : undefined}
+                loading={lotsLoading}
+                onSelectLot={(lot) => {
+                  const status = lotsWithStatus.find((l) => l.lot === lot);
+                  if (status?.closed) {
+                    toast({
+                      title: "Lot fermé",
+                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
+                }}
+                onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
+                canCreate={canCreate}
+                title="Choisir un lot — Sorties Ferme"
+                emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
+              />
+            </>
           ) : !hasSemaineInUrl ? (
             <div className="space-y-6">
               {canAccessAllFarms && isValidFarmId && (

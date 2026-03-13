@@ -11,6 +11,7 @@ import {
   type EmployerResponse,
   type MainOeuvreResponse,
   type MainOeuvreRequest,
+  type LotWithStatusResponse,
 } from "@/lib/api";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
@@ -123,8 +124,10 @@ export default function MainOeuvre() {
   const [rows, setRows] = useState<MainOeuvreRow[]>([]);
   const [lotFilter, setLotFilter] = useState(lotParam);
   const [lots, setLots] = useState<string[]>([]);
+  const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
   const [saving, setSaving] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [addingToRowId, setAddingToRowId] = useState<string | null>(null);
@@ -148,9 +151,12 @@ export default function MainOeuvre() {
     if (showFarmSelector || !pageFarmId) return;
     setLotsLoading(true);
     api.farms
-      .lots(pageFarmId)
-      .then((list) => setLots(Array.isArray(list) ? list : []))
-      .catch(() => setLots([]))
+      .lotsWithStatus(pageFarmId)
+      .then((data) => {
+        setLotsWithStatus(data ?? []);
+        setLots((data ?? []).map((x) => x.lot));
+      })
+      .catch(() => { setLotsWithStatus([]); setLots([]); })
       .finally(() => setLotsLoading(false));
   }, [showFarmSelector, pageFarmId]);
 
@@ -218,7 +224,7 @@ export default function MainOeuvre() {
   );
 
   const loadMovements = useCallback(async () => {
-    if (showFarmSelector || !lotFilter.trim()) return;
+    if (showFarmSelector || !lotFilter.trim() || isSelectedLotClosed) return;
     setLoading(true);
     try {
       const list = await api.mainOeuvre.list({
@@ -261,7 +267,7 @@ export default function MainOeuvre() {
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, today]);
+  }, [showFarmSelector, pageFarmId, lotFilter, today, isSelectedLotClosed]);
 
   useEffect(() => {
     loadMovements();
@@ -578,7 +584,7 @@ export default function MainOeuvre() {
             Reconnectez-vous et choisissez une ferme pour accéder à la main d&apos;œuvre.
           </p>
         </div>
-      ) : !hasLotInUrl ? (
+      ) : !hasLotInUrl || isSelectedLotClosed ? (
         <>
           {canAccessAllFarms && isValidFarmId && (
             <button
@@ -590,10 +596,32 @@ export default function MainOeuvre() {
               Changer de ferme
             </button>
           )}
+          {isSelectedLotClosed && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-4 mb-6">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                Ce lot est fermé. Les données ne sont pas accessibles.
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                Choisissez un autre lot ci-dessous.
+              </p>
+            </div>
+          )}
           <LotSelectorView
             existingLots={lots}
+            lotsWithStatus={lotsWithStatus.length > 0 ? lotsWithStatus : undefined}
             loading={lotsLoading}
-            onSelectLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
+            onSelectLot={(lot) => {
+              const status = lotsWithStatus.find((l) => l.lot === lot);
+              if (status?.closed) {
+                toast({
+                  title: "Lot fermé",
+                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  variant: "destructive",
+                });
+                return;
+              }
+              setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
+            }}
             onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
             canCreate={canCreate}
             title="Choisir un lot — Main d'œuvre"

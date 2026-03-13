@@ -7,7 +7,8 @@ import EffectifMisEnPlace from "@/components/reporting/EffectifMisEnPlace";
 import DailyReportTable from "@/components/reporting/DailyReportTable";
 import SavedDaysOverview from "@/components/reporting/SavedDaysOverview";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse } from "@/lib/api";
+import { api, type FarmResponse, type LotWithStatusResponse } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 
 /**
  * Reporting Journalier — effectif mis en place and rapport journalier per day.
@@ -28,7 +29,10 @@ export default function ReportingJournalier() {
   const [farms, setFarms] = useState<FarmResponse[]>([]);
   const [farmsLoading, setFarmsLoading] = useState(showFarmSelector);
   const [lots, setLots] = useState<string[]>([]);
+  const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
+  const { toast } = useToast();
+  const isSelectedLotClosed = Boolean(hasLotInUrl && lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
 
   const [viewMode, setViewMode] = useState<"overview" | "form">("overview");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -52,14 +56,17 @@ export default function ReportingJournalier() {
   const urlFarmId = reportingFarmId ?? authSelectedFarmId;
 
   useEffect(() => {
-    if (showFarmSelector || !reportingFarmId || hasLotInUrl) return;
+    if (showFarmSelector || !reportingFarmId) return;
     setLotsLoading(true);
     api.farms
-      .lots(reportingFarmId)
-      .then((list) => setLots(list ?? []))
-      .catch(() => setLots([]))
+      .lotsWithStatus(reportingFarmId)
+      .then((data) => {
+        setLotsWithStatus(data ?? []);
+        setLots((data ?? []).map((x) => x.lot));
+      })
+      .catch(() => { setLotsWithStatus([]); setLots([]); })
       .finally(() => setLotsLoading(false));
-  }, [showFarmSelector, reportingFarmId, hasLotInUrl]);
+  }, [showFarmSelector, reportingFarmId]);
 
   const selectFarm = useCallback(
     (id: number) => {
@@ -153,16 +160,40 @@ export default function ReportingJournalier() {
             </button>
           )}
 
-          {!hasLotInUrl ? (
-            <LotSelectorView
-              existingLots={lots}
-              loading={lotsLoading}
-              onSelectLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
-              onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
-              canCreate={!isReadOnly}
-              title="Choisir un lot — Reporting Journalier"
-              emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
-            />
+          {!hasLotInUrl || isSelectedLotClosed ? (
+            <>
+              {isSelectedLotClosed && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-4 mb-6">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                    Ce lot est fermé. Les données ne sont pas accessibles.
+                  </p>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                    Choisissez un autre lot ci-dessous.
+                  </p>
+                </div>
+              )}
+              <LotSelectorView
+                existingLots={lots}
+                lotsWithStatus={lotsWithStatus.length > 0 ? lotsWithStatus : undefined}
+                loading={lotsLoading}
+                onSelectLot={(lot) => {
+                  const status = lotsWithStatus.find((l) => l.lot === lot);
+                  if (status?.closed) {
+                    toast({
+                      title: "Lot fermé",
+                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot });
+                }}
+                onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
+                canCreate={!isReadOnly}
+                title="Choisir un lot — Reporting Journalier"
+                emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
+              />
+            </>
           ) : (
             <>
           <div className="flex flex-wrap items-center gap-4 mb-4">

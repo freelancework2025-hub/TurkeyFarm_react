@@ -41,8 +41,9 @@ import {
   Hash,
   Layers,
 } from "lucide-react";
-import { api, type DailyDashboardSummary } from "@/lib/api";
+import { api, type DailyDashboardSummary, type LotWithStatusResponse } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 import { MagicCard } from "@/components/ui/magic-card";
 import { Separator } from "@/components/ui/separator";
 
@@ -192,6 +193,7 @@ export default function Dashboard() {
   const [hebdoWeek, setHebdoWeek] = useState<string | null>(null);
   const [hebdoSex, setHebdoSex] = useState<string | null>(null);
   const [lotsForHebdo, setLotsForHebdo] = useState<string[]>([]);
+  const [lotsForHebdoWithStatus, setLotsForHebdoWithStatus] = useState<LotWithStatusResponse[]>([]);
 
   const [filters, setFilters] = useState<DashboardFilters>(() => ({
     farmId: isResponsableFerme ? selectedFarmId : null,
@@ -201,6 +203,12 @@ export default function Dashboard() {
   }));
   const [farms, setFarms] = useState<{ id: number; name: string; code: string }[]>([]);
   const [lots, setLots] = useState<string[]>([]);
+  const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
+  /** Lot status for the farm used in Dashboard du jour — to show empty dashboard when that lot is closed */
+  const [dailyLotsWithStatus, setDailyLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
+
+  const { toast } = useToast();
+  const canAccessClosedLot = isResponsableTechnique || isAdministrateur;
 
   const showFarmSelector = canAccessAllFarms;
   const fixedFarmId = isResponsableFerme ? selectedFarmId : null;
@@ -258,8 +266,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (effectiveFarmId) {
-      api.farms.lots(effectiveFarmId).then((data) => setLots(data)).catch(() => setLots([]));
+      api.farms.lotsWithStatus(effectiveFarmId).then((data) => {
+        setLotsWithStatus(data ?? []);
+        setLots((data ?? []).map((x) => x.lot));
+      }).catch(() => { setLotsWithStatus([]); setLots([]); });
     } else {
+      setLotsWithStatus([]);
       setLots([]);
     }
   }, [effectiveFarmId]);
@@ -267,11 +279,32 @@ export default function Dashboard() {
   // Fetch lots for hebdo farm selection (when in weekly flow with farm selected)
   useEffect(() => {
     if (hebdoFarmId && rtaView === "weekly") {
-      api.farms.lots(hebdoFarmId).then((data) => setLotsForHebdo(data ?? [])).catch(() => setLotsForHebdo([]));
+      api.farms.lotsWithStatus(hebdoFarmId).then((data) => {
+        setLotsForHebdoWithStatus(data ?? []);
+        setLotsForHebdo((data ?? []).map((x) => x.lot));
+      }).catch(() => { setLotsForHebdoWithStatus([]); setLotsForHebdo([]); });
     } else {
+      setLotsForHebdoWithStatus([]);
       setLotsForHebdo([]);
     }
   }, [hebdoFarmId, rtaView]);
+
+  // Load lot status for daily dashboard farm so we can show empty dashboard when the "last lot" is closed
+  const isInDailyView = (showDailyDashboard && rfView === "daily") || (useRtaLikeWorkflow && rtaView === "daily");
+  useEffect(() => {
+    if (isInDailyView && effectiveFarmIdForDaily) {
+      api.farms.lotsWithStatus(effectiveFarmIdForDaily).then((data) => {
+        setDailyLotsWithStatus(data ?? []);
+      }).catch(() => setDailyLotsWithStatus([]));
+    } else {
+      setDailyLotsWithStatus([]);
+    }
+  }, [isInDailyView, effectiveFarmIdForDaily]);
+
+  /** When the last day's lot (from getDashboardSummary) is closed, show empty dashboard for all users */
+  const isDailyLotClosed = Boolean(
+    dailySummary?.lot && dailyLotsWithStatus.some((l) => l.lot === dailySummary.lot && l.closed)
+  );
 
   useEffect(() => {
     if (isResponsableFerme && selectedFarmId && filters.farmId !== selectedFarmId) {
@@ -312,6 +345,10 @@ export default function Dashboard() {
       setSetupInfoRows([]);
       return;
     }
+    if (isDailyViewForSetup && isDailyLotClosed) {
+      setSetupInfoRows([]);
+      return;
+    }
     api.setupInfo
       .list(farmId, lot)
       .then((rows) => {
@@ -331,6 +368,7 @@ export default function Dashboard() {
     effectiveLotForWeekly,
     filters.lot,
     dailySummary?.lot,
+    isDailyLotClosed,
   ]);
 
   useEffect(() => {
@@ -492,7 +530,7 @@ export default function Dashboard() {
   // Moyen indice de conso aliment par sexe (daily) = (somme indices batiments du sexe) / nb TOTAL batiments
   const showDailyIndice = showDailyDashboard || (useRtaLikeWorkflow && rtaView === "daily");
   useEffect(() => {
-    if (!showDailyIndice || !effectiveFarmIdForDaily || !dailySummary?.lot || !dailySummary?.semaine) {
+    if (!showDailyIndice || !effectiveFarmIdForDaily || !dailySummary?.lot || !dailySummary?.semaine || isDailyLotClosed) {
       setDailyIndiceMeanBySex(null);
       setDailyIndiceByBatiment([]);
       return;
@@ -540,7 +578,7 @@ export default function Dashboard() {
       });
       setDailyIndiceByBatiment(results.map((r) => ({ batiment: r.batiment, sex: r.sex, value: r.value })));
     });
-  }, [showDailyIndice, effectiveFarmIdForDaily, dailySummary?.lot, dailySummary?.semaine, setupInfoRows]);
+  }, [showDailyIndice, effectiveFarmIdForDaily, dailySummary?.lot, dailySummary?.semaine, setupInfoRows, isDailyLotClosed]);
 
   const { totalMortality, effectifDepart, mortalityPct } = useMemo(() => {
     if (!hebdoList.length) {
@@ -855,20 +893,23 @@ export default function Dashboard() {
                     Choisissez un lot pour <strong>{farms.find((f) => f.id === hebdoFarmId)?.name ?? "cette ferme"}</strong>
                   </p>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {lotsForHebdo.map((lotName) => (
+                    {lotsForHebdoWithStatus.map(({ lot: lotName, closed }) => (
                       <button
                         key={lotName}
                         type="button"
                         onClick={() => { setHebdoLot(lotName); setHebdoStep("week"); }}
                         className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
                       >
-                        <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
+                        <MagicCard className={`rounded-xl border p-5 transition-all duration-300 group-hover:shadow-md ${
+                          closed ? "border-muted-foreground/30 bg-muted/60" : "border-border bg-card group-hover:border-primary/50"
+                        }`}>
                           <div className="flex items-center gap-3">
-                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
-                              <Layers className="h-6 w-6 text-emerald-600" />
+                            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${closed ? "bg-muted-foreground/20" : "bg-emerald-500/10"}`}>
+                              <Layers className={`h-6 w-6 ${closed ? "text-muted-foreground" : "text-emerald-600"}`} />
                             </div>
                             <div className="min-w-0 flex-1">
-                              <p className="font-semibold text-foreground">{lotName}</p>
+                              <p className={`font-semibold ${closed ? "text-muted-foreground" : "text-foreground"}`}>{lotName}</p>
+                              {closed && <p className="text-xs text-muted-foreground">Lot fermé</p>}
                             </div>
                             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                           </div>
@@ -876,7 +917,7 @@ export default function Dashboard() {
                       </button>
                     ))}
                   </div>
-                  {lotsForHebdo.length === 0 && (
+                  {lotsForHebdoWithStatus.length === 0 && (
                     <div className="rounded-xl border border-dashed border-border bg-muted/20 py-8 text-center text-sm text-muted-foreground">
                       Aucun lot disponible.
                     </div>
@@ -1255,26 +1296,45 @@ export default function Dashboard() {
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">Choisissez un lot</p>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {lots.map((lotName) => (
-                      <button
-                        key={lotName}
-                        type="button"
-                        onClick={() => { setHebdoLot(lotName); setHebdoStep("week"); }}
-                        className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
-                      >
-                        <MagicCard className="rounded-xl border border-border bg-card p-5 transition-all duration-300 group-hover:border-primary/50 group-hover:shadow-md">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
-                              <Layers className="h-6 w-6 text-emerald-600" />
+                    {lotsWithStatus.map(({ lot: lotName, closed }) => {
+                      const disabled = closed && !canAccessClosedLot;
+                      return (
+                        <button
+                          key={lotName}
+                          type="button"
+                          onClick={() => {
+                            if (disabled) {
+                              toast({
+                                title: "Lot fermé",
+                                description: "Seuls le responsable technique et l'administrateur peuvent accéder à un lot fermé.",
+                                variant: "destructive",
+                              });
+                              return;
+                            }
+                            setHebdoLot(lotName);
+                            setHebdoStep("week");
+                          }}
+                          className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
+                        >
+                          <MagicCard className={`rounded-xl border p-5 transition-all duration-300 group-hover:shadow-md ${
+                            closed ? "border-muted-foreground/30 bg-muted/60" : "border-border bg-card group-hover:border-primary/50"
+                          } ${disabled ? "cursor-not-allowed opacity-90" : ""}`}>
+                            <div className="flex items-center gap-3">
+                              <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${closed ? "bg-muted-foreground/20" : "bg-emerald-500/10"}`}>
+                                <Layers className={`h-6 w-6 ${closed ? "text-muted-foreground" : "text-emerald-600"}`} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className={`font-semibold ${closed ? "text-muted-foreground" : "text-foreground"}`}>{lotName}</p>
+                                {closed && <p className="text-xs text-muted-foreground">Lot fermé — accès réservé</p>}
+                              </div>
+                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground ml-auto" />
                             </div>
-                            <p className="font-semibold text-foreground">{lotName}</p>
-                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground ml-auto" />
-                          </div>
-                        </MagicCard>
-                      </button>
-                    ))}
+                          </MagicCard>
+                        </button>
+                      );
+                    })}
                   </div>
-                  {lots.length === 0 && (
+                  {lotsWithStatus.length === 0 && (
                     <div className="rounded-xl border border-dashed border-border bg-muted/20 py-8 text-center text-sm text-muted-foreground">
                       Aucun lot disponible.
                     </div>
@@ -1364,7 +1424,19 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && dailySummary && (
+              {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && dailySummary && isDailyLotClosed && (
+                <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 py-16 animate-in fade-in duration-300">
+                  <ClipboardList className="h-16 w-16 text-amber-600 dark:text-amber-400" />
+                  <h2 className="mt-4 text-xl font-display font-semibold text-amber-800 dark:text-amber-200">
+                    Lot fermé
+                  </h2>
+                  <p className="mt-2 max-w-md text-center text-sm text-amber-700 dark:text-amber-300">
+                    Le dernier jour enregistré appartient au lot <strong>{dailySummary.lot}</strong>, qui est fermé. Les données ne sont pas accessibles.
+                  </p>
+                </div>
+              )}
+
+              {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && dailySummary && !isDailyLotClosed && (
                 <>
                   {((showFarmSelector && filters.farmId !== effectiveFarmIdForDaily) || (useRtaLikeWorkflow && rtaView === "daily")) && (
                     <p className="text-sm text-muted-foreground mb-2">
@@ -1454,14 +1526,14 @@ export default function Dashboard() {
 
               {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && !dailySummary && (
                 <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 py-16 animate-in fade-in duration-300">
-                    <ClipboardList className="h-16 w-16 text-muted-foreground" />
-                    <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
-                      Aucune donnée disponible
-                    </h2>
-                    <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
-                      Aucun rapport journalier n'a été enregistré pour cette ferme.
-                    </p>
-                  </div>
+                  <ClipboardList className="h-16 w-16 text-muted-foreground" />
+                  <h2 className="mt-4 text-xl font-display font-semibold text-foreground">
+                    Aucune donnée disponible
+                  </h2>
+                  <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
+                    Aucun rapport journalier n'a été enregistré pour cette ferme.
+                  </p>
+                </div>
               )}
             </>
           )}

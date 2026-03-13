@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { api, type FarmResponse, type SetupInfoResponse } from "@/lib/api";
+import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusResponse } from "@/lib/api";
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
@@ -95,7 +95,9 @@ export default function SuiviTechniqueHebdomadaire() {
   const [farms, setFarms] = useState<FarmResponse[]>([]);
   const [farmsLoading, setFarmsLoading] = useState(showFarmSelector);
   const [lots, setLots] = useState<string[]>([]);
+  const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
+  const isSelectedLotClosed = Boolean(hasLotInUrl && lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
   
   /** Setup info data from InfosSetup page - contains building/sex/effectif configurations */
   const [setupInfoData, setSetupInfoData] = useState<SetupInfoResponse[]>([]);
@@ -217,21 +219,24 @@ export default function SuiviTechniqueHebdomadaire() {
       .finally(() => setLoadingSexes(false));
   }, [reportingFarmId, lotParam, selectedBatiment, trimmedSemaine, setupInfoData]);
 
-  // Load lots for selected farm
+  // Load lots for selected farm (with status for closed-lot blocking)
   useEffect(() => {
-    if (showFarmSelector || !reportingFarmId || hasLotInUrl) return;
+    if (showFarmSelector || !reportingFarmId) return;
     setLotsLoading(true);
     api.farms
-      .lots(reportingFarmId)
-      .then((list) => setLots(list ?? []))
-      .catch(() => setLots([]))
+      .lotsWithStatus(reportingFarmId)
+      .then((data) => {
+        setLotsWithStatus(data ?? []);
+        setLots((data ?? []).map((x) => x.lot));
+      })
+      .catch(() => { setLotsWithStatus([]); setLots([]); })
       .finally(() => setLotsLoading(false));
-  }, [showFarmSelector, reportingFarmId, hasLotInUrl]);
+  }, [showFarmSelector, reportingFarmId]);
 
   // Load setupInfo data when lot is selected - this provides building/sex configurations from InfosSetup page
-  // Normalize building names to standard format (B1, B2, etc.)
+  // Normalize building names to standard format (B1, B2, etc.). Skip when lot is closed (no data access).
   useEffect(() => {
-    if (!reportingFarmId || !hasLotInUrl || !lotParam.trim()) {
+    if (!reportingFarmId || !hasLotInUrl || !lotParam.trim() || isSelectedLotClosed) {
       setSetupInfoData([]);
       return;
     }
@@ -254,7 +259,7 @@ export default function SuiviTechniqueHebdomadaire() {
       })
       .catch(() => setSetupInfoData([]))
       .finally(() => setLoadingSetupInfo(false));
-  }, [reportingFarmId, hasLotInUrl, lotParam]);
+  }, [reportingFarmId, hasLotInUrl, lotParam, isSelectedLotClosed]);
 
   // Get available sexes for the selected batiment from setupInfo data
   const getAvailableSexesFromSetupInfo = useCallback((batiment: string): BuildingSexSetup[] => {
@@ -471,13 +476,35 @@ export default function SuiviTechniqueHebdomadaire() {
             </button>
           )}
 
-          {!hasLotInUrl ? (
+          {!hasLotInUrl || isSelectedLotClosed ? (
             <>
+              {isSelectedLotClosed && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-4 mb-6">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                    Ce lot est fermé. Les données ne sont pas accessibles.
+                  </p>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                    Choisissez un autre lot ci-dessous.
+                  </p>
+                </div>
+              )}
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Étape 1 — Lot → Semaine → Bâtiment</p>
               <LotSelectorView
                 existingLots={lots}
+                lotsWithStatus={lotsWithStatus.length > 0 ? lotsWithStatus : undefined}
                 loading={lotsLoading}
-                onSelectLot={(lot) => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot })}
+                onSelectLot={(lot) => {
+                  const status = lotsWithStatus.find((l) => l.lot === lot);
+                  if (status?.closed) {
+                    toast({
+                      title: "Lot fermé",
+                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot });
+                }}
                 onNewLot={(lot) => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot })}
                 canCreate={!isReadOnly}
                 title="Étape 1 : Choisir un lot"

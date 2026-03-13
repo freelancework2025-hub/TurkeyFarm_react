@@ -95,7 +95,9 @@ export async function apiFetch<T>(
     throw new Error(msg);
   }
   if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  if (!text || text.trim() === "") return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 /**
@@ -258,6 +260,15 @@ export const api = {
     /** List distinct lot numbers for a farm (from placements). Used for lot selector boxes. */
     lots: (farmId: number, token?: string | null) =>
       apiFetch<string[]>(`/api/farms/${farmId}/lots`, { token: token ?? getStoredToken() }),
+    /** List lots for a farm with closed/open status. Closed lots appear grey; only RT/Admin can close/open. */
+    lotsWithStatus: (farmId: number, token?: string | null) =>
+      apiFetch<LotWithStatusResponse[]>(`/api/farms/${farmId}/lots/status`, { token: token ?? getStoredToken() }),
+    /** Close a lot (ADMINISTRATEUR and RESPONSABLE_TECHNIQUE only). Other roles cannot access closed lots. */
+    closeLot: (farmId: number, lot: string, token?: string | null) =>
+      apiFetch<void>(`/api/farms/${farmId}/lots/${encodeURIComponent(lot)}/close`, { method: "POST", token: token ?? getStoredToken() }),
+    /** Open a lot (ADMINISTRATEUR and RESPONSABLE_TECHNIQUE only). */
+    openLot: (farmId: number, lot: string, token?: string | null) =>
+      apiFetch<void>(`/api/farms/${farmId}/lots/${encodeURIComponent(lot)}/open`, { method: "POST", token: token ?? getStoredToken() }),
   },
   /** Effectif mis en place (placement) — optional farmId for Admin/RT to view/create for a specific farm */
   placements: {
@@ -1126,6 +1137,12 @@ export interface FarmResponse {
   id: number;
   name: string;
   code: string;
+}
+
+/** Lot with closed/open status. Closed lots are grey and inaccessible to non-RT/Admin. */
+export interface LotWithStatusResponse {
+  lot: string;
+  closed: boolean;
 }
 
 export interface UserResponse {
