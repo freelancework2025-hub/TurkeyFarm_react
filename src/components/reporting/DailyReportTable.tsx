@@ -131,9 +131,11 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
   useEffect(() => {
     if (!lot || lot.trim() === "") {
       setSetupConfigs([]);
+      setPlacementDateForLot(null);
       setSetupLoading(false);
       return;
     }
+    setPlacementDateForLot(null);
     setSetupLoading(true);
     api.setupInfo.list(farmId ?? undefined, lot.trim())
       .then((list: SetupInfoResponse[]) => {
@@ -143,13 +145,16 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         }));
         setSetupConfigs(configs);
         
-        // Also get placement date from setup info
-        if (list.length > 0) {
-          const minDate = list.reduce((min, s) => 
-            (s.dateMiseEnPlace < min ? s.dateMiseEnPlace : min), 
-            list[0].dateMiseEnPlace
+        // Also get placement date from setup info (min of all dateMiseEnPlace for this lot)
+        const datesWithPlacement = list.filter((s) => s.dateMiseEnPlace);
+        if (datesWithPlacement.length > 0) {
+          const minDate = datesWithPlacement.reduce((min, s) => 
+            (s.dateMiseEnPlace! < min ? s.dateMiseEnPlace! : min), 
+            datesWithPlacement[0]!.dateMiseEnPlace!
           );
           setPlacementDateForLot(minDate);
+        } else {
+          setPlacementDateForLot(null);
         }
       })
       .catch(() => {
@@ -174,19 +179,18 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
     }).catch(() => setPlacementDateForLot(null));
   }, [farmId, lot, setupConfigs.length]);
 
-  /** Create empty rows for all building+sex configurations from setup info */
-  const createEmptyRowsFromSetup = useCallback((forDate: string): DailyRow[] => {
+  /** Create empty rows for all building+sex configurations from setup info.
+   * Uses effectivePlacement when provided (min of placement and minReportDate) so first day = age 1. */
+  const createEmptyRowsFromSetup = useCallback((forDate: string, effectivePlacement?: string | null): DailyRow[] => {
+    const placement = effectivePlacement ?? placementDateForLot;
     if (setupConfigs.length === 0) {
-      // Fallback: create single empty row
       let empty = emptyRow(forDate);
-      if (placementDateForLot) {
-        const { age, semaine } = computeAgeAndSemaine(empty.report_date, placementDateForLot);
+      if (placement) {
+        const { age, semaine } = computeAgeAndSemaine(empty.report_date, placement);
         empty = { ...empty, age_jour: String(age), semaine: String(semaine) };
       }
       return [empty];
     }
-    
-    // Create one row per building+sex configuration
     return setupConfigs.map(config => {
       let row: DailyRow = {
         id: crypto.randomUUID(),
@@ -202,8 +206,8 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         traitement: "",
         verified: false,
       };
-      if (placementDateForLot) {
-        const { age, semaine } = computeAgeAndSemaine(row.report_date, placementDateForLot);
+      if (placement) {
+        const { age, semaine } = computeAgeAndSemaine(row.report_date, placement);
         row = { ...row, age_jour: String(age), semaine: String(semaine) };
       }
       return row;
@@ -236,28 +240,31 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         : list;
       console.log("📋 DailyReportTable - Filtered reports:", { count: filtered.length, filtered });
       let mapped = filtered.map(toRow);
-      if (placementDateForLot) {
+      const effectivePlacement = (placementDateForLot && list.length > 0)
+        ? (() => {
+            const minReportDate = list.reduce((min, r) => (r.reportDate < min ? r.reportDate : min), list[0].reportDate);
+            return minReportDate < placementDateForLot ? minReportDate : placementDateForLot;
+          })()
+        : placementDateForLot;
+      if (effectivePlacement) {
         mapped = mapped.map((r) => {
-          const { age, semaine } = computeAgeAndSemaine(r.report_date, placementDateForLot);
+          const { age, semaine } = computeAgeAndSemaine(r.report_date, effectivePlacement);
           return { ...r, age_jour: String(age), semaine: String(semaine) };
         });
       }
-      
+
       // When "Nouveau rapport" (and not refreshing after multi-date save): create rows from setup configs
       if (isNewReport && !skipDateFilter) {
-        const emptyRows = createEmptyRowsFromSetup(forDate);
+        const emptyRows = createEmptyRowsFromSetup(forDate, effectivePlacement);
         setRows(emptyRows);
       } else {
-        // Backoffice (read-only): show only saved rows, no empty row to add
         if (isReadOnly) {
           setRows(mapped);
         } else if (mapped.length > 0) {
-          // Add empty rows from setup for data entry
-          const emptyRows = createEmptyRowsFromSetup(forDate);
+          const emptyRows = createEmptyRowsFromSetup(forDate, effectivePlacement);
           setRows([...mapped, ...emptyRows]);
         } else {
-          // No existing data: create rows from setup configs
-          const emptyRows = createEmptyRowsFromSetup(forDate);
+          const emptyRows = createEmptyRowsFromSetup(forDate, effectivePlacement);
           setRows(emptyRows);
         }
       }

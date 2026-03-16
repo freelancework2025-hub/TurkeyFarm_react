@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { Calendar, ChevronDown, ChevronRight, Loader2, Plus } from "lucide-react";
-import { getISOWeek, getISOWeekYear } from "date-fns";
 import { api, type DailyReportResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -25,45 +24,65 @@ function formatWeekDateRange(dates: string[]): string {
   return `${d1}/${m1} – ${d2}/${m2}/${y2}`;
 }
 
-type DayItem = { type: "day"; date: string };
-type WeekItem = { type: "week"; weekKey: string; label: string; dateRange: string; dates: string[] };
-
-/** Parse YYYY-MM-DD to a local Date (avoids timezone issues for week calculation) */
-function parseDateLocal(iso: string): Date {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y!, m! - 1, d!);
+/** Add n days to ISO date (YYYY-MM-DD), return YYYY-MM-DD */
+function addDays(iso: string, n: number): string {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0]!;
 }
 
+type DayInWeek = { date: string; hasReport: boolean };
+type DayItem = { type: "day"; date: string };
+type WeekItem = { type: "week"; weekKey: string; label: string; dateRange: string; days: DayInWeek[] };
 
 /**
- * Group saved days into semaine boxes by calendar week (ISO week).
- * Each week contains only the dates that actually fall within that calendar week.
+ * Build week items with exactly 7 days each. S1 = ages 1–7, S2 = ages 8–14, etc.
+ * Each week box shows all 7 days; days with reports are highlighted, others are "À faire".
  */
-function buildOverviewItems(uniqueDates: string[]): (DayItem | WeekItem)[] {
-  if (uniqueDates.length === 0) return [];
-  const byWeek = new Map<string, string[]>();
-  for (const dateStr of uniqueDates) {
-    const d = parseDateLocal(dateStr);
-    const year = getISOWeekYear(d);
-    const week = getISOWeek(d);
-    const key = `${year}-W${String(week).padStart(2, "0")}`;
-    const list = byWeek.get(key) ?? [];
-    list.push(dateStr);
-    byWeek.set(key, list);
+function buildOverviewItems(reports: DailyReportResponse[]): (DayItem | WeekItem)[] {
+  const uniqueByDate = new Map<string, number>();
+  for (const r of reports) {
+    if (r.reportDate && !uniqueByDate.has(r.reportDate)) {
+      uniqueByDate.set(r.reportDate, r.ageJour ?? 0);
+    }
   }
-  const weekKeys = [...byWeek.keys()].sort((a, b) => a.localeCompare(b)); // S1 = first week, S2 = second, etc.
-  const items: (DayItem | WeekItem)[] = [];
-  weekKeys.forEach((key, idx) => {
-    const dates = (byWeek.get(key) ?? []).sort();
-    items.push({
-      type: "week",
-      weekKey: `semaine-${key}-${dates[0] ?? ""}`,
-      label: `S${idx + 1}`,
-      dateRange: formatWeekDateRange(dates),
-      dates,
-    });
+  const datesWithAge = [...uniqueByDate.entries()];
+  if (datesWithAge.length === 0) return [];
+
+  const minReportDate = datesWithAge.reduce((min, [d]) => (d < min ? d : min), datesWithAge[0]![0]);
+  const savedDates = new Set(uniqueByDate.keys());
+
+  const bySemaine = new Map<number, string[]>();
+  for (const [dateStr, ageJour] of datesWithAge) {
+    const age = ageJour > 0 ? ageJour : (() => {
+      const d = new Date(dateStr + "T12:00:00");
+      const p = new Date(minReportDate + "T12:00:00");
+      const diff = Math.floor((d.getTime() - p.getTime()) / (1000 * 60 * 60 * 24));
+      return Math.max(1, diff + 1);
+    })();
+    const semaine = Math.ceil(age / 7);
+    const list = bySemaine.get(semaine) ?? [];
+    list.push(dateStr);
+    bySemaine.set(semaine, list);
+  }
+
+  const semaineNumbers = [...bySemaine.keys()].sort((a, b) => a - b);
+  return semaineNumbers.map((sem) => {
+    const placement = minReportDate;
+    const days: DayInWeek[] = [];
+    for (let i = 0; i < 7; i++) {
+      const date = addDays(placement, (sem - 1) * 7 + i);
+      days.push({ date, hasReport: savedDates.has(date) });
+    }
+    const dateStrings = days.map((d) => d.date);
+    return {
+      type: "week" as const,
+      weekKey: `semaine-S${sem}-${days[0]!.date}`,
+      label: `S${sem}`,
+      dateRange: formatWeekDateRange(dateStrings),
+      days,
+    };
   });
-  return items;
 }
 
 interface SavedDaysOverviewProps {
@@ -79,22 +98,19 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId, lo
   const { toast } = useToast();
   const { canCreate } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [dates, setDates] = useState<string[]>([]);
+  const [reports, setReports] = useState<DailyReportResponse[]>([]);
   const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     console.log("📊 SavedDaysOverview - Loading daily reports with:", { farmId, lot });
     setLoading(true);
     try {
-      // Load daily reports for the farm, filtered by lot if specified
       const list: DailyReportResponse[] = await api.dailyReports.list(farmId ?? undefined, lot ?? undefined);
       console.log("✅ SavedDaysOverview - Daily reports loaded:", { count: list.length, list });
-      const unique = Array.from(new Set(list.map((r) => r.reportDate)));
-      console.log("📅 SavedDaysOverview - Unique dates:", unique);
-      setDates(unique);
+      setReports(list);
     } catch (error) {
       console.error("❌ SavedDaysOverview - Error loading daily reports:", error);
-      setDates([]);
+      setReports([]);
     } finally {
       setLoading(false);
     }
@@ -122,7 +138,7 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId, lo
     );
   }
 
-  const items = buildOverviewItems(dates);
+  const items = buildOverviewItems(reports);
 
   return (
     <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in">
@@ -188,12 +204,17 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId, lo
                   </button>
                   {isExpanded && (
                     <div className="flex flex-wrap gap-2 pl-2">
-                      {item.dates.map((date) => (
+                      {item.days.map(({ date, hasReport }) => (
                         <button
                           key={date}
                           type="button"
                           onClick={() => onSelectDay(date)}
-                          className="px-3 py-2 rounded-lg border border-border bg-background hover:bg-primary/10 hover:border-primary/50 text-sm font-medium text-foreground transition-colors"
+                          className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                            hasReport
+                              ? "border-border bg-background hover:bg-primary/10 hover:border-primary/50 text-foreground"
+                              : "border-dashed border-muted-foreground/50 bg-muted/30 hover:border-primary/50 hover:bg-primary/5 text-muted-foreground"
+                          }`}
+                          title={hasReport ? formatDateDMY(date) : `${formatDateDMY(date)} — À faire`}
                         >
                           {formatDateDMY(date)}
                         </button>

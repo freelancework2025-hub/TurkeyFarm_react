@@ -126,4 +126,17 @@
   .page-header p {
     @apply text-muted-foreground mt-1;
   }
+
+  @keyframes alert-flash {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+  .animate-alert-flash {
+    animation: alert-flash 1.2s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-alert-flash {
+      animation: none;
+    }
+  }
 }

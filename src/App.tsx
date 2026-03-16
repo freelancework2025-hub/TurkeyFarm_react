@@ -82,7 +82,7 @@ const App = () => (
               path="/planning-vaccination"
               element={
                 <RoleRestrictedRoute
-                  allowedRoles={["ADMINISTRATEUR", "RESPONSABLE_TECHNIQUE"]}
+                  allowedRoles={["ADMINISTRATEUR", "RESPONSABLE_TECHNIQUE", "BACKOFFICE_EMPLOYER", "RESPONSABLE_FERME"]}
                   redirectTo="/dashboard"
                 >
                   <PlanningVaccination />

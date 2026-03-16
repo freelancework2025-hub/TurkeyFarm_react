@@ -849,6 +849,68 @@ export const api = {
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/vaccination-planning/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
   },
+  /** Vaccination planning notes — list by farm+lot, replace all (RT/Admin only) */
+  vaccinationPlanningNotes: {
+    list: (params: { farmId?: number | null; lot: string }, token?: string | null) => {
+      const search = new URLSearchParams();
+      search.set("lot", params.lot);
+      if (params.farmId != null) search.set("farmId", String(params.farmId));
+      return apiFetch<VaccinationPlanningNoteResponse[]>(
+        `/api/vaccination-planning-notes?${search.toString()}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    replace: (
+      params: { lot: string; farmId?: number | null },
+      body: VaccinationPlanningNoteRequest[],
+      token?: string | null
+    ) => {
+      const search = new URLSearchParams();
+      search.set("lot", params.lot);
+      if (params.farmId != null) search.set("farmId", String(params.farmId));
+      return apiFetch<VaccinationPlanningNoteResponse[]>(
+        `/api/vaccination-planning-notes/replace?${search.toString()}`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          token: token ?? getStoredToken(),
+        }
+      );
+    },
+  },
+  /** Vaccination reminder alerts — based on last day in last open lot, day before vaccine age */
+  vaccinationAlerts: {
+    list: (params?: { farmId?: number | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      const qs = search.toString();
+      return apiFetch<VaccinationAlertResponse[]>(
+        `/api/vaccination-alerts${qs ? `?${qs}` : ""}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
+    sendEmail: (token?: string | null) =>
+      apiFetch<void>("/api/vaccination-alerts/send-email", {
+        method: "POST",
+        token: token ?? getStoredToken(),
+      }),
+    confirm: (params: { farmId: number; lot: string; planningId: number }, token?: string | null) =>
+      apiFetch<void>(
+        `/api/vaccination-alerts/confirm?farmId=${params.farmId}&lot=${encodeURIComponent(params.lot)}&planningId=${params.planningId}`,
+        { method: "POST", token: token ?? getStoredToken() }
+      ),
+    reschedule: (
+      params: { farmId: number; lot: string; planningId: number; rescheduleDate: string },
+      token?: string | null
+    ) => {
+      const qs = `farmId=${params.farmId}&lot=${encodeURIComponent(params.lot)}&planningId=${params.planningId}`;
+      return apiFetch<void>(`/api/vaccination-alerts/reschedule?${qs}`, {
+        method: "POST",
+        body: JSON.stringify({ rescheduleDate: params.rescheduleDate }),
+        token: token ?? getStoredToken(),
+      });
+    },
+  },
   /** Liste des employés — global list, not scoped by farm */
   employers: {
     list: (token?: string | null) =>
@@ -1790,6 +1852,47 @@ export interface VaccinationPlanningResponse {
   remarques?: string | null;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Vaccination planning notes — request (replace list) */
+export interface VaccinationPlanningNoteRequest {
+  farmId?: number | null;
+  lot: string;
+  ordre: number;
+  label: string;
+  content?: string | null;
+  selected: boolean;
+}
+
+export interface VaccinationPlanningNoteResponse {
+  id: number;
+  farmId: number;
+  lot: string;
+  ordre: number;
+  label: string;
+  content?: string | null;
+  selected: boolean;
+}
+
+/** Vaccination reminder alert — triggered day before vaccine age matches */
+export interface VaccinationAlertResponse {
+  planningId: number;
+  farmId: number;
+  farmName: string;
+  lot: string;
+  currentAge: number;
+  vaccineAgeDays: number;
+  vaccineAgeLabel: string;
+  vaccinTraitement?: string | null;
+  planDate?: string | null;
+  motif?: string | null;
+  quantite?: string | null;
+  administration?: string | null;
+  remarques?: string | null;
+  lastReportDate: string;
+  notes?: string[] | null;
+  /** True when alert came from a reschedule (reappeared on chosen date) */
+  rescheduled?: boolean;
 }
 
 /** Liste des employés — request (global list, not tied to farm) */

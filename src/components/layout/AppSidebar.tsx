@@ -56,7 +56,7 @@ const NAV_SECTIONS_BASE = [
       { label: "Données mises en place", path: "/infos-setup" },
       { label: "Reporting Journalier", path: "/reporting-journalier" },
       { label: "Suivi Technique Hebdo", path: "/suivi-technique-hebdomadaire" },
-      { label: "Planning de vaccination", path: "/planning-vaccination", rolesOnly: ["ADMINISTRATEUR", "RESPONSABLE_TECHNIQUE"] as const },
+      { label: "Planning de vaccination", path: "/planning-vaccination", rolesOnly: ["ADMINISTRATEUR", "RESPONSABLE_TECHNIQUE", "BACKOFFICE_EMPLOYER", "RESPONSABLE_FERME"] as const },
     ],
   },
   {
