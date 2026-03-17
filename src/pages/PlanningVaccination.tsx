@@ -30,6 +30,7 @@ import {
   type VaccinationPlanningResponse,
   type VaccinationPlanningNoteRequest,
 } from "@/lib/api";
+import { dispatchVaccinationAlertsRefresh } from "@/lib/vaccinationAlertsEvents";
 
 const DEFAULT_AGES = [
   "Couvoir",
@@ -661,18 +662,21 @@ export default function PlanningVaccination() {
         setRows((prev) =>
           prev.map((r) => (r.id === couvoirRow.id ? { ...r, serverId: createdCouvoir.id } : r))
         );
+        dispatchVaccinationAlertsRefresh();
       }
 
       const req = rowToRequest(row, ordre);
       if (row.serverId != null) {
         await api.vaccinationPlanning.update(row.serverId, req);
         toast({ title: "Ligne mise à jour", description: "La ligne a été mise à jour." });
+        dispatchVaccinationAlertsRefresh();
       } else {
         const created = await api.vaccinationPlanning.create(req);
         toast({ title: "Ligne enregistrée", description: "La ligne a été enregistrée." });
         setRows((prev) =>
           prev.map((r) => (r.id === row.id ? { ...r, serverId: created.id } : r))
         );
+        dispatchVaccinationAlertsRefresh();
         return;
       }
     } catch {
@@ -691,7 +695,10 @@ export default function PlanningVaccination() {
     if (row?.serverId != null && canEditPlanning) {
       api.vaccinationPlanning
         .delete(row.serverId)
-        .then(() => setRows((prev) => prev.filter((r) => r.id !== id)))
+        .then(() => {
+          setRows((prev) => prev.filter((r) => r.id !== id));
+          dispatchVaccinationAlertsRefresh();
+        })
         .catch(() => {
           toast({
             title: "Erreur",
@@ -758,6 +765,7 @@ export default function PlanningVaccination() {
         body
       );
       toast({ title: "Notes enregistrées", description: "Les notes ont été enregistrées avec succès." });
+      dispatchVaccinationAlertsRefresh();
     } catch {
       toast({
         title: "Erreur",

@@ -64,11 +64,20 @@ function authHeader(credentials: AuthCredentials | null, token: string | null): 
 }
 
 /**
- * Parse API error response. Returns a generic message only — exception details
- * are logged in the backend and must not appear in the frontend.
+ * Parse API error response. Extracts user-facing message from Spring ProblemDetail
+ * (RFC 7807) when available; otherwise returns a generic message.
  */
 function parseApiErrorMessage(text: string, status: number): string {
   if (status === 401) return "Session expirée. Veuillez vous reconnecter.";
+  try {
+    if (text?.trim()) {
+      const body = JSON.parse(text) as { detail?: string; userMessage?: string; message?: string };
+      const msg = body.detail ?? body.userMessage ?? body.message;
+      if (typeof msg === "string" && msg.trim()) return msg.trim();
+    }
+  } catch {
+    /* ignore */
+  }
   return "Une erreur est survenue.";
 }
 
@@ -878,13 +887,13 @@ export const api = {
       );
     },
   },
-  /** Vaccination reminder alerts — based on last day in last open lot, day before vaccine age */
+  /** Vaccination reminder alerts — based on last day in last open lot, day before vaccine age. Count computed in backend. */
   vaccinationAlerts: {
     list: (params?: { farmId?: number | null }, token?: string | null) => {
       const search = new URLSearchParams();
       if (params?.farmId != null) search.set("farmId", String(params.farmId));
       const qs = search.toString();
-      return apiFetch<VaccinationAlertResponse[]>(
+      return apiFetch<VaccinationAlertsResponse>(
         `/api/vaccination-alerts${qs ? `?${qs}` : ""}`,
         { token: token ?? getStoredToken() }
       );
@@ -1872,6 +1881,12 @@ export interface VaccinationPlanningNoteResponse {
   label: string;
   content?: string | null;
   selected: boolean;
+}
+
+/** Vaccination alerts API response — count computed in backend (single source of truth) */
+export interface VaccinationAlertsResponse {
+  count: number;
+  alerts: VaccinationAlertResponse[];
 }
 
 /** Vaccination reminder alert — triggered day before vaccine age matches */

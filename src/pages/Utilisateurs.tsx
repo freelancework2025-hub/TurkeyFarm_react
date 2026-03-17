@@ -2,7 +2,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type UserResponse, type UserRequest, type RoleResponse, type FarmResponse } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Plus, Pencil, Trash2, ShieldAlert, Camera, Loader2, User } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { Button } from "@/components/ui/button";
@@ -143,6 +143,16 @@ export default function Utilisateurs() {
 
   const isResponsableFerme = form.roleNames?.[0] === "RESPONSABLE_FERME";
 
+  useEffect(() => {
+    if (
+      editingUser &&
+      form.email?.trim() &&
+      (form.username?.trim() || "") === (editingUser.email ?? "").trim()
+    ) {
+      setForm((f) => ({ ...f, username: form.email }));
+    }
+  }, [form.email, form.username, editingUser]);
+
   const createMutation = useMutation({
     mutationFn: (body: UserRequest) => api.users.create(body),
     onSuccess: async (newUser) => {
@@ -152,8 +162,11 @@ export default function Utilisateurs() {
         try {
           await api.users.uploadProfileImage(newUser.id, file);
           toast({ title: "Utilisateur créé avec photo" });
-        } catch {
-          /* API error — logged in backend only */
+        } catch (err) {
+          toast({
+            title: err instanceof Error ? err.message : "Erreur lors de l'upload de la photo",
+            variant: "destructive",
+          });
         }
         createProfileFileRef.current = null;
       } else {
@@ -162,7 +175,12 @@ export default function Utilisateurs() {
       setDialogOpen(false);
       resetForm();
     },
-    onError: () => { /* API error — logged in backend only */ },
+    onError: (err) => {
+      toast({
+        title: err instanceof Error ? err.message : "Erreur lors de la création",
+        variant: "destructive",
+      });
+    },
   });
 
   const updateMutation = useMutation({
@@ -174,7 +192,12 @@ export default function Utilisateurs() {
       setDialogOpen(false);
       resetForm();
     },
-    onError: () => { /* API error — logged in backend only */ },
+    onError: (err) => {
+      toast({
+        title: err instanceof Error ? err.message : "Erreur lors de la mise à jour",
+        variant: "destructive",
+      });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -184,7 +207,12 @@ export default function Utilisateurs() {
       toast({ title: "Utilisateur supprimé" });
       setDeleteTarget(null);
     },
-    onError: () => { /* API error — logged in backend only */ },
+    onError: (err) => {
+      toast({
+        title: err instanceof Error ? err.message : "Erreur lors de la suppression",
+        variant: "destructive",
+      });
+    },
   });
 
   const openCreate = () => {
@@ -224,8 +252,13 @@ export default function Utilisateurs() {
       return;
     }
     
+    const wasIdentifiantFromEmail = editingUser
+      && (form.username?.trim() || "") === (editingUser.email ?? "").trim();
+    const effectiveUsername = editingUser && wasIdentifiantFromEmail && form.email?.trim()
+      ? form.email.trim()
+      : (form.username?.trim() || form.email?.trim() || undefined);
     const body: UserRequest = {
-      username: form.username?.trim() || form.email?.trim() || undefined,
+      username: effectiveUsername,
       displayName: form.displayName?.trim() || undefined,
       email: form.email?.trim() || undefined,
       phoneNumber: form.phoneNumber?.trim() || undefined,
@@ -402,8 +435,11 @@ export default function Utilisateurs() {
                             setProfileImageRefreshKey((k) => k + 1);
                             queryClient.invalidateQueries({ queryKey: ["users"] });
                             toast({ title: "Photo mise à jour" });
-                          } catch {
-                            /* API error — logged in backend only */
+                          } catch (err) {
+                            toast({
+                              title: err instanceof Error ? err.message : "Erreur lors de la mise à jour de la photo",
+                              variant: "destructive",
+                            });
                           } finally {
                             setUploadingProfile(false);
                             e.target.value = "";

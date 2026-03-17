@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, Bell, CalendarClock, Check } from "lucide-react";
 import {
   Dialog,
@@ -12,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { AnimatedList } from "@/components/ui/animated-list";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { api, type VaccinationAlertResponse } from "@/lib/api";
+import { VACCINATION_ALERTS_REFRESH_EVENT } from "@/lib/vaccinationAlertsEvents";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -27,6 +29,7 @@ function orDash(v: string | null | undefined): string {
 }
 
 export default function VaccinationAlertsBanner() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { selectedFarmId, canAccessAllFarms, isResponsableFerme, canCreate } = useAuth();
   const { toast } = useToast();
   const [alerts, setAlerts] = useState<VaccinationAlertResponse[]>([]);
@@ -44,15 +47,24 @@ export default function VaccinationAlertsBanner() {
   const hasUnconfirmedAlerts = count > 0;
   const alertTheme = hasNewAlerts ? "red" : hasRescheduled ? "blue" : "amber";
 
+  const fetchAlerts = useCallback(() => {
+    setLoading(true);
+    api.vaccinationAlerts
+      .list({ farmId: canAccessAllFarms ? selectedFarmId ?? undefined : undefined })
+      .then((res) => {
+        setAlerts(res?.alerts ?? []);
+      })
+      .catch(() => setAlerts([]))
+      .finally(() => setLoading(false));
+  }, [selectedFarmId, canAccessAllFarms]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    // RF: never pass farmId — backend uses JWT farm (their own data)
-    // RT/Admin: pass selectedFarmId when a farm is selected; undefined = all farms
     api.vaccinationAlerts
       .list({ farmId: canAccessAllFarms ? selectedFarmId ?? undefined : undefined })
-      .then((list) => {
-        if (!cancelled) setAlerts(list ?? []);
+      .then((res) => {
+        if (!cancelled) setAlerts(res?.alerts ?? []);
       })
       .catch(() => {
         if (!cancelled) setAlerts([]);
@@ -64,6 +76,23 @@ export default function VaccinationAlertsBanner() {
       cancelled = true;
     };
   }, [selectedFarmId, canAccessAllFarms, dialogOpen]);
+
+  useEffect(() => {
+    const handler = () => fetchAlerts();
+    window.addEventListener(VACCINATION_ALERTS_REFRESH_EVENT, handler);
+    return () => window.removeEventListener(VACCINATION_ALERTS_REFRESH_EVENT, handler);
+  }, [fetchAlerts]);
+
+  // Deep-link from email: ?openVaccinationAlerts=1 opens the dialog
+  useEffect(() => {
+    if (searchParams.get("openVaccinationAlerts") === "1") {
+      setDialogOpen(true);
+      // Clear param from URL to avoid re-opening on refresh
+      const next = new URLSearchParams(searchParams);
+      next.delete("openVaccinationAlerts");
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams]);
 
   const handleConfirm = async (a: VaccinationAlertResponse) => {
     try {
@@ -80,13 +109,6 @@ export default function VaccinationAlertsBanner() {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     setRescheduleDate(tomorrow.toISOString().split("T")[0]);
-  };
-
-  const fetchAlerts = () => {
-    api.vaccinationAlerts
-      .list({ farmId: canAccessAllFarms ? selectedFarmId ?? undefined : undefined })
-      .then((list) => setAlerts(list ?? []))
-      .catch(() => setAlerts([]));
   };
 
   const handleRescheduleSubmit = async () => {
