@@ -1,7 +1,20 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Plus, Check, Trash2, Calendar } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Plus, Check, Trash2, Calendar, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -13,6 +26,7 @@ import {
   type LotWithStatusResponse,
 } from "@/lib/api";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
+import { exportLivraisonsAlimentExcel, exportToPdf } from "@/lib/livraisonsAlimentExport";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS D'ALIMENT
@@ -91,7 +105,7 @@ export default function LivraisonsAliment() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId } = useAuth();
+  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
   const [newSemaineInput, setNewSemaineInput] = useState("");
@@ -122,6 +136,20 @@ export default function LivraisonsAliment() {
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
+
+  const lastExportFarmIdRef = React.useRef<number | null>(null);
+  /** Load farms when canAccessAllFarms + pageFarmId (for export farm name when not on farm selector). */
+  useEffect(() => {
+    if (!canAccessAllFarms || !pageFarmId || showFarmSelector) return;
+    const hasSelectedFarm = farms.some((f) => f.id === pageFarmId);
+    if (hasSelectedFarm) return;
+    if (lastExportFarmIdRef.current === pageFarmId) return;
+    lastExportFarmIdRef.current = pageFarmId;
+    api.farms
+      .list()
+      .then((list) => setFarms(list))
+      .catch(() => {});
+  }, [canAccessAllFarms, pageFarmId, showFarmSelector, farms]);
 
   useEffect(() => {
     if (showFarmSelector || !pageFarmId) return;
@@ -554,10 +582,85 @@ export default function LivraisonsAliment() {
     return running;
   })();
 
+  const canShowExport = hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && pageFarmId != null;
+  const exportFarmName =
+    canAccessAllFarms && isValidFarmId
+      ? (farms.find((f) => f.id === selectedFarmId)?.name ?? selectedFarmName ?? "Ferme")
+      : (selectedFarmName ?? "Ferme");
+
+  const handleExportExcel = async () => {
+    if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
+    try {
+      await exportLivraisonsAlimentExcel({
+        farmName: exportFarmName,
+        lot: lotFilter.trim(),
+        semaine: selectedSemaine,
+        rows: currentRows,
+        weekTotal,
+        cumul: cumulForSelectedSemaine,
+        ageByRowId,
+      });
+      toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
+    } catch {
+      toast({ title: "Erreur", description: "Impossible de générer le fichier Excel.", variant: "destructive" });
+    }
+  };
+
+  const handleExportPdf = () => {
+    if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
+    exportToPdf({
+      farmName: exportFarmName,
+      lot: lotFilter.trim(),
+      semaine: selectedSemaine,
+      rows: currentRows,
+      weekTotal,
+      cumul: cumulForSelectedSemaine,
+      ageByRowId,
+    });
+    toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+  };
+
   return (
     <AppLayout>
       <div className="page-header">
-        <h1>FICHE DE SUIVI DES LIVRAISONS D'ALIMENT</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1>FICHE DE SUIVI DES LIVRAISONS D'ALIMENT</h1>
+          {canShowExport && (
+            <TooltipProvider>
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <ShimmerButton
+                        type="button"
+                        className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
+                        background="#f1f5f9"
+                        shimmerColor="rgba(37,99,235,0.3)"
+                        shimmerDuration="2.5s"
+                        aria-label="Télécharger Excel ou PDF"
+                      >
+                        <Download className="h-4 w-4 text-primary" />
+                      </ShimmerButton>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="font-medium">
+                    Télécharger (Excel ou PDF)
+                  </TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent align="start" className="min-w-[180px]">
+                  <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer gap-2">
+                    <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                    Télécharger Excel
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportPdf} className="cursor-pointer gap-2">
+                    <FileText className="h-4 w-4 text-red-600" />
+                    Télécharger PDF
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </TooltipProvider>
+          )}
+        </div>
         <p>
           Suivi des livraisons et mouvements d'aliment par lot et semaine
           {isReadOnly && (

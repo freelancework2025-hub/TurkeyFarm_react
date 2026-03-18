@@ -1,10 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Save, Plus, Trash2, ChevronDown } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Save, Plus, Trash2, ChevronDown, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse, type LotWithStatusResponse, type SetupInfoRequest, type SetupInfoResponse } from "@/lib/api";
+import { api, type FarmResponse, type LotWithStatusResponse, type SetupInfoRequest, type SetupInfoResponse, getStoredSelectedFarm } from "@/lib/api";
+import { exportToExcel, exportToPdf } from "@/lib/infosSetupExport";
 import { useToast } from "@/hooks/use-toast";
 
 const BUILDINGS = ["B1", "B2", "B3", "B4"];
@@ -670,10 +684,81 @@ export default function InfosSetup() {
     );
   }
 
+  const canShowExport = hasLotInUrl && !isSelectedLotClosed && reportingFarmId != null;
+  const exportFarmName =
+    canAccessAllFarms && isValidFarmId && selectedFarmId != null
+      ? (farms.find((f) => f.id === reportingFarmId)?.name ?? "Ferme")
+      : (selectedFarmName ?? getStoredSelectedFarm()?.name ?? "Ferme");
+
+  const handleExportExcel = async () => {
+    if (!canShowExport || !selectedLot) return;
+    try {
+      await exportToExcel({
+        farmName: exportFarmName,
+        lot: selectedLot,
+        rows,
+        totalMale,
+        totalFemale,
+      });
+      toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
+    } catch {
+      toast({ title: "Erreur", description: "Impossible de générer le fichier Excel.", variant: "destructive" });
+    }
+  };
+
+  const handleExportPdf = () => {
+    if (!canShowExport || !selectedLot) return;
+    exportToPdf({
+      farmName: exportFarmName,
+      lot: selectedLot,
+      rows,
+      totalMale,
+      totalFemale,
+    });
+    toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+  };
+
   return (
     <AppLayout>
       <div className="page-header">
-        <h1>Données mises en place</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1>Données mises en place</h1>
+          {canShowExport && (
+            <TooltipProvider>
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <ShimmerButton
+                        type="button"
+                        className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
+                        background="#f1f5f9"
+                        shimmerColor="rgba(37,99,235,0.3)"
+                        shimmerDuration="2.5s"
+                        aria-label="Télécharger Excel ou PDF"
+                      >
+                        <Download className="h-4 w-4 text-primary" />
+                      </ShimmerButton>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="font-medium">
+                    Télécharger (Excel ou PDF)
+                  </TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent align="start" className="min-w-[180px]">
+                  <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer gap-2">
+                    <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                    Télécharger Excel
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportPdf} className="cursor-pointer gap-2">
+                    <FileText className="h-4 w-4 text-red-600" />
+                    Télécharger PDF
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </TooltipProvider>
+          )}
+        </div>
         <p>
           Configuration initiale de l'élevage — Informations de base réutilisables pour tout le lot
           {!canFillSetupInfo && (

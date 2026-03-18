@@ -13,7 +13,6 @@ import {
   ChevronRight,
   LogOut,
   Menu,
-  X,
   PanelLeftClose,
   PanelLeft,
 } from "lucide-react";
@@ -27,6 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 
 const NAV_SECTIONS_BASE = [
   {
@@ -72,6 +72,12 @@ const NAV_SECTIONS_BASE = [
     path: "/utilisateurs",
   },
   {
+    label: "Liste des employés",
+    icon: UserCircle2,
+    path: "/employes",
+    requiresEmployesAccess: true,
+  },
+  {
     label: "Profil",
     icon: User,
     path: "/profil",
@@ -91,6 +97,7 @@ export default function AppSidebar() {
   const userRoles = new Set((user?.roles ?? []).map((r) => r.name ?? ""));
 
   const navSections = NAV_SECTIONS_BASE.map((section) => {
+    if ("requiresEmployesAccess" in section && section.requiresEmployesAccess && !showEmployesLink) return null;
     if (section.path !== undefined && section.path !== "/utilisateurs") return section;
     if (section.path === "/utilisateurs" && !isUserManager) return null;
     if (!section.children) return section;
@@ -120,13 +127,15 @@ export default function AppSidebar() {
 
   const isActive = (path: string) => location.pathname === path;
 
-  const sidebarContent = (
+  const renderSidebarContent = (opts?: { hideCollapse?: boolean; forceExpanded?: boolean }) => {
+    const effectiveCollapsed = opts?.forceExpanded ? false : collapsed;
+    return (
     <div className="flex flex-col h-full">
-      {/* Logo + minimize */}
+      {/* Logo + minimize / close (mobile) */}
       <div className="px-3 py-4 border-b border-sidebar-border flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <span className="text-xl shrink-0" aria-hidden>🦃</span>
-          {!collapsed && (
+          {!effectiveCollapsed && (
             <div className="min-w-0">
               <h1 className="text-lg font-display font-bold text-sidebar-primary truncate">
                 ElevagePro
@@ -134,19 +143,21 @@ export default function AppSidebar() {
             </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          className="shrink-0 rounded-md p-1.5 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
-          aria-label={collapsed ? "Ouvrir le menu" : "Réduire le menu"}
-          title={collapsed ? "Ouvrir le menu" : "Réduire le menu"}
-        >
-          {collapsed ? (
-            <PanelLeft className="w-5 h-5" />
-          ) : (
-            <PanelLeftClose className="w-5 h-5" />
-          )}
-        </button>
+        {!opts?.hideCollapse && (
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            className="shrink-0 rounded-md p-1.5 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+            aria-label={effectiveCollapsed ? "Ouvrir le menu" : "Réduire le menu"}
+            title={effectiveCollapsed ? "Ouvrir le menu" : "Réduire le menu"}
+          >
+            {effectiveCollapsed ? (
+              <PanelLeft className="w-5 h-5" />
+            ) : (
+              <PanelLeftClose className="w-5 h-5" />
+            )}
+          </button>
+        )}
       </div>
 
       {/* Navigation - scrollable */}
@@ -165,16 +176,16 @@ export default function AppSidebar() {
                     else toggleSection(section.label);
                   }}
                   className={`w-full flex items-center gap-3 rounded-md text-sm font-medium transition-colors ${
-                    collapsed ? "justify-center px-2 py-2.5" : "px-3 py-2.5"
+                    effectiveCollapsed ? "justify-center px-2 py-2.5" : "px-3 py-2.5"
                   } ${
                     hasActiveChild
                       ? "bg-sidebar-accent text-sidebar-primary"
                       : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                   }`}
-                  title={collapsed ? section.label : undefined}
+                  title={effectiveCollapsed ? section.label : undefined}
                 >
                   <section.icon className="w-4 h-4 shrink-0" />
-                  {!collapsed && (
+                  {!effectiveCollapsed && (
                     <>
                       <span className="flex-1 text-left">{section.label}</span>
                       {isOpen ? (
@@ -185,7 +196,7 @@ export default function AppSidebar() {
                     </>
                   )}
                 </button>
-                {!collapsed && isOpen && (
+                {!effectiveCollapsed && isOpen && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-sidebar-border pl-3">
                     {section.children.map((child) => (
                       <Link
@@ -213,82 +224,64 @@ export default function AppSidebar() {
               to={section.path!}
               onClick={() => setMobileOpen(false)}
               className={`flex items-center gap-3 rounded-md text-sm font-medium transition-colors ${
-                collapsed ? "justify-center px-2 py-2.5" : "px-3 py-2.5"
+                effectiveCollapsed ? "justify-center px-2 py-2.5" : "px-3 py-2.5"
               } ${
                 isActive(section.path!)
                   ? "bg-sidebar-primary text-sidebar-primary-foreground"
                   : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
               }`}
-              title={collapsed ? section.label : undefined}
+              title={effectiveCollapsed ? section.label : undefined}
             >
               <section.icon className="w-4 h-4 shrink-0" />
-              {!collapsed && <span>{section.label}</span>}
+              {!effectiveCollapsed && <span>{section.label}</span>}
             </Link>
           );
         })}
       </nav>
 
-      {/* Bottom links: Liste des employés (Admin / RT / Backoffice only) */}
-      {showEmployesLink && (
-        <div className={`flex-shrink-0 border-t border-sidebar-border ${collapsed ? "px-2 py-2" : "px-3 py-2"}`}>
-          <Link
-            to="/employes"
-            onClick={() => setMobileOpen(false)}
-            className={`flex items-center gap-3 rounded-md text-sm font-medium transition-colors ${
-              collapsed ? "justify-center px-2 py-2" : "px-3 py-2"
-            } ${
-              location.pathname === "/employes"
-                ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-            }`}
-            title={collapsed ? "Liste des employés" : undefined}
-          >
-            <UserCircle2 className="w-4 h-4 shrink-0" />
-            {!collapsed && <span>Liste des employés</span>}
-          </Link>
-        </div>
-      )}
-
       {/* Footer - fixed at bottom so nav can scroll (zoom > 90%) */}
-      <div className={`flex-shrink-0 py-4 border-t border-sidebar-border ${collapsed ? "px-2" : "px-3"}`}>
+      <div className={`flex-shrink-0 py-4 border-t border-sidebar-border ${effectiveCollapsed ? "px-2" : "px-3"}`}>
         <button
           type="button"
           onClick={openLogoutDialog}
-          className={`w-full flex items-center gap-3 rounded-md text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50 transition-colors ${collapsed ? "justify-center px-2 py-2" : "px-3 py-2"}`}
-          title={collapsed ? "Déconnexion" : undefined}
+          className={`w-full flex items-center gap-3 rounded-md text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50 transition-colors ${effectiveCollapsed ? "justify-center px-2 py-2" : "px-3 py-2"}`}
+          title={effectiveCollapsed ? "Déconnexion" : undefined}
         >
           <LogOut className="w-4 h-4 shrink-0" />
-          {!collapsed && <span>Déconnexion</span>}
+          {!effectiveCollapsed && <span>Déconnexion</span>}
         </button>
       </div>
     </div>
   );
+  };
 
   return (
     <>
-      {/* Mobile toggle */}
-      <button
-        onClick={() => setMobileOpen(!mobileOpen)}
-        className="fixed top-4 left-4 z-50 lg:hidden bg-primary text-primary-foreground p-2 rounded-md shadow-lg"
-      >
-        {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-      </button>
+      {/* Mobile: Sheet (drawer) - close button at top-right, no overlap */}
+      <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetTrigger asChild>
+          <button
+            className="fixed top-4 left-4 z-50 lg:hidden bg-primary text-primary-foreground p-2 rounded-md shadow-lg"
+            aria-label="Ouvrir le menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        </SheetTrigger>
+        <SheetContent
+          side="left"
+          className="w-64 max-w-[85vw] p-0 gap-0 bg-sidebar text-sidebar-foreground border-sidebar-border [&>button]:text-sidebar-foreground [&>button]:hover:bg-sidebar-accent [&>button]:right-3 [&>button]:top-4"
+        >
+          {renderSidebarContent({ hideCollapse: true, forceExpanded: true })}
+        </SheetContent>
+      </Sheet>
 
-      {/* Mobile overlay */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 bg-foreground/40 z-40 lg:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
-      {/* Sidebar */}
+      {/* Desktop: sidebar (sticky, collapsible) */}
       <aside
-        className={`fixed lg:sticky top-0 left-0 z-40 h-screen bg-sidebar text-sidebar-foreground transition-[width,transform] duration-200 ease-in-out lg:translate-x-0 ${
-          collapsed ? "w-16 lg:w-16" : "w-64 lg:w-64"
-        } ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+        className={`hidden lg:flex fixed lg:sticky top-0 left-0 z-40 h-screen bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-in-out flex-col ${
+          collapsed ? "w-16" : "w-64"
+        }`}
       >
-        {sidebarContent}
+        {renderSidebarContent()}
       </aside>
 
       {/* Logout confirmation */}

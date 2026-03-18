@@ -1,6 +1,19 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Check, Loader2, Plus, Save, Trash2, UserPlus } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Save, Trash2, UserPlus } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
@@ -12,7 +25,9 @@ import {
   type MainOeuvreResponse,
   type MainOeuvreRequest,
   type LotWithStatusResponse,
+  getStoredSelectedFarm,
 } from "@/lib/api";
+import { exportToExcel, exportToPdf } from "@/lib/mainOeuvreExport";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
 /**
@@ -527,10 +542,115 @@ export default function MainOeuvre() {
 
   const colCount = showMontantColumn ? 8 : 7; // AGE, date, semaine, employé, temps, [montant], observation, actions
 
+  const canShowExport = pageFarmId != null && hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && !showFarmSelector;
+  const exportFarmName =
+    canAccessAllFarms && isValidFarmId
+      ? (farms.find((f) => f.id === pageFarmId)?.name ?? "Ferme")
+      : (getStoredSelectedFarm()?.name ?? "Ferme");
+
+  const handleExportExcel = async () => {
+    if (!canShowExport) return;
+    try {
+      await exportToExcel({
+        farmName: exportFarmName,
+        lot: lotParam,
+        semaine: selectedSemaine,
+        rows: currentRows.map((r) => ({
+          id: r.id,
+          date: r.date,
+          sem: getSemFromRow(r),
+          entries: r.entries.map((e) => ({
+            employerId: e.employerId,
+            employerNom: e.employerNom,
+            employerPrenom: e.employerPrenom,
+            fullDay: e.fullDay,
+          })),
+          observation: r.observation,
+        })),
+        employers,
+        ageByRowId,
+        weekTotalJours,
+        cumulJours,
+        weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontant(r), 0),
+        cumulMontant,
+        showMontantColumn,
+      });
+      toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
+    } catch {
+      toast({ title: "Erreur", description: "Impossible de générer le fichier Excel.", variant: "destructive" });
+    }
+  };
+
+  const handleExportPdf = () => {
+    if (!canShowExport) return;
+    exportToPdf({
+      farmName: exportFarmName,
+      lot: lotParam,
+      semaine: selectedSemaine,
+      rows: currentRows.map((r) => ({
+        id: r.id,
+        date: r.date,
+        sem: getSemFromRow(r),
+        entries: r.entries.map((e) => ({
+          employerId: e.employerId,
+          employerNom: e.employerNom,
+          employerPrenom: e.employerPrenom,
+          fullDay: e.fullDay,
+        })),
+        observation: r.observation,
+      })),
+      employers,
+      ageByRowId,
+      weekTotalJours,
+      cumulJours,
+      weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontant(r), 0),
+      cumulMontant,
+      showMontantColumn,
+    });
+    toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+  };
+
   return (
     <AppLayout>
       <div className="page-header">
-        <h1>Main d&apos;œuvre</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1>Main d&apos;œuvre</h1>
+          {canShowExport && (
+            <TooltipProvider>
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <ShimmerButton
+                        type="button"
+                        className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
+                        background="#f1f5f9"
+                        shimmerColor="rgba(37,99,235,0.3)"
+                        shimmerDuration="2.5s"
+                        aria-label="Télécharger Excel ou PDF"
+                      >
+                        <Download className="h-4 w-4 text-primary" />
+                      </ShimmerButton>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="font-medium">
+                    Télécharger (Excel ou PDF)
+                  </TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent align="start" className="min-w-[180px]">
+                  <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer gap-2">
+                    <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                    Télécharger Excel
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportPdf} className="cursor-pointer gap-2">
+                    <FileText className="h-4 w-4 text-red-600" />
+                    Télécharger PDF
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </TooltipProvider>
+          )}
+        </div>
         <p>
           Date, employé et temps de travail (1 jour ou 1/2 demijour)
           {isReadOnly && (
@@ -763,10 +883,10 @@ export default function MainOeuvre() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
+                      <th className="min-w-[100px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
                       <th className="min-w-[120px]">Date</th>
                       <th className="min-w-[70px]">Semaine</th>
-                      <th className="min-w-[200px]">Employé (nom complet)</th>
+                      <th className="min-w-[320px]">Employé (nom complet)</th>
                       <th className="min-w-[140px]">Temps de travail</th>
                       {showMontantColumn && <th className="min-w-[100px]">Montant</th>}
                       <th className="min-w-[180px]">Observation</th>
