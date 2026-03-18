@@ -26,6 +26,43 @@ function getFirstDayFromSetup(setupList: SetupInfoResponse[]): string | null {
   return dates.reduce((min, d) => (d < min ? d : min), dates[0]!);
 }
 
+/**
+ * Compute age (jours) from placement date — same formula as DailyReportTable and Java backend.
+ * age = reportDate - placementDate + 1, minimum 1.
+ * Uses UTC dates to avoid DST issues.
+ */
+function computeAgeFromPlacement(reportDate: string, placementDate: string): number {
+  const report = new Date(reportDate);
+  const placement = new Date(placementDate);
+  
+  // Set to start of day (midnight) in UTC to ensure consistent calculation
+  report.setUTCHours(0, 0, 0, 0);
+  placement.setUTCHours(0, 0, 0, 0);
+  
+  const diffTime = report.getTime() - placement.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)); // Use Math.round to handle DST
+  return Math.max(1, diffDays + 1);
+}
+
+/**
+ * Effective placement for age computation: min of setup placement and min report date.
+ * Matches backend/DailyReportTable so first day always gets age 1.
+ */
+function getEffectivePlacement(
+  setupList: SetupInfoResponse[],
+  dailyList: DailyReportResponse[]
+): string | null {
+  const placementFromSetup = getFirstDayFromSetup(setupList);
+  const minReportDate = dailyList
+    .map((r) => r.reportDate)
+    .filter((d): d is string => d != null && String(d).trim() !== "")
+    .reduce<string | null>((min, d) => (min == null || d < min ? d : min), null);
+  if (placementFromSetup != null && minReportDate != null) {
+    return minReportDate < placementFromSetup ? minReportDate : placementFromSetup;
+  }
+  return placementFromSetup ?? minReportDate ?? null;
+}
+
 // Table 1: Effectif Mis en Place — 8 columns (page attributes)
 const EFFECTIF_COLS = [
   "Date Mise en Place",
@@ -38,7 +75,7 @@ const EFFECTIF_COLS = [
   "Souche",
 ];
 
-// Table 2: Reporting Journalier — 11 columns (page attributes, no actions)
+// Table 2: Reporting Journalier — 10 columns (page attributes, no actions)
 const DAILY_COLS = [
   "AGE",
   "Date",
@@ -50,7 +87,6 @@ const DAILY_COLS = [
   "Temp. Min",
   "Temp. Max",
   "Traitement",
-  "Vérifié",
 ];
 
 const HEADER_PRIMARY = "FF3D2E1A";
@@ -80,13 +116,30 @@ function effectifRowToArray(r: SetupInfoResponse): (string | number)[] {
   ];
 }
 
-function dailyRowToArray(r: DailyReportResponse): (string | number)[] {
-  const sem = r.semaine != null
-    ? (String(r.semaine).match(/^\d+$/) ? `S${r.semaine}` : String(r.semaine))
-    : "—";
+/**
+ * Build row for Table 2 (Reporting Journalier).
+ * When effectivePlacement is provided, age and semaine are computed from placement (matches table/backend)
+ * so RT and RF both get correct values regardless of API response.
+ */
+function dailyRowToArray(
+  r: DailyReportResponse,
+  effectivePlacement: string | null
+): (string | number)[] {
+  const reportDate = safeStr(r.reportDate);
+  const ageNum =
+    effectivePlacement && reportDate
+      ? computeAgeFromPlacement(reportDate, effectivePlacement)
+      : r.ageJour ?? null;
+  const age = ageNum != null ? String(ageNum) : "—";
+  const sem =
+    ageNum != null
+      ? `S${Math.ceil(ageNum / 7)}`
+      : r.semaine != null
+        ? (String(r.semaine).match(/^\d+$/) ? `S${r.semaine}` : String(r.semaine))
+        : "—";
   return [
-    r.ageJour != null ? String(r.ageJour) : "—",
-    safeStr(r.reportDate) || "—",
+    age,
+    reportDate || "—",
     sem,
     safeStr(r.building) || "—",
     safeStr(r.designation) || "—",
@@ -95,7 +148,6 @@ function dailyRowToArray(r: DailyReportResponse): (string | number)[] {
     r.tempMin != null ? String(r.tempMin) : "—",
     r.tempMax != null ? String(r.tempMax) : "—",
     safeStr(r.traitement) || "—",
-    "Oui",
   ];
 }
 
@@ -258,9 +310,10 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
   });
   dataRow++;
 
+  const effectivePlacement = getEffectivePlacement(setupList, dailyList);
   const dailyStartRow = dataRow;
   for (let i = 0; i < dailyList.length; i++) {
-    const arr = dailyRowToArray(dailyList[i]!);
+    const arr = dailyRowToArray(dailyList[i]!, effectivePlacement);
     for (let c = 0; c < arr.length; c++) {
       const cell = ws.getCell(dataRow, c + 1);
       cell.value = arr[c];
@@ -273,7 +326,7 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
   }
 
   const totalMortality = dailyList.reduce((s, r) => s + (r.nbr ?? 0), 0);
-  const totalMortalityRow = ["Total Mortalité :", "", "", "", "", totalMortality, "", "", "", "", ""];
+  const totalMortalityRow = ["Total Mortalité :", "", "", "", "", totalMortality, "", "", "", ""];
   for (let c = 0; c < DAILY_COLS.length; c++) {
     const cell = ws.getCell(dataRow, c + 1);
     cell.value = totalMortalityRow[c] ?? "";
@@ -402,9 +455,10 @@ export async function exportToPdf(params: ReportingJournalierExportParams): Prom
   doc.text("Reporting Journalier", margin, startY);
   startY += 6;
 
-  const dailyBody: string[][] = dailyList.map((r) => dailyRowToArray(r).map(String));
+  const effectivePlacement = getEffectivePlacement(setupList, dailyList);
+  const dailyBody: string[][] = dailyList.map((r) => dailyRowToArray(r, effectivePlacement).map(String));
   const totalMortality = dailyList.reduce((s, r) => s + (r.nbr ?? 0), 0);
-  dailyBody.push(["Total Mortalité :", "", "", "", "", String(totalMortality), "", "", "", "", ""]);
+  dailyBody.push(["Total Mortalité :", "", "", "", "", String(totalMortality), "", "", "", ""]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (doc as any).autoTable({

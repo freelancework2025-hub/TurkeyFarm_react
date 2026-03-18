@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Save, CheckCircle, Trash2, Loader2, Info } from "lucide-react";
+import { Plus, Save, Trash2, Loader2, Info } from "lucide-react";
 import { api, type DailyReportResponse, type DailyReportRequest, type SetupInfoResponse } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -75,12 +75,29 @@ function addDays(isoDate: string, n: number): string {
 
 /** Age (days) starts at 1 on placement date; semaine = week number (S1=1–7, S2=8–14, …). Per lot, age resets to 1. */
 function computeAgeAndSemaine(reportDate: string, placementDate: string): { age: number; semaine: number } {
-  const report = new Date(reportDate + "T12:00:00");
-  const placement = new Date(placementDate + "T12:00:00");
+  // Use UTC dates to avoid DST issues
+  const report = new Date(reportDate);
+  const placement = new Date(placementDate);
+  
+  // Set to start of day (midnight) in UTC to ensure consistent calculation
+  report.setUTCHours(0, 0, 0, 0);
+  placement.setUTCHours(0, 0, 0, 0);
+  
   const diffTime = report.getTime() - placement.getTime();
-  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)); // Use Math.round to handle DST
   const age = Math.max(1, diffDays + 1);
   const semaine = Math.ceil(age / 7);
+  
+  console.log("🔢 computeAgeAndSemaine:", {
+    reportDate,
+    placementDate,
+    reportTime: report.getTime(),
+    placementTime: placement.getTime(),
+    diffTime,
+    diffDays,
+    age,
+    semaine
+  });
   return { age, semaine };
 }
 
@@ -135,7 +152,6 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       setSetupLoading(false);
       return;
     }
-    setPlacementDateForLot(null);
     setSetupLoading(true);
     api.setupInfo.list(farmId ?? undefined, lot.trim())
       .then((list: SetupInfoResponse[]) => {
@@ -159,6 +175,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       })
       .catch(() => {
         setSetupConfigs([]);
+        setPlacementDateForLot(null);
       })
       .finally(() => setSetupLoading(false));
   }, [farmId, lot]);
@@ -183,11 +200,16 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
    * Uses effectivePlacement when provided (min of placement and minReportDate) so first day = age 1. */
   const createEmptyRowsFromSetup = useCallback((forDate: string, effectivePlacement?: string | null): DailyRow[] => {
     const placement = effectivePlacement ?? placementDateForLot;
+    console.log("📝 createEmptyRowsFromSetup:", { forDate, placement, effectivePlacement, placementDateForLot, setupConfigsCount: setupConfigs.length });
+    
     if (setupConfigs.length === 0) {
       let empty = emptyRow(forDate);
       if (placement) {
         const { age, semaine } = computeAgeAndSemaine(empty.report_date, placement);
+        console.log("✅ Calculated age for single row:", { age, semaine, reportDate: empty.report_date, placement });
         empty = { ...empty, age_jour: String(age), semaine: String(semaine) };
+      } else {
+        console.warn("⚠️ No placement date available, age will be empty");
       }
       return [empty];
     }
@@ -208,24 +230,39 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       };
       if (placement) {
         const { age, semaine } = computeAgeAndSemaine(row.report_date, placement);
+        console.log("✅ Calculated age for config row:", { age, semaine, reportDate: row.report_date, placement, building: config.building, sex: config.sex });
         row = { ...row, age_jour: String(age), semaine: String(semaine) };
+      } else {
+        console.warn("⚠️ No placement date available for config row, age will be empty:", { building: config.building, sex: config.sex });
       }
       return row;
     });
   }, [setupConfigs, placementDateForLot]);
 
   const load = useCallback(async () => {
-    console.log("🔄 DailyReportTable - Loading with:", { farmId, lot, initialDate, isNewReport });
+    console.log("🔄 DailyReportTable - Loading with:", { farmId, lot, initialDate, isNewReport, placementDateForLot, setupLoading });
+    
+    // Wait for setup info to load before proceeding (ensures placementDateForLot is available)
+    if (setupLoading) {
+      console.log("⏳ Waiting for setup info to load...");
+      return;
+    }
+    
     setLoading(true);
     const todayStr = new Date().toISOString().split("T")[0];
     let forDate = initialDate ?? todayStr;
     try {
       const list = await api.dailyReports.list(farmId ?? undefined, lot ?? undefined);
       console.log("✅ DailyReportTable - Daily reports loaded:", { count: list.length, list });
-      // For "Nouveau rapport": use next day after last saved report so Date and Âge (J) increment +1
+      // For "Nouveau rapport": use next day after last saved report so each day has a unique age (no duplication)
       if (isNewReport && list.length > 0) {
+        const existingDates = new Set(list.map((r) => r.reportDate).filter((d): d is string => d != null && d.trim() !== ""));
         const maxReportDate = list.reduce((max, r) => (r.reportDate > max ? r.reportDate : max), list[0].reportDate);
         forDate = addDays(maxReportDate, 1);
+        // Ensure we never pick a date that already has reports (handles race/stale data)
+        while (existingDates.has(forDate)) {
+          forDate = addDays(forDate, 1);
+        }
         setComputedNewReportDate(forDate);
       } else if (isNewReport) {
         setComputedNewReportDate(forDate);
@@ -275,15 +312,34 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
     } finally {
       setLoading(false);
     }
-  }, [initialDate, farmId, lot, isReadOnly, placementDateForLot, isNewReport, createEmptyRowsFromSetup]);
+  }, [initialDate, farmId, lot, isReadOnly, placementDateForLot, isNewReport, createEmptyRowsFromSetup, setupLoading]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    // Only load when setup info is ready
+    if (!setupLoading) {
+      load();
+    }
+  }, [load, setupLoading]);
 
   const addRow = () => {
     const last = rows[rows.length - 1];
-    const reportDate = last?.report_date || dateContext;
+    let reportDate = last?.report_date || dateContext;
+    
+    // Check if all building+sex combinations are already present for the current date
+    // If yes, increment to next day to avoid age duplication
+    if (setupConfigs.length > 0 && last?.report_date) {
+      const rowsForCurrentDate = rows.filter(r => r.report_date === last.report_date);
+      const existingCombos = new Set(
+        rowsForCurrentDate.map(r => `${r.building}|${r.designation}`)
+      );
+      const allCombos = setupConfigs.map(c => `${c.building}|${c.sex}`);
+      const allCombosExist = allCombos.every(combo => existingCombos.has(combo));
+      
+      // If all combinations exist for current date, move to next day
+      if (allCombosExist) {
+        reportDate = addDays(last.report_date, 1);
+      }
+    }
     
     // If we have setup configs, add rows for all building+sex combinations
     if (setupConfigs.length > 0) {
@@ -311,13 +367,16 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       });
       setRows((prev) => [...prev, ...newRows]);
     } else {
-      // Fallback: add single row
+      // Fallback: add single row with next day if last row exists
+      if (last?.report_date) {
+        reportDate = addDays(last.report_date, 1);
+      }
       const newRow: DailyRow = {
         ...emptyRow(dateContext),
         id: crypto.randomUUID(),
         report_date: reportDate,
-        age_jour: last?.age_jour ?? "",
-        semaine: last?.semaine ?? "",
+        age_jour: "",
+        semaine: "",
       };
       if (placementDateForLot && newRow.report_date) {
         const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placementDateForLot);
@@ -359,26 +418,48 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
     });
   };
 
-  const toRequest = (r: DailyRow): DailyReportRequest => ({
-    reportDate: r.report_date,
-    ageJour: r.age_jour.trim() !== "" ? parseInt(r.age_jour, 10) : null,
-    semaine: r.semaine.trim() !== "" ? parseInt(r.semaine, 10) : null,
-    lot: lot?.trim() || null,
-    building: r.building,
-    designation: r.designation,
-    nbr: parseInt(r.nbr, 10) || 0,
-    waterL: r.water_l.trim() !== "" ? parseFloat(r.water_l) : null,
-    tempMin: r.temp_min.trim() !== "" ? parseFloat(r.temp_min) : null,
-    tempMax: r.temp_max.trim() !== "" ? parseFloat(r.temp_max) : null,
-    traitement: r.traitement.trim() || null,
-    verified: r.verified,
-  });
+  const toRequest = (r: DailyRow): DailyReportRequest => {
+    const request = {
+      reportDate: r.report_date,
+      ageJour: r.age_jour.trim() !== "" ? parseInt(r.age_jour, 10) : null,
+      semaine: r.semaine.trim() !== "" ? parseInt(r.semaine, 10) : null,
+      lot: lot?.trim() || null,
+      building: r.building,
+      designation: r.designation,
+      nbr: parseInt(r.nbr, 10) || 0,
+      waterL: r.water_l.trim() !== "" ? parseFloat(r.water_l) : null,
+      tempMin: r.temp_min.trim() !== "" ? parseFloat(r.temp_min) : null,
+      tempMax: r.temp_max.trim() !== "" ? parseFloat(r.temp_max) : null,
+      traitement: r.traitement.trim() || null,
+      verified: r.verified,
+    };
+    console.log("📤 toRequest:", { 
+      rowId: r.id, 
+      age_jour_raw: r.age_jour, 
+      age_jour_trimmed: r.age_jour.trim(),
+      ageJour_result: request.ageJour,
+      reportDate: request.reportDate,
+      building: request.building,
+      designation: request.designation
+    });
+    return request;
+  };
 
   const handleSave = async () => {
     if (!canCreate) {
       toast({ title: "Non autorisé", description: "Vous ne pouvez pas créer de données.", variant: "destructive" });
       return;
     }
+    console.log("💾 handleSave - Starting save process");
+    console.log("💾 All rows:", rows.map(r => ({ 
+      id: r.id, 
+      date: r.report_date, 
+      age: r.age_jour, 
+      building: r.building, 
+      designation: r.designation,
+      nbr: r.nbr
+    })));
+    
     const validRows = rows.filter(
       (r) =>
         r.report_date &&
@@ -386,6 +467,8 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         r.designation &&
         (r.nbr.trim() !== "" || r.nbr === "0")
     );
+    console.log("💾 Valid rows count:", validRows.length);
+    
     if (validRows.length === 0) {
       toast({
         title: "Aucune ligne à enregistrer",
@@ -395,9 +478,118 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       return;
     }
 
+    // Check for duplicate date+building+designation combinations (prevents age duplication)
+    const combos = new Set<string>();
+    for (const row of validRows) {
+      const combo = `${row.report_date}|${row.building}|${row.designation}`;
+      if (combos.has(combo)) {
+        toast({
+          title: "Données en double",
+          description: `Plusieurs lignes ont la même date, bâtiment et désignation. Chaque jour doit avoir un âge unique.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      combos.add(combo);
+    }
+
     const savedRows = validRows.filter((r) => isSavedRow(r.id));
     const newRows = validRows.filter((r) => !isSavedRow(r.id));
-    const toSend = validRows.map(toRequest);
+    
+    // Ensure age and semaine are calculated for all rows before sending
+    const rowsWithCalculatedAge = validRows.map(r => {
+      if (placementDateForLot && r.report_date) {
+        const { age, semaine } = computeAgeAndSemaine(r.report_date, placementDateForLot);
+        console.log("🔢 Recalculating age before save:", { 
+          rowId: r.id, 
+          reportDate: r.report_date, 
+          placement: placementDateForLot,
+          calculatedAge: age, 
+          calculatedSemaine: semaine,
+          currentAge: r.age_jour,
+          currentSemaine: r.semaine
+        });
+        return { ...r, age_jour: String(age), semaine: String(semaine) };
+      }
+      return r;
+    });
+
+    // Check for duplicate ages on different dates within the same week
+    // Allow multiple rows with same age on SAME date (different buildings/sexes)
+    // Prevent same age on DIFFERENT dates within a week
+    if (placementDateForLot) {
+      const weekAgeData = new Map<number, Map<number, Set<string>>>();
+      
+      // First, load existing reports to check for age conflicts
+      const existingReports = await api.dailyReports.list(farmId ?? undefined, lot ?? undefined);
+      console.log("🔍 Checking for age conflicts with existing reports:", existingReports.length);
+      
+      // Add existing reports to the age tracking (exclude reports we're updating)
+      const updatingIds = new Set(savedRows.map(r => parseInt(r.id, 10)));
+      for (const existing of existingReports) {
+        // Skip reports we're updating
+        if (updatingIds.has(existing.id)) continue;
+        
+        if (!existing.reportDate || existing.ageJour == null) continue;
+        const { semaine } = computeAgeAndSemaine(existing.reportDate, placementDateForLot);
+        
+        if (!weekAgeData.has(semaine)) {
+          weekAgeData.set(semaine, new Map());
+        }
+        const ageMap = weekAgeData.get(semaine)!;
+        if (!ageMap.has(existing.ageJour)) {
+          ageMap.set(existing.ageJour, new Set());
+        }
+        ageMap.get(existing.ageJour)!.add(existing.reportDate);
+      }
+      
+      // Now check the rows we're about to save
+      for (const row of rowsWithCalculatedAge) {
+        if (!row.report_date || !row.age_jour || row.age_jour.trim() === "") continue;
+        const age = parseInt(row.age_jour, 10);
+        const { semaine } = computeAgeAndSemaine(row.report_date, placementDateForLot);
+        
+        // Initialize week map if needed
+        if (!weekAgeData.has(semaine)) {
+          weekAgeData.set(semaine, new Map());
+        }
+        
+        const ageMap = weekAgeData.get(semaine)!;
+        
+        // Initialize age's date set if needed
+        if (!ageMap.has(age)) {
+          ageMap.set(age, new Set());
+        }
+        
+        // Add this date to the age's date set
+        ageMap.get(age)!.add(row.report_date);
+      }
+      
+      // Check if any age appears on multiple different dates
+      for (const [semaine, ageMap] of weekAgeData) {
+        for (const [age, dates] of ageMap) {
+          if (dates.size > 1) {
+            const dateList = Array.from(dates).map(d => d.split("-").reverse().join("/")).join(", ");
+            toast({
+              title: "Âge en double sur différentes dates",
+              description: `La semaine S${semaine} contient l'âge ${age} sur plusieurs dates différentes (${dateList}). Chaque âge doit apparaître sur une seule date.`,
+              variant: "destructive",
+            });
+            return;
+          }
+        }
+      }
+    }
+    
+    // Update rows state with calculated ages
+    setRows(prevRows => prevRows.map(r => {
+      const updated = rowsWithCalculatedAge.find(ur => ur.id === r.id);
+      return updated || r;
+    }));
+    
+    const toSend = rowsWithCalculatedAge.map(toRequest);
+    console.log("📤 Sending to backend:", toSend);
+    
     const reportDate = toSend[0].reportDate;
     const distinctDates = new Set(toSend.map((r) => r.reportDate));
     const hasMultipleDates = distinctDates.size > 1;
@@ -509,7 +701,6 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
               <th>Temp. Min</th>
               <th>Temp. Max</th>
               <th>Traitement</th>
-              <th>Vérifié</th>
               {!isReadOnly && canDelete ? <th className="w-10"></th> : null}
             </tr>
           </thead>
@@ -628,20 +819,6 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                       readOnly={readOnly}
                     />
                   </td>
-                  <td className="text-center">
-                    <button
-                      onClick={() => updateRow(row.id, "verified", !row.verified)}
-                      disabled={readOnly}
-                      className={`p-1 rounded transition-colors ${
-                        row.verified
-                          ? "text-farm-green"
-                          : "text-muted-foreground hover:text-accent"
-                      } ${readOnly ? "cursor-not-allowed opacity-60" : ""}`}
-                      title={row.verified ? "Vérifié" : "Marquer comme vérifié"}
-                    >
-                      <CheckCircle className="w-5 h-5" />
-                    </button>
-                  </td>
                   {!isReadOnly && canDeleteThisRow ? (
                     <td>
                       <button
@@ -665,7 +842,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
               <td className="px-3 py-2 font-bold text-sm text-destructive">
                 {totalMortality}
               </td>
-              <td colSpan={!isReadOnly && canDelete ? 6 : 5}></td>
+              <td colSpan={!isReadOnly && canDelete ? 5 : 4}></td>
             </tr>
           </tfoot>
         </table>

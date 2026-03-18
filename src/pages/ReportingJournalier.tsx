@@ -100,7 +100,7 @@ export default function ReportingJournalier() {
   };
 
   const handleNewReport = () => {
-    setSelectedDate(today);
+    setSelectedDate(null);  // Don't set a specific date - let DailyReportTable calculate the next day
     setIsNewReport(true);
     setViewMode("form");
   };
