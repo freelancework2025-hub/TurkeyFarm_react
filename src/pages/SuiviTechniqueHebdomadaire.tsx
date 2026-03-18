@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Calendar, Plus, Building, BarChart3, DollarSign, UserPlus, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Calendar, Plus, Building, BarChart3, DollarSign, UserPlus, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import SuiviTechniqueBatimentContent from "@/components/suivi-technique/SuiviTechniqueBatimentContent";
@@ -15,9 +15,24 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusResponse } from "@/lib/api";
+import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusResponse, getStoredSelectedFarm } from "@/lib/api";
+import { exportToExcel, exportToPdf } from "@/lib/suiviTechniqueBatimentExport";
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
@@ -138,16 +153,16 @@ export default function SuiviTechniqueHebdomadaire() {
     return combined;
   }, [setupInfoData, extraBatiments]);
 
-  // Load farms for admin/RT
+  // Load farms for admin/RT (farm selector), export farm name when viewing bâtiment, or download per bâtiment
   useEffect(() => {
-    if (!showFarmSelector) return;
+    if (!showFarmSelector && !hasContentView && !(hasLotInUrl && hasSemaineInUrl)) return;
     setFarmsLoading(true);
     api.farms
       .list()
-      .then((list) => setFarms(list))
+      .then((list) => setFarms(list ?? []))
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
-  }, [showFarmSelector]);
+  }, [showFarmSelector, hasContentView, hasLotInUrl, hasSemaineInUrl]);
 
   const reportingFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -412,6 +427,52 @@ export default function SuiviTechniqueHebdomadaire() {
 
   const canDeleteSexData = isResponsableTechnique || isAdministrateur;
 
+  const exportFarmName =
+    canAccessAllFarms && isValidFarmId && reportingFarmId != null
+      ? farms.find((f) => f.id === reportingFarmId)?.name ?? getStoredSelectedFarm()?.name ?? "Ferme"
+      : getStoredSelectedFarm()?.name ?? "Ferme";
+
+  const handleExportBatiment = useCallback(
+    async (batiment: string, sex: string, format: "excel" | "pdf") => {
+      if (!reportingFarmId || !lotParam.trim() || !selectedSemaine) return;
+      try {
+        const params = {
+          farmName: exportFarmName,
+          farmId: reportingFarmId,
+          lot: lotParam.trim(),
+          semaine: selectedSemaine,
+          batiment,
+          sex,
+        };
+        if (format === "excel") {
+          await exportToExcel(params);
+          toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
+        } else {
+          await exportToPdf(params);
+          toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+        }
+      } catch {
+        toast({
+          title: "Erreur",
+          description: `Impossible de générer le fichier ${format === "excel" ? "Excel" : "PDF"}.`,
+          variant: "destructive",
+        });
+      }
+    },
+    [reportingFarmId, lotParam, selectedSemaine, exportFarmName, toast]
+  );
+
+  const getSexesForBatiment = useCallback(
+    (batiment: string): string[] => {
+      const sexes = setupInfoData
+        .filter((info) => info.building === batiment && info.effectifMisEnPlace > 0)
+        .map((info) => info.sex);
+      if (sexes.length > 0) return sexes;
+      return ["Mâle", "Femelle"];
+    },
+    [setupInfoData]
+  );
+
   return (
     <AppLayout>
       <div className="page-header">
@@ -591,17 +652,69 @@ export default function SuiviTechniqueHebdomadaire() {
                 </button>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-                {allBatiments.map((b) => (
-                  <button
-                    key={b}
-                    type="button"
-                    onClick={() => selectBatiment(b)}
-                    className="flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group"
-                  >
-                    <Building className="w-5 h-5 shrink-0 text-muted-foreground group-hover:text-primary" />
-                    <span className="font-semibold text-foreground">{b}</span>
-                  </button>
-                ))}
+                {allBatiments.map((b) => {
+                  const sexes = getSexesForBatiment(b);
+                  const canExport = reportingFarmId != null && lotParam.trim() && selectedSemaine;
+                  return (
+                    <div
+                      key={b}
+                      className="relative flex items-center gap-2 p-4 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors group"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => selectBatiment(b)}
+                        className="flex flex-1 min-w-0 items-center justify-center gap-2 text-left"
+                      >
+                        <Building className="w-5 h-5 shrink-0 text-muted-foreground group-hover:text-primary" />
+                        <span className="font-semibold text-foreground truncate">{b}</span>
+                      </button>
+                      {canExport && (
+                        <TooltipProvider>
+                          <DropdownMenu>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="shrink-0 p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-primary transition-colors"
+                                    aria-label={`Télécharger ${b}`}
+                                  >
+                                    <Download className="h-4 w-4" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" className="font-medium">
+                                Télécharger (Excel ou PDF)
+                              </TooltipContent>
+                            </Tooltip>
+                            <DropdownMenuContent align="end" className="min-w-[180px]">
+                              {sexes.map((sex, idx) => (
+                                <React.Fragment key={sex}>
+                                  {idx > 0 && <DropdownMenuSeparator />}
+                                  <DropdownMenuItem
+                                    onClick={() => handleExportBatiment(b, sex, "excel")}
+                                    className="cursor-pointer gap-2"
+                                  >
+                                    <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                                    Excel — {sex}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => handleExportBatiment(b, sex, "pdf")}
+                                    className="cursor-pointer gap-2"
+                                  >
+                                    <FileText className="h-4 w-4 text-red-600" />
+                                    PDF — {sex}
+                                  </DropdownMenuItem>
+                                </React.Fragment>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TooltipProvider>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               <div className="pt-4 border-t border-border">
                 <p className="text-sm font-medium text-foreground mb-2">Ajouter un bâtiment</p>
@@ -804,13 +917,85 @@ export default function SuiviTechniqueHebdomadaire() {
           ) : (
             <>
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <button
-                  type="button"
-                  onClick={clearBatimentSelection}
-                  className="inline-flex items-center gap-2 rounded-lg border-2 border-primary bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20"
-                >
-                  ← Retour au choix du bâtiment
-                </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={clearBatimentSelection}
+                    className="inline-flex items-center gap-2 rounded-lg border-2 border-primary bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20"
+                  >
+                    ← Retour au choix du bâtiment
+                  </button>
+                  <TooltipProvider>
+                    <DropdownMenu>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <ShimmerButton
+                              type="button"
+                              className="h-9 shrink-0 px-4 py-2 shadow-lg border-primary/40 text-primary"
+                              background="#f1f5f9"
+                              shimmerColor="rgba(37,99,235,0.3)"
+                              shimmerDuration="2.5s"
+                              aria-label="Télécharger Excel ou PDF"
+                            >
+                              <Download className="mr-2 h-4 w-4" />
+                              Télécharger
+                            </ShimmerButton>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="font-medium">
+                          Télécharger (Excel ou PDF)
+                        </TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="start" className="min-w-[180px]">
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            if (!reportingFarmId) return;
+                            try {
+                              await exportToExcel({
+                                farmName: exportFarmName,
+                                farmId: reportingFarmId,
+                                lot: lotParam,
+                                semaine: selectedSemaine,
+                                batiment: selectedBatiment,
+                                sex: TAB_TO_API_SEX[activeTab],
+                              });
+                              toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
+                            } catch {
+                              toast({ title: "Erreur", description: "Impossible de générer le fichier Excel.", variant: "destructive" });
+                            }
+                          }}
+                          className="cursor-pointer gap-2"
+                        >
+                          <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                          Télécharger Excel
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            if (!reportingFarmId) return;
+                            try {
+                              await exportToPdf({
+                                farmName: exportFarmName,
+                                farmId: reportingFarmId,
+                                lot: lotParam,
+                                semaine: selectedSemaine,
+                                batiment: selectedBatiment,
+                                sex: TAB_TO_API_SEX[activeTab],
+                              });
+                              toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+                            } catch {
+                              toast({ title: "Erreur", description: "Impossible de générer le fichier PDF.", variant: "destructive" });
+                            }
+                          }}
+                          className="cursor-pointer gap-2"
+                        >
+                          <FileText className="h-4 w-4 text-red-600" />
+                          Télécharger PDF
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TooltipProvider>
+                </div>
                 <p className="text-sm text-muted-foreground">
                   Bâtiment actuel : <strong className="text-foreground">{selectedBatiment}</strong>
                 </p>

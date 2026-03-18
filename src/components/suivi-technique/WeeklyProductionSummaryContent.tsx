@@ -1,5 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
 import {
   api,
   type SuiviTechniqueSetupResponse,
@@ -10,6 +17,7 @@ import {
   type ConsoResumeSummary,
 } from "@/lib/api";
 import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumePerformanceTrackingTable";
+import { exportToExcel, exportToPdf } from "@/lib/resumeProductionHebdoExport";
 
 const SEXES = ["Mâle", "Femelle"] as const;
 
@@ -18,6 +26,8 @@ export interface WeeklyProductionSummaryContentProps {
   lot: string;
   semaine: string;
   allBatiments: string[];
+  /** Farm name for export filename */
+  farmName?: string;
   /** From getResumeSummary — same source as Prix de revient (preferred over local computation) */
   effectifRestantFinSemaine?: number | null;
   /** From getResumeSummary — report + vente + conso + autre (preferred over local computation) */
@@ -32,6 +42,11 @@ interface AggregatedRow {
   mortaliteCumul: number;
   mortaliteCumulPct: string;
   consoEauL: number;
+  tempMin: number | null;
+  tempMax: number | null;
+  vaccination: string | null;
+  traitement: string | null;
+  observation: string | null;
 }
 
 export default function WeeklyProductionSummaryContent({
@@ -39,6 +54,7 @@ export default function WeeklyProductionSummaryContent({
   lot,
   semaine,
   allBatiments,
+  farmName = "Ferme",
   effectifRestantFinSemaine: effectifRestantFromBackend,
   totalNbreProduction: totalNbreFromBackend,
 }: WeeklyProductionSummaryContentProps) {
@@ -158,7 +174,16 @@ export default function WeeklyProductionSummaryContent({
   const aggregatedRows = useMemo((): AggregatedRow[] => {
     const byDate = new Map<
       string,
-      { mortaliteNbre: number; consoEauL: number; ageJour: number | null }
+      {
+        mortaliteNbre: number;
+        consoEauL: number;
+        ageJour: number | null;
+        tempMin: number | null;
+        tempMax: number | null;
+        vaccination: string[];
+        traitement: string[];
+        observation: string[];
+      }
     >();
 
     for (const batiment of allBatiments) {
@@ -170,10 +195,20 @@ export default function WeeklyProductionSummaryContent({
             mortaliteNbre: 0,
             consoEauL: 0,
             ageJour: null as number | null,
+            tempMin: null as number | null,
+            tempMax: null as number | null,
+            vaccination: [] as string[],
+            traitement: [] as string[],
+            observation: [] as string[],
           };
           existing.mortaliteNbre += r.mortaliteNbre ?? 0;
           existing.consoEauL += r.consoEauL ?? 0;
           if (r.ageJour != null) existing.ageJour = existing.ageJour != null ? Math.min(existing.ageJour, r.ageJour) : r.ageJour;
+          if (r.tempMin != null) existing.tempMin = existing.tempMin != null ? Math.min(existing.tempMin, r.tempMin) : r.tempMin;
+          if (r.tempMax != null) existing.tempMax = existing.tempMax != null ? Math.max(existing.tempMax, r.tempMax) : r.tempMax;
+          if (r.vaccination?.trim()) existing.vaccination.push(r.vaccination.trim());
+          if (r.traitement?.trim()) existing.traitement.push(r.traitement.trim());
+          if (r.observation?.trim()) existing.observation.push(r.observation.trim());
           byDate.set(r.recordDate, existing);
         }
       }
@@ -182,6 +217,8 @@ export default function WeeklyProductionSummaryContent({
     const sortedDates = Array.from(byDate.keys()).sort();
     const effectif = totalEffectifDepart > 0 ? totalEffectifDepart : 1;
     let runningCumul = 0;
+
+    const joinUnique = (arr: string[]) => [...new Set(arr)].filter(Boolean).join(" | ") || null;
 
     return sortedDates.map((recordDate) => {
       const row = byDate.get(recordDate)!;
@@ -196,6 +233,11 @@ export default function WeeklyProductionSummaryContent({
         mortaliteCumul: runningCumul,
         mortaliteCumulPct,
         consoEauL: row.consoEauL,
+        tempMin: row.tempMin,
+        tempMax: row.tempMax,
+        vaccination: joinUnique(row.vaccination),
+        traitement: joinUnique(row.traitement),
+        observation: joinUnique(row.observation),
       };
     });
   }, [hebdoLists, allBatiments, totalEffectifDepart]);
@@ -381,6 +423,84 @@ export default function WeeklyProductionSummaryContent({
     return qlStock - Number(cumul);
   }, [qlStock, aggregatedConsommation.cumulAlimentConsommeSum]);
 
+  /** Performance metrics for export (same logic as ResumePerformanceTrackingTable) */
+  const exportPerformance = useMemo(() => {
+    const totalNbre = totalNbreFromBackend ?? aggregatedProduction.totalNbre;
+    const effectif = aggregatedStock.effectifRestantFinSemaine ?? 0;
+    const denom = (totalNbre ?? 0) + effectif;
+    const poidsMoyenG =
+      denom > 0 && aggregatedStock.poidsVifProduitKg != null && Number.isFinite(aggregatedStock.poidsVifProduitKg)
+        ? (aggregatedStock.poidsVifProduitKg / denom) * 1000
+        : null;
+    const indiceConsommation =
+      aggregatedStock.poidsVifProduitKg != null &&
+      aggregatedStock.poidsVifProduitKg > 0 &&
+      aggregatedConsommation.cumulAlimentConsommeSum != null &&
+      Number.isFinite(aggregatedConsommation.cumulAlimentConsommeSum)
+        ? aggregatedConsommation.cumulAlimentConsommeSum / aggregatedStock.poidsVifProduitKg
+        : null;
+    const gmqGParJour = poidsMoyenG != null && Number.isFinite(poidsMoyenG) ? poidsMoyenG / 7 : null;
+    const viabilite =
+      lastMortaliteCumulPct != null && Number.isFinite(lastMortaliteCumulPct)
+        ? 100 - lastMortaliteCumulPct
+        : null;
+    const consoAlimentKgParJ =
+      aggregatedConsommation.consoAlimentSemaineSum != null && Number.isFinite(aggregatedConsommation.consoAlimentSemaineSum)
+        ? aggregatedConsommation.consoAlimentSemaineSum / 7
+        : null;
+    return {
+      consoAlimentSemaineSum: aggregatedConsommation.consoAlimentSemaineSum,
+      cumulAlimentConsommeSum: aggregatedConsommation.cumulAlimentConsommeSum,
+      indiceEauAliment: indiceEauAlimentResume,
+      poidsMoyenG,
+      indiceConsommation,
+      gmqGParJour,
+      viabilite,
+      consoAlimentKgParJ,
+    };
+  }, [
+    totalNbreFromBackend,
+    aggregatedProduction.totalNbre,
+    aggregatedStock.effectifRestantFinSemaine,
+    aggregatedStock.poidsVifProduitKg,
+    aggregatedConsommation,
+    indiceEauAlimentResume,
+    lastMortaliteCumulPct,
+  ]);
+
+  const exportParams = useMemo(
+    () => ({
+      farmName,
+      lot,
+      semaine,
+      batiments: allBatiments,
+      setup: aggregatedSetup,
+      totalEffectifDepart,
+      weeklyRows: aggregatedRows,
+      weeklyTotals,
+      performance: exportPerformance,
+      production: aggregatedProduction,
+      stock: aggregatedStock,
+      controleStock: { quantiteLivree: quantiteLivreeSemaine, qlStock, ecart },
+    }),
+    [
+      farmName,
+      lot,
+      semaine,
+      allBatiments,
+      aggregatedSetup,
+      totalEffectifDepart,
+      aggregatedRows,
+      weeklyTotals,
+      exportPerformance,
+      aggregatedProduction,
+      aggregatedStock,
+      quantiteLivreeSemaine,
+      qlStock,
+      ecart,
+    ]
+  );
+
   function formatStockValue(value: number | null | undefined): string {
     if (value == null || Number.isNaN(value)) return "—";
     return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
@@ -397,6 +517,28 @@ export default function WeeklyProductionSummaryContent({
 
   return (
     <div className="space-y-6">
+      {/* Export dropdown */}
+      <div className="flex justify-end">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <ShimmerButton className="shadow-lg" size="sm">
+              <Download className="mr-2 h-4 w-4" />
+              Télécharger
+            </ShimmerButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={() => exportToExcel(exportParams)}>
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Télécharger Excel
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => exportToPdf(exportParams)}>
+              <FileText className="mr-2 h-4 w-4" />
+              Télécharger PDF
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
       {/* 1. Données mises en place — combined */}
       <div className="bg-card rounded-lg border border-border shadow-sm p-5">
         <h3 className="text-base font-display font-bold text-foreground mb-3">
@@ -442,7 +584,7 @@ export default function WeeklyProductionSummaryContent({
           </h3>
         </div>
         <div className="overflow-x-auto rounded-b-lg border-border">
-          <table className="w-full min-w-[900px] text-sm border-collapse bg-card table-fixed">
+          <table className="w-full min-w-[1100px] text-sm border-collapse bg-card table-fixed">
             <colgroup>
               <col className="w-[100px]" />
               <col className="w-[70px]" />
@@ -451,6 +593,11 @@ export default function WeeklyProductionSummaryContent({
               <col className="w-[56px]" />
               <col className="w-[56px]" />
               <col className="w-[84px]" />
+              <col className="w-[64px]" />
+              <col className="w-[64px]" />
+              <col className="w-[100px]" />
+              <col className="w-[100px]" />
+              <col className="w-[120px]" />
             </colgroup>
             <thead>
               <tr className="bg-muted/80 border-b-2 border-border">
@@ -462,6 +609,11 @@ export default function WeeklyProductionSummaryContent({
                 <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">
                   CONSO. EAU (L)
                 </th>
+                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">T° MIN</th>
+                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">T° MAX</th>
+                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">VACCINATION</th>
+                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">TRAITEMENT</th>
+                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">OBSERVATION</th>
               </tr>
               <tr className="bg-muted/60 border-b border-border">
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
@@ -471,12 +623,17 @@ export default function WeeklyProductionSummaryContent({
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">CUMUL</th>
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">%</th>
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
               </tr>
             </thead>
             <tbody>
               {aggregatedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">
                     Aucune donnée hebdomadaire pour cette semaine.
                   </td>
                 </tr>
@@ -501,6 +658,15 @@ export default function WeeklyProductionSummaryContent({
                     <td className="border-r border-border px-1 py-1 text-center tabular-nums">
                       {row.consoEauL.toFixed(1).replace(".", ",")}
                     </td>
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">
+                      {row.tempMin != null ? row.tempMin : "—"}
+                    </td>
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">
+                      {row.tempMax != null ? row.tempMax : "—"}
+                    </td>
+                    <td className="border-r border-border px-1 py-1 text-left">{row.vaccination ?? "—"}</td>
+                    <td className="border-r border-border px-1 py-1 text-left">{row.traitement ?? "—"}</td>
+                    <td className="border-r border-border px-1 py-1 text-left">{row.observation ?? "—"}</td>
                   </tr>
                 ))
               )}
@@ -518,10 +684,18 @@ export default function WeeklyProductionSummaryContent({
                     ? `${((weeklyTotals.totalMortality / totalEffectifDepart) * 100).toFixed(2).replace(".", ",")} %`
                     : "—"}
                 </td>
-                <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border"></td>
+                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums">
+                  {weeklyTotals.totalMortality}
+                </td>
+                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums">
+                  {totalEffectifDepart > 0
+                    ? `${((weeklyTotals.totalMortality / totalEffectifDepart) * 100).toFixed(2).replace(".", ",")} %`
+                    : "—"}
+                </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground">
                   {weeklyTotals.totalWater.toFixed(1).replace(".", ",")} L
                 </td>
+                <td colSpan={5} className="px-1.5 py-2 text-center border-r border-border"></td>
               </tr>
             </tfoot>
           </table>

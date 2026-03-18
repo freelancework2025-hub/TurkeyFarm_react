@@ -5,10 +5,17 @@
  */
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Check, Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, Building2, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +31,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import {
   api,
   type FarmResponse,
+  getStoredSelectedFarm,
   type LotWithStatusResponse,
   type SetupInfoResponse,
   type VaccinationPlanningRequest,
@@ -31,6 +39,7 @@ import {
   type VaccinationPlanningNoteRequest,
 } from "@/lib/api";
 import { dispatchVaccinationAlertsRefresh } from "@/lib/vaccinationAlertsEvents";
+import { exportToExcel, exportToPdf } from "@/lib/planningVaccinationExport";
 
 const DEFAULT_AGES = [
   "Couvoir",
@@ -396,15 +405,54 @@ export default function PlanningVaccination() {
   const selectedLot = lotParam.trim() || null;
   const { toast } = useToast();
 
+  const farmName =
+    (pageFarmId != null && farms.find((f) => f.id === pageFarmId)?.name) ||
+    getStoredSelectedFarm()?.name ||
+    "Ferme";
+
+  const exportParams = React.useMemo(
+    () =>
+      selectedLot
+        ? {
+            farmName,
+            lot: selectedLot,
+            dateMiseEnPlace,
+            rows: rows.map((r) => ({
+              age: r.age,
+              date: r.date,
+              motif: r.motif,
+              vaccinTraitement: r.vaccinTraitement,
+              quantite: r.quantite,
+              administration: r.administration,
+              remarques: r.remarques,
+            })),
+            notes: notes.map((n) => ({
+              label: n.label,
+              content: n.content,
+              selected: n.selected,
+            })),
+          }
+        : null,
+    [farmName, selectedLot, dateMiseEnPlace, rows, notes]
+  );
+
   useEffect(() => {
-    if (!showFarmSelector) return;
-    setFarmsLoading(true);
-    api.farms
-      .list()
-      .then((list) => setFarms(list))
-      .catch(() => setFarms([]))
-      .finally(() => setFarmsLoading(false));
-  }, [showFarmSelector]);
+    if (showFarmSelector) {
+      setFarmsLoading(true);
+      api.farms
+        .list()
+        .then((list) => setFarms(list))
+        .catch(() => setFarms([]))
+        .finally(() => setFarmsLoading(false));
+      return;
+    }
+    if (pageFarmId != null) {
+      api.farms
+        .list()
+        .then((list) => setFarms(list ?? []))
+        .catch(() => setFarms([]));
+    }
+  }, [showFarmSelector, pageFarmId]);
 
   useEffect(() => {
     if (showFarmSelector || !pageFarmId) return;
@@ -875,6 +923,26 @@ export default function PlanningVaccination() {
             <span className="text-sm text-muted-foreground">
               Date mise en place (lot) : {dateMiseEnPlace}
             </span>
+          )}
+          {!loading && exportParams && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <ShimmerButton className="shadow-lg" size="sm">
+                  <Download className="mr-2 h-4 w-4" />
+                  Télécharger
+                </ShimmerButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={() => exportToExcel(exportParams)}>
+                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  Télécharger Excel
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => exportToPdf(exportParams)}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Télécharger PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           {canEditPlanning && (
             <div className="ml-auto">

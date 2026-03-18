@@ -3,7 +3,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import WeeklyProductionSummaryContent from "@/components/suivi-technique/WeeklyProductionSummaryContent";
-import { api } from "@/lib/api";
+import { api, type FarmResponse, getStoredSelectedFarm } from "@/lib/api";
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
 
@@ -29,6 +29,11 @@ export default function ResumeProductionHebdoPage() {
       .filter(Boolean) ?? DEFAULT_BATIMENTS;
 
   const [coutSummary, setCoutSummary] = useState<Awaited<ReturnType<typeof api.suiviCoutHebdo.getResumeSummary>> | null>(null);
+  const [farms, setFarms] = useState<FarmResponse[]>([]);
+
+  useEffect(() => {
+    api.farms.list().then((data) => setFarms(data ?? [])).catch(() => setFarms([]));
+  }, []);
 
   useEffect(() => {
     if (!farmId || !lot || !semaine || allBatiments.length === 0) {
@@ -54,6 +59,10 @@ export default function ResumeProductionHebdoPage() {
     : "/suivi-technique-hebdomadaire";
 
   const isValid = farmId != null && !Number.isNaN(farmId) && lot.trim() !== "" && semaine.trim() !== "";
+  const farmName =
+    farmId != null && farms.length > 0
+      ? (farms.find((f) => f.id === farmId)?.name ?? getStoredSelectedFarm()?.name ?? "Ferme")
+      : (getStoredSelectedFarm()?.name ?? "Ferme");
 
   return (
     <AppLayout>
@@ -89,6 +98,7 @@ export default function ResumeProductionHebdoPage() {
           lot={lot}
           semaine={semaine}
           allBatiments={allBatiments}
+          farmName={farmName}
           effectifRestantFinSemaine={effectifRestantFinSemaine}
           totalNbreProduction={totalNbreProduction}
         />

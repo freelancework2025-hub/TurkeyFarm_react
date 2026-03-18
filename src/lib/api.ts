@@ -977,7 +977,9 @@ export const api = {
         const text = await res.text();
         throw new Error(res.status === 401 ? "Unauthorized" : text || `HTTP ${res.status}`);
       }
-      return res.json() as Promise<SuiviTechniqueSetupResponse>;
+      const text = await res.text();
+      if (!text || text.trim() === "") return null;
+      return JSON.parse(text) as SuiviTechniqueSetupResponse;
     },
     save: (body: SuiviTechniqueSetupRequest, farmId: number, token?: string | null) =>
       apiFetch<SuiviTechniqueSetupResponse>(

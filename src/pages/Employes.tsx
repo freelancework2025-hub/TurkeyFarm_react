@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Loader2, Plus, Pencil, Trash2 } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, Loader2, Plus, Pencil, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -8,6 +8,7 @@ import {
   type EmployerResponse,
   type EmployerRequest,
 } from "@/lib/api";
+import { exportToExcel, exportToPdf } from "@/lib/employesExport";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -24,6 +25,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -231,16 +239,38 @@ export default function Employes() {
               <h2 className="text-lg font-display font-bold text-foreground">
                 Employés
               </h2>
-              {canManageEmployes && (
-                <Button
-                  type="button"
-                  onClick={openCreate}
-                  className="gap-1.5"
-                  size="sm"
-                >
-                  <Plus className="w-4 h-4" /> Ajouter
-                </Button>
-              )}
+              <div className="flex items-center gap-2">
+                {!loading && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <ShimmerButton className="shadow-lg">
+                        <Download className="mr-2 h-4 w-4" />
+                        Télécharger
+                      </ShimmerButton>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuItem onClick={() => exportToExcel({ employers })}>
+                        <FileSpreadsheet className="mr-2 h-4 w-4" />
+                        Télécharger Excel
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => exportToPdf({ employers })}>
+                        <FileText className="mr-2 h-4 w-4" />
+                        Télécharger PDF
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                {canManageEmployes && (
+                  <Button
+                    type="button"
+                    onClick={openCreate}
+                    className="gap-1.5"
+                    size="sm"
+                  >
+                    <Plus className="w-4 h-4" /> Ajouter
+                  </Button>
+                )}
+              </div>
         </div>
 
         <div className="overflow-x-auto">

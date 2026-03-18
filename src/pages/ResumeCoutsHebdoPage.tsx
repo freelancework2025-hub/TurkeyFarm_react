@@ -6,11 +6,19 @@
 
 import { useState, useEffect } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
 import ResumeCoutsHebdoTable from "@/components/suivi-technique/ResumeCoutsHebdoTable";
-import { api } from "@/lib/api";
+import { api, type FarmResponse, getStoredSelectedFarm } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { exportToExcel, exportToPdf } from "@/lib/resumeCoutsHebdoExport";
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
 
@@ -31,8 +39,13 @@ export default function ResumeCoutsHebdoPage() {
 
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<Awaited<ReturnType<typeof api.suiviCoutHebdo.getResumeSummary>> | null>(null);
+  const [farms, setFarms] = useState<FarmResponse[]>([]);
 
   const batimentsKey = batimentsParam?.trim() ?? "";
+
+  useEffect(() => {
+    api.farms.list().then((data) => setFarms(data ?? [])).catch(() => setFarms([]));
+  }, []);
 
   useEffect(() => {
     if (!farmId || !lot || !semaine || allBatiments.length === 0) {
@@ -59,10 +72,14 @@ export default function ResumeCoutsHebdoPage() {
       : "/suivi-technique-hebdomadaire";
 
   const isValid = farmId != null && !Number.isNaN(farmId) && lot.trim() !== "" && semaine.trim() !== "";
+  const farmName =
+    farmId != null && farms.length > 0
+      ? (farms.find((f) => f.id === farmId)?.name ?? getStoredSelectedFarm()?.name ?? "Ferme")
+      : (getStoredSelectedFarm()?.name ?? "Ferme");
 
   return (
     <AppLayout>
-      <div className="page-header">
+      <div className="page-header flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex flex-col gap-3">
           <Link
             to={backUrl}
@@ -79,6 +96,48 @@ export default function ResumeCoutsHebdoPage() {
             {allBatiments.length > 0 && ` — Bâtiments : ${allBatiments.join(", ")}`}
           </p>
         </div>
+        {summary && isValid && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <ShimmerButton className="shadow-lg" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                Télécharger
+              </ShimmerButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                onClick={() =>
+                  exportToExcel({
+                    farmName,
+                    farmId: farmId!,
+                    lot,
+                    semaine,
+                    batiments: allBatiments,
+                    summary,
+                  })
+                }
+              >
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                Télécharger Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  exportToPdf({
+                    farmName,
+                    farmId: farmId!,
+                    lot,
+                    semaine,
+                    batiments: allBatiments,
+                    summary,
+                  })
+                }
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                Télécharger PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {!isValid ? (
