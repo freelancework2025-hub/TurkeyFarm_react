@@ -418,7 +418,7 @@ export default function LivraisonsPaille() {
   };
 
   const ageByRowId = React.useMemo(
-    () => computeAgeByRowId(rows, getSemFromRow, (r) => r.date),
+    () => computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date),
     [rows]
   );
 

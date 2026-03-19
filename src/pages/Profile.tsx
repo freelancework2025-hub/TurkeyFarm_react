@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import { useAuth } from "@/contexts/AuthContext";
-import { User, Mail, Phone, Building2, Shield, BadgeCheck, Camera, Loader2 } from "lucide-react";
+import { User, Mail, Phone, Building2, Shield, BadgeCheck, Camera, Loader2, Trash2 } from "lucide-react";
 import { useProfileImage } from "@/hooks/useProfileImage";
 import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -18,8 +18,23 @@ export default function Profile() {
   const { toast } = useToast();
   const [imageRefreshKey, setImageRefreshKey] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileImageUrl = useProfileImage(user?.id ?? null, imageRefreshKey);
+
+  const handleDeleteImage = async () => {
+    if (!user || !profileImageUrl) return;
+    setDeleting(true);
+    try {
+      await api.users.deleteProfileImage(user.id);
+      setImageRefreshKey((k) => k + 1);
+      toast({ title: "Photo supprimée" });
+    } catch {
+      toast({ title: "Erreur lors de la suppression", variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   if (!user) {
     return (
@@ -45,7 +60,7 @@ export default function Profile() {
         <div className="bg-card rounded-lg border border-border shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-border bg-muted/30">
             <div className="flex items-center gap-4">
-              <div className="relative shrink-0">
+              <div className="relative shrink-0 group">
                 <div className="w-16 h-16 rounded-full overflow-hidden bg-muted border border-border flex items-center justify-center">
                   {profileImageUrl ? (
                     <img src={profileImageUrl} alt="" className="w-full h-full object-cover" />
@@ -53,6 +68,22 @@ export default function Profile() {
                     <User className="w-8 h-8 text-muted-foreground" />
                   )}
                 </div>
+                {/* Hover overlay for desktop */}
+                {hasFullAccess && profileImageUrl && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteImage}
+                    disabled={deleting}
+                    className="absolute inset-0 rounded-full bg-black/60 hidden md:flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                    title="Supprimer la photo"
+                  >
+                    {deleting ? (
+                      <Loader2 className="w-6 h-6 text-white animate-spin" />
+                    ) : (
+                      <Trash2 className="w-6 h-6 text-white" />
+                    )}
+                  </button>
+                )}
                 {hasFullAccess && (
                   <>
                     <input
@@ -76,15 +107,28 @@ export default function Profile() {
                         }
                       }}
                     />
+                    {/* Camera button - always visible */}
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={uploading}
-                      className="absolute bottom-0 right-0 p-1.5 rounded-full bg-primary text-primary-foreground shadow-md hover:opacity-90 disabled:opacity-50"
+                      className="absolute bottom-0 right-0 p-1.5 rounded-full bg-primary text-primary-foreground shadow-md hover:opacity-90 disabled:opacity-50 z-10"
                       title="Changer la photo"
                     >
                       {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
                     </button>
+                    {/* Trash button - visible on mobile when image exists */}
+                    {profileImageUrl && (
+                      <button
+                        type="button"
+                        onClick={handleDeleteImage}
+                        disabled={deleting}
+                        className="absolute bottom-0 left-0 p-1.5 rounded-full bg-destructive text-destructive-foreground shadow-md hover:opacity-90 disabled:opacity-50 z-10 md:hidden"
+                        title="Supprimer la photo"
+                      >
+                        {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      </button>
+                    )}
                   </>
                 )}
               </div>

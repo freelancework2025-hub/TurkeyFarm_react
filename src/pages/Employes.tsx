@@ -31,6 +31,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import {
   AlertDialog,
@@ -241,24 +247,39 @@ export default function Employes() {
               </h2>
               <div className="flex items-center gap-2">
                 {!loading && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <ShimmerButton className="shadow-lg">
-                        <Download className="mr-2 h-4 w-4" />
-                        Télécharger
-                      </ShimmerButton>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-48">
-                      <DropdownMenuItem onClick={() => exportToExcel({ employers })}>
-                        <FileSpreadsheet className="mr-2 h-4 w-4" />
-                        Télécharger Excel
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => exportToPdf({ employers })}>
-                        <FileText className="mr-2 h-4 w-4" />
-                        Télécharger PDF
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <TooltipProvider>
+                    <DropdownMenu>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <ShimmerButton
+                              type="button"
+                              className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
+                              background="#f1f5f9"
+                              shimmerColor="rgba(37,99,235,0.3)"
+                              shimmerDuration="2.5s"
+                              aria-label="Télécharger Excel ou PDF"
+                            >
+                              <Download className="h-4 w-4 text-primary" />
+                            </ShimmerButton>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="font-medium">
+                          Télécharger (Excel ou PDF)
+                        </TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="start" className="min-w-[180px]">
+                        <DropdownMenuItem onClick={() => exportToExcel({ employers })} className="cursor-pointer gap-2">
+                          <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                          Télécharger Excel
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportToPdf({ employers })} className="cursor-pointer gap-2">
+                          <FileText className="h-4 w-4 text-red-600" />
+                          Télécharger PDF
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TooltipProvider>
                 )}
                 {canManageEmployes && (
                   <Button

@@ -1,12 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Loader2, Download, FileSpreadsheet, FileText } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ShimmerButton } from "@/components/ui/shimmer-button";
+import { Loader2 } from "lucide-react";
 import {
   api,
   type SuiviTechniqueSetupResponse,
@@ -17,7 +10,6 @@ import {
   type ConsoResumeSummary,
 } from "@/lib/api";
 import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumePerformanceTrackingTable";
-import { exportToExcel, exportToPdf } from "@/lib/resumeProductionHebdoExport";
 
 const SEXES = ["Mâle", "Femelle"] as const;
 
@@ -32,6 +24,8 @@ export interface WeeklyProductionSummaryContentProps {
   effectifRestantFinSemaine?: number | null;
   /** From getResumeSummary — report + vente + conso + autre (preferred over local computation) */
   totalNbreProduction?: number | null;
+  /** Callback to pass export params to parent */
+  onExportParamsReady?: (params: any) => void;
 }
 
 interface AggregatedRow {
@@ -57,6 +51,7 @@ export default function WeeklyProductionSummaryContent({
   farmName = "Ferme",
   effectifRestantFinSemaine: effectifRestantFromBackend,
   totalNbreProduction: totalNbreFromBackend,
+  onExportParamsReady,
 }: WeeklyProductionSummaryContentProps) {
   const [loading, setLoading] = useState(true);
   const [setups, setSetups] = useState<Map<string, SuiviTechniqueSetupResponse | null>>(new Map());
@@ -130,7 +125,8 @@ export default function WeeklyProductionSummaryContent({
     Promise.all([...setupPromises, ...hebdoPromises, ...productionPromises, ...stockPromises, ...consumptionPromises, livraisonsPromise, resumeSummaryPromise]).finally(() =>
       setLoading(false)
     );
-  }, [farmId, lot, semaine, allBatiments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [farmId, lot, semaine, allBatiments.length]);
 
   const aggregatedSetup = useMemo(() => {
     let totalEffectif = 0;
@@ -501,6 +497,13 @@ export default function WeeklyProductionSummaryContent({
     ]
   );
 
+  // Pass export params to parent when ready (only once when data is loaded)
+  useEffect(() => {
+    if (onExportParamsReady && !loading) {
+      onExportParamsReady(exportParams);
+    }
+  }, [loading, onExportParamsReady, exportParams]);
+
   function formatStockValue(value: number | null | undefined): string {
     if (value == null || Number.isNaN(value)) return "—";
     return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
@@ -517,28 +520,6 @@ export default function WeeklyProductionSummaryContent({
 
   return (
     <div className="space-y-6">
-      {/* Export dropdown */}
-      <div className="flex justify-end">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <ShimmerButton className="shadow-lg" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Télécharger
-            </ShimmerButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem onClick={() => exportToExcel(exportParams)}>
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-              Télécharger Excel
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => exportToPdf(exportParams)}>
-              <FileText className="mr-2 h-4 w-4" />
-              Télécharger PDF
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
       {/* 1. Données mises en place — combined */}
       <div className="bg-card rounded-lg border border-border shadow-sm p-5">
         <h3 className="text-base font-display font-bold text-foreground mb-3">

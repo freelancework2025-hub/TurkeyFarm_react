@@ -93,15 +93,22 @@ export default function Auth() {
       </div>
 
       {/* Right: form */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-background">
-        <div className="w-full max-w-md animate-fade-in">
+      <div className="flex-1 flex items-center justify-center p-8 bg-background lg:bg-background relative">
+        {/* Mobile background image */}
+        <div className="lg:hidden absolute inset-0 z-0">
+          <img
+            src={farmHero}
+            alt="Ferme de dindes"
+            className="w-full h-full object-cover"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-background/95 via-background/90 to-background/95" />
+        </div>
+        
+        <div className="w-full max-w-md animate-fade-in relative z-10">
           <div className="lg:hidden mb-8 text-center">
             <h1 className="text-3xl font-display font-bold text-primary">
               🦃 ElevagePro
             </h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              Gestion Avicole Digitale
-            </p>
           </div>
 
           <div className="bg-card rounded-xl shadow-lg border border-border p-8">

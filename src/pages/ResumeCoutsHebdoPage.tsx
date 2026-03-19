@@ -14,6 +14,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import ResumeCoutsHebdoTable from "@/components/suivi-technique/ResumeCoutsHebdoTable";
 import { api, type FarmResponse, getStoredSelectedFarm } from "@/lib/api";
@@ -79,65 +85,86 @@ export default function ResumeCoutsHebdoPage() {
 
   return (
     <AppLayout>
-      <div className="page-header flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-        <div className="flex flex-col gap-3">
-          <Link
-            to={backUrl}
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Retour au suivi technique hebdomadaire
-          </Link>
-          <h1 className="text-2xl font-display font-bold text-foreground">
-            Résumé des coûts hebdomadaires
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Lot {lot} — Semaine {semaine}
-            {allBatiments.length > 0 && ` — Bâtiments : ${allBatiments.join(", ")}`}
-          </p>
+      <div className="page-header">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div className="flex flex-col gap-3">
+            <Link
+              to={backUrl}
+              className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Retour au suivi technique hebdomadaire
+            </Link>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-display font-bold text-foreground">
+                Résumé des coûts hebdomadaires
+              </h1>
+              {summary && isValid && (
+                <TooltipProvider>
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <ShimmerButton
+                            type="button"
+                            className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
+                            background="#f1f5f9"
+                            shimmerColor="rgba(37,99,235,0.3)"
+                            shimmerDuration="2.5s"
+                            aria-label="Télécharger Excel ou PDF"
+                          >
+                            <Download className="h-4 w-4 text-primary" />
+                          </ShimmerButton>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="font-medium">
+                        Télécharger (Excel ou PDF)
+                      </TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuContent align="start" className="min-w-[180px]">
+                      <DropdownMenuItem
+                        onClick={() =>
+                          exportToExcel({
+                            farmName,
+                            farmId: farmId!,
+                            lot,
+                            semaine,
+                            batiments: allBatiments,
+                            summary,
+                          })
+                        }
+                        className="cursor-pointer gap-2"
+                      >
+                        <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                        Télécharger Excel
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() =>
+                          exportToPdf({
+                            farmName,
+                            farmId: farmId!,
+                            lot,
+                            semaine,
+                            batiments: allBatiments,
+                            summary,
+                          })
+                        }
+                        className="cursor-pointer gap-2"
+                      >
+                        <FileText className="h-4 w-4 text-red-600" />
+                        Télécharger PDF
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TooltipProvider>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Lot {lot} — Semaine {semaine}
+              {allBatiments.length > 0 && ` — Bâtiments : ${allBatiments.join(", ")}`}
+            </p>
+          </div>
         </div>
-        {summary && isValid && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <ShimmerButton className="shadow-lg" size="sm">
-                <Download className="mr-2 h-4 w-4" />
-                Télécharger
-              </ShimmerButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem
-                onClick={() =>
-                  exportToExcel({
-                    farmName,
-                    farmId: farmId!,
-                    lot,
-                    semaine,
-                    batiments: allBatiments,
-                    summary,
-                  })
-                }
-              >
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                Télécharger Excel
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  exportToPdf({
-                    farmName,
-                    farmId: farmId!,
-                    lot,
-                    semaine,
-                    batiments: allBatiments,
-                    summary,
-                  })
-                }
-              >
-                <FileText className="mr-2 h-4 w-4" />
-                Télécharger PDF
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
       </div>
 
       {!isValid ? (

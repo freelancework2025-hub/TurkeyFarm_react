@@ -93,7 +93,7 @@ function sortLots(lotList: string[]): string[] {
 /** Ensure within each semaine, row dates are consecutive (day +1). Uses min date per group as start. */
 function normalizeRowsConsecutiveDates<T extends { id: string; date: string; sem?: string; age?: string }>(
   rows: T[],
-  getSemaine: (r: T) => string
+  getSemaine: (r: { sem?: string; age?: string }) => string
 ): T[] {
   const bySem = new Map<string, T[]>();
   for (const r of rows) {
@@ -370,7 +370,7 @@ export default function Electricite() {
   };
 
   const ageByRowId = React.useMemo(
-    () => computeAgeByRowId(rows, getSemFromRow, (r) => r.date),
+    () => computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date),
     [rows]
   );
 

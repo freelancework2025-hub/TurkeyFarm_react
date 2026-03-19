@@ -384,7 +384,7 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
     theme: "grid",
     styles: { fontSize: 8 },
     headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
-    didParseCell: (data: { section: string; row: { index: number }; cell: { styles: { fontStyle?: string; fillColor?: number[] } } }) => {
+    didParseCell: (data: { section: string; row: { index: number }; cell: { styles: { fontStyle?: string; fillColor?: number[]; textColor?: number[] } } }) => {
       if (data.section === "head") {
         data.cell.styles.fillColor = [61, 46, 26];
         data.cell.styles.textColor = [247, 246, 243];
@@ -425,7 +425,7 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
     styles: { fontSize: 8 },
     headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
     alternateRowStyles: { fillColor: [232, 230, 225] },
-    didParseCell: (data: { section: string; row: { index: number }; cell: { styles: { fontStyle?: string; fillColor?: number[] } } }) => {
+    didParseCell: (data: { section: string; row: { index: number }; cell: { styles: { fontStyle?: string; fillColor?: number[]; textColor?: number[] } } }) => {
       if (data.section === "head") {
         data.cell.styles.fillColor = [61, 46, 26];
         data.cell.styles.textColor = [247, 246, 243];

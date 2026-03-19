@@ -140,8 +140,8 @@ export default function ResumeCoutsHebdoTable({
         } as SuiviCoutHebdoResponse);
       }
     }
-    const computedAsRows: SuiviCoutHebdoResponse[] = computedRows.map((c) => ({
-      id: -1,
+    const computedAsRows: SuiviCoutHebdoResponse[] = computedRows.map((c, idx) => ({
+      id: -(idx + 1),
       farmId: 0,
       lot: "",
       semaine: "",

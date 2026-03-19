@@ -932,14 +932,13 @@ export default function SuiviTechniqueHebdomadaire() {
                           <DropdownMenuTrigger asChild>
                             <ShimmerButton
                               type="button"
-                              className="h-9 shrink-0 px-4 py-2 shadow-lg border-primary/40 text-primary"
+                              className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
                               background="#f1f5f9"
                               shimmerColor="rgba(37,99,235,0.3)"
                               shimmerDuration="2.5s"
                               aria-label="Télécharger Excel ou PDF"
                             >
-                              <Download className="mr-2 h-4 w-4" />
-                              Télécharger
+                              <Download className="h-4 w-4 text-primary" />
                             </ShimmerButton>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>

@@ -40,12 +40,34 @@ import {
   ChevronRight,
   Hash,
   Layers,
+  Download,
+  FileSpreadsheet,
+  FileText,
 } from "lucide-react";
 import { api, type DailyDashboardSummary, type LotWithStatusResponse } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { MagicCard } from "@/components/ui/magic-card";
 import { Separator } from "@/components/ui/separator";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  exportDailyDashboardToExcel,
+  exportDailyDashboardToPdf,
+  exportWeeklyDashboardToExcel,
+  exportWeeklyDashboardToPdf,
+} from "@/lib/dashboardExport";
 
 /** Icon for "Indice de Consommation aliment par bâtiment" — Wheat (feed) + Building2 (bâtiment) */
 function IndiceBatimentSectionIcon() {
@@ -989,19 +1011,110 @@ export default function Dashboard() {
           {((useRtaLikeWorkflow && rtaView === "weekly") || (showDailyDashboard && rfView === "hebdo")) && hebdoStep === "dashboard" && (
             <>
               {/* Selection summary badge */}
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm">
-                <span className="font-medium text-muted-foreground">Filtre actif :</span>
-                <span className="font-medium text-foreground">
-                  {farms.find((f) => f.id === (hebdoFarmId ?? effectiveFarmId))?.name ?? selectedFarm?.name ?? "—"}
-                </span>
-                <span className="text-muted-foreground">•</span>
-                <span className="font-medium text-foreground">{hebdoLot ?? "—"}</span>
-                <span className="text-muted-foreground">•</span>
-                <span className="font-medium text-foreground">{hebdoWeek ?? "—"}</span>
-                <span className="text-muted-foreground">•</span>
-                <span className="font-medium text-foreground">
-                  {hebdoSex == null ? "Les deux (Mâle + Femelle)" : hebdoSex}
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-muted-foreground">Filtre actif :</span>
+                  <span className="font-medium text-foreground">
+                    {farms.find((f) => f.id === (hebdoFarmId ?? effectiveFarmId))?.name ?? selectedFarm?.name ?? "—"}
+                  </span>
+                  <span className="text-muted-foreground">•</span>
+                  <span className="font-medium text-foreground">{hebdoLot ?? "—"}</span>
+                  <span className="text-muted-foreground">•</span>
+                  <span className="font-medium text-foreground">{hebdoWeek ?? "—"}</span>
+                  <span className="text-muted-foreground">•</span>
+                  <span className="font-medium text-foreground">
+                    {hebdoSex == null ? "Les deux (Mâle + Femelle)" : hebdoSex}
+                  </span>
+                </div>
+                {!loading && canFetchWeeklyData && !error && (
+                  <TooltipProvider>
+                    <DropdownMenu>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <ShimmerButton
+                              type="button"
+                              className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
+                              background="#f1f5f9"
+                              shimmerColor="rgba(37,99,235,0.3)"
+                              shimmerDuration="2.5s"
+                              aria-label="Télécharger Excel ou PDF"
+                            >
+                              <Download className="h-4 w-4 text-primary" />
+                            </ShimmerButton>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="font-medium">
+                          Télécharger (Excel ou PDF)
+                        </TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="end" className="min-w-[180px]">
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            try {
+                              await exportWeeklyDashboardToExcel({
+                                farmName: farms.find((f) => f.id === (hebdoFarmId ?? effectiveFarmId))?.name ?? selectedFarm?.name,
+                                lot: hebdoLot ?? "",
+                                week: hebdoWeek ?? "",
+                                sex: hebdoSex,
+                                costsSummary,
+                                consoSummary,
+                                totalMortality,
+                                mortalityPct,
+                                effectifDepart,
+                                effectifMisEnPlace,
+                                consoAlimentKg,
+                                indiceByBatiment,
+                                indiceMeanBySex,
+                                dailyWaterData,
+                                dailyMortalityData,
+                                canSeePricing,
+                              });
+                              toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
+                            } catch {
+                              toast({ title: "Erreur", description: "Impossible de générer le fichier Excel.", variant: "destructive" });
+                            }
+                          }}
+                          className="cursor-pointer gap-2"
+                        >
+                          <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                          Télécharger Excel
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            try {
+                              exportWeeklyDashboardToPdf({
+                                farmName: farms.find((f) => f.id === (hebdoFarmId ?? effectiveFarmId))?.name ?? selectedFarm?.name,
+                                lot: hebdoLot ?? "",
+                                week: hebdoWeek ?? "",
+                                sex: hebdoSex,
+                                costsSummary,
+                                consoSummary,
+                                totalMortality,
+                                mortalityPct,
+                                effectifDepart,
+                                effectifMisEnPlace,
+                                consoAlimentKg,
+                                indiceByBatiment,
+                                indiceMeanBySex,
+                                dailyWaterData,
+                                dailyMortalityData,
+                                canSeePricing,
+                              });
+                              toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+                            } catch {
+                              toast({ title: "Erreur", description: "Impossible de générer le fichier PDF.", variant: "destructive" });
+                            }
+                          }}
+                          className="cursor-pointer gap-2"
+                        >
+                          <FileText className="h-4 w-4 text-red-600" />
+                          Télécharger PDF
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TooltipProvider>
+                )}
               </div>
 
               {loading && canFetchWeeklyData && (
@@ -1438,11 +1551,79 @@ export default function Dashboard() {
 
               {!dailyLoading && (effectiveFarmIdForDaily != null) && !dailyError && dailySummary && !isDailyLotClosed && (
                 <>
-                  {((showFarmSelector && filters.farmId !== effectiveFarmIdForDaily) || (useRtaLikeWorkflow && rtaView === "daily")) && (
-                    <p className="text-sm text-muted-foreground mb-2">
-                      Affichage : <strong>{farms.find((f) => f.id === effectiveFarmIdForDaily)?.name ?? "Ferme"}</strong> — dernier jour du dernier lot
+                  {/* Download bar — visible for all users (RF, RT, Admin, Backoffice) when daily data is shown */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 mb-4 text-sm">
+                    <p className="text-muted-foreground">
+                      <span className="font-medium text-foreground">Dashboard du jour</span>
+                      {" — "}
+                      <strong>{farms.find((f) => f.id === effectiveFarmIdForDaily)?.name ?? selectedFarm?.name ?? "Ferme"}</strong>
+                      {" — "}
+                      dernier jour du dernier lot
                     </p>
-                  )}
+                    <TooltipProvider>
+                      <DropdownMenu>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <DropdownMenuTrigger asChild>
+                              <ShimmerButton
+                                type="button"
+                                className="h-9 w-9 shrink-0 p-0 [border-radius:9999px] border-primary/40 text-primary"
+                                background="#f1f5f9"
+                                shimmerColor="rgba(37,99,235,0.3)"
+                                shimmerDuration="2.5s"
+                                aria-label="Télécharger Excel ou PDF"
+                              >
+                                <Download className="h-4 w-4 text-primary" />
+                              </ShimmerButton>
+                            </DropdownMenuTrigger>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" className="font-medium">
+                            Télécharger (Excel ou PDF)
+                          </TooltipContent>
+                        </Tooltip>
+                        <DropdownMenuContent align="end" className="min-w-[180px]">
+                          <DropdownMenuItem
+                            onClick={async () => {
+                              try {
+                                await exportDailyDashboardToExcel({
+                                  data: dailySummary,
+                                  farmName: farms.find((f) => f.id === effectiveFarmIdForDaily)?.name ?? selectedFarm?.name,
+                                  indiceByBatiment: dailyIndiceByBatiment,
+                                  indiceMeanBySex: dailyIndiceMeanBySex,
+                                });
+                                toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
+                              } catch {
+                                toast({ title: "Erreur", description: "Impossible de générer le fichier Excel.", variant: "destructive" });
+                              }
+                            }}
+                            className="cursor-pointer gap-2"
+                          >
+                            <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                            Télécharger Excel
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              try {
+                                exportDailyDashboardToPdf({
+                                  data: dailySummary,
+                                  farmName: farms.find((f) => f.id === effectiveFarmIdForDaily)?.name ?? selectedFarm?.name,
+                                  indiceByBatiment: dailyIndiceByBatiment,
+                                  indiceMeanBySex: dailyIndiceMeanBySex,
+                                });
+                                toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+                              } catch {
+                                toast({ title: "Erreur", description: "Impossible de générer le fichier PDF.", variant: "destructive" });
+                              }
+                            }}
+                            className="cursor-pointer gap-2"
+                          >
+                            <FileText className="h-4 w-4 text-red-600" />
+                            Télécharger PDF
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TooltipProvider>
+                  </div>
                   {/* Daily dashboard (Responsable Ferme / Backoffice): Date, Lot, Âge, Semaine, Mortalité totale du jour, then Indice de Consommation directly below */}
                   <DailyMetricsCard
                     data={dailySummary}

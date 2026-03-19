@@ -257,6 +257,17 @@ export const api = {
       }
       return res.json() as Promise<UserResponse>;
     },
+    /** Delete profile image (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE only). */
+    deleteProfileImage: async (id: number, token?: string | null): Promise<void> => {
+      const t = token ?? getStoredToken();
+      const url = `${getApiBase()}/api/users/${id}/profile-image`;
+      const headers: HeadersInit = t ? { Authorization: `Bearer ${t}` } : {};
+      const res = await fetch(url, { method: "DELETE", headers, credentials: "include" });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(parseApiErrorMessage(text, res.status));
+      }
+    },
   },
   roles: {
     list: (token?: string | null) =>
