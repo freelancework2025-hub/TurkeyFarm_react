@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { AlertTriangle, Bell, CalendarClock, Check } from "lucide-react";
+import { format } from "date-fns";
+import { fr } from "date-fns/locale";
+import { AlertTriangle, Bell, CalendarClock, Check, CalendarIcon, Clock } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -9,9 +11,23 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { AnimatedList } from "@/components/ui/animated-list";
 import { BorderBeam } from "@/components/ui/border-beam";
+import { BlurFade } from "@/components/ui/blur-fade";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { api, type VaccinationAlertResponse } from "@/lib/api";
 import { VACCINATION_ALERTS_REFRESH_EVENT } from "@/lib/vaccinationAlertsEvents";
 import { useAuth } from "@/contexts/AuthContext";
@@ -37,6 +53,17 @@ export default function VaccinationAlertsBanner() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [rescheduleFor, setRescheduleFor] = useState<{ planningId: number; farmId: number; lot: string } | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleTime, setRescheduleTime] = useState("09:00");
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+
+  const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+  const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
+  const [rawH, rawM] = (rescheduleTime || "09:00").split(":");
+  const timeHour = (rawH ?? "09").padStart(2, "0");
+  const timeMinute = (rawM ?? "00").padStart(2, "0");
+  const setTimeFromParts = (h: string, m: string) =>
+    setRescheduleTime(`${h.padStart(2, "0")}:${m.padStart(2, "0")}`);
 
   const canConfirmOrReschedule = isResponsableFerme || canCreate;
   const count = loading ? 0 : alerts.length;
@@ -45,7 +72,8 @@ export default function VaccinationAlertsBanner() {
   const hasNewAlerts = regularAlerts.length > 0;
   const hasRescheduled = rescheduledAlerts.length > 0;
   const hasUnconfirmedAlerts = count > 0;
-  const alertTheme = hasNewAlerts ? "red" : hasRescheduled ? "blue" : "amber";
+  const hasBoth = hasNewAlerts && hasRescheduled;
+  const alertTheme = hasBoth ? "blend" : hasNewAlerts ? "red" : hasRescheduled ? "blue" : "amber";
 
   const fetchAlerts = useCallback(() => {
     setLoading(true);
@@ -106,23 +134,32 @@ export default function VaccinationAlertsBanner() {
 
   const handleRescheduleOpen = (a: VaccinationAlertResponse) => {
     setRescheduleFor({ planningId: a.planningId, farmId: a.farmId, lot: a.lot });
+    setDatePickerOpen(false);
+    setTimePickerOpen(false);
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     setRescheduleDate(tomorrow.toISOString().split("T")[0]);
+    setRescheduleTime("09:00");
   };
+
+  /** Format "HH:mm" to "XhYY" for display */
+  const formatTimeDisplay = (t: string | null | undefined) =>
+    t && t.trim() ? t.replace(":", "h") : "00h00";
 
   const handleRescheduleSubmit = async () => {
     if (!rescheduleFor || !rescheduleDate) return;
+    const timeStr = (rescheduleTime || "09:00").trim();
     try {
       await api.vaccinationAlerts.reschedule({
         farmId: rescheduleFor.farmId,
         lot: rescheduleFor.lot,
         planningId: rescheduleFor.planningId,
         rescheduleDate,
+        rescheduleTime: timeStr,
       });
       toast({
         title: "Reporté",
-        description: `L'alerte sera réaffichée le ${formatDate(rescheduleDate)}. Vous recevrez un rappel par email ce jour-là jusqu'à confirmation.`,
+        description: `L'alerte sera réaffichée le ${formatDate(rescheduleDate)} à ${formatTimeDisplay(timeStr)} (Casablanca). Vous recevrez un rappel par email à cette heure jusqu'à confirmation.`,
       });
       setRescheduleFor(null);
       fetchAlerts();
@@ -141,11 +178,13 @@ export default function VaccinationAlertsBanner() {
           className={`
             relative flex items-center gap-1 rounded-lg border bg-card/95 backdrop-blur-sm px-1.5 py-1 shadow
             transition-all hover:shadow-md hover:scale-[1.02]
-            ${alertTheme === "red"
-              ? "border-red-300 dark:border-red-700"
-              : alertTheme === "blue"
-                ? "border-blue-300 dark:border-blue-700"
-                : "border-amber-200 dark:border-amber-800"
+            ${alertTheme === "blend"
+              ? "border-blue-400/60 dark:border-red-400/60"
+              : alertTheme === "red"
+                ? "border-red-300 dark:border-red-700"
+                : alertTheme === "blue"
+                  ? "border-blue-300 dark:border-blue-700"
+                  : "border-amber-200 dark:border-amber-800"
             }
           `}
           role="status"
@@ -156,8 +195,8 @@ export default function VaccinationAlertsBanner() {
             <BorderBeam
               size={40}
               duration={5}
-              colorFrom={alertTheme === "red" ? "#ef4444" : alertTheme === "blue" ? "#3b82f6" : "#d97706"}
-              colorTo={alertTheme === "red" ? "#f87171" : alertTheme === "blue" ? "#60a5fa" : "#f59e0b"}
+              colorFrom={alertTheme === "blend" ? "#3b82f6" : alertTheme === "red" ? "#ef4444" : alertTheme === "blue" ? "#3b82f6" : "#d97706"}
+              colorTo={alertTheme === "blend" ? "#ef4444" : alertTheme === "red" ? "#f87171" : alertTheme === "blue" ? "#60a5fa" : "#f59e0b"}
               borderWidth={1}
               className="rounded-lg"
             />
@@ -165,32 +204,38 @@ export default function VaccinationAlertsBanner() {
           <div
             className={`
               flex h-5 w-5 shrink-0 items-center justify-center rounded-full
-              ${alertTheme === "red"
-                ? "bg-red-100 dark:bg-red-900/50"
-                : alertTheme === "blue"
-                  ? "bg-blue-100 dark:bg-blue-900/50"
-                  : "bg-amber-100 dark:bg-amber-900/50"
+              ${alertTheme === "blend"
+                ? "bg-gradient-to-br from-blue-100 to-red-100 dark:from-blue-900/50 dark:to-red-900/50"
+                : alertTheme === "red"
+                  ? "bg-red-100 dark:bg-red-900/50"
+                  : alertTheme === "blue"
+                    ? "bg-blue-100 dark:bg-blue-900/50"
+                    : "bg-amber-100 dark:bg-amber-900/50"
               }
             `}
           >
             <Bell
               className={`h-2.5 w-2.5 ${
-                alertTheme === "red"
-                  ? "text-red-600 dark:text-red-400"
-                  : alertTheme === "blue"
-                    ? "text-blue-600 dark:text-blue-400"
-                    : "text-amber-600 dark:text-amber-400"
+                alertTheme === "blend"
+                  ? "text-violet-600 dark:text-violet-400"
+                  : alertTheme === "red"
+                    ? "text-red-600 dark:text-red-400"
+                    : alertTheme === "blue"
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-amber-600 dark:text-amber-400"
               }`}
             />
           </div>
           <span
             className={`
-              flex min-w-[1rem] items-center justify-center rounded-full px-1 py-px text-xs font-bold tabular-nums
-              ${alertTheme === "red"
-                ? "bg-red-500 text-white dark:bg-red-600"
-                : alertTheme === "blue"
-                  ? "bg-blue-500 text-white dark:bg-blue-600"
-                  : "bg-amber-500 text-white dark:bg-amber-600"
+              flex min-w-[1rem] items-center justify-center rounded-full px-1 py-px text-xs font-bold tabular-nums text-white
+              ${alertTheme === "blend"
+                ? "bg-gradient-to-r from-blue-500 to-red-500 dark:from-blue-600 dark:to-red-600"
+                : alertTheme === "red"
+                  ? "bg-red-500 dark:bg-red-600"
+                  : alertTheme === "blue"
+                    ? "bg-blue-500 dark:bg-blue-600"
+                    : "bg-amber-500 dark:bg-amber-600"
               }
               ${hasUnconfirmedAlerts ? "animate-alert-flash" : ""}
             `}
@@ -201,7 +246,7 @@ export default function VaccinationAlertsBanner() {
       </div>
 
       {/* Popup dialog with full details */}
-      <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); setRescheduleFor(null); }}>
+      <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); setRescheduleFor(null); setRescheduleTime("09:00"); }}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -232,9 +277,17 @@ export default function VaccinationAlertsBanner() {
                           key={`resched-${a.farmId}-${a.lot}-${a.planningId}-${idx}`}
                           className="flex flex-wrap items-center justify-between gap-2 text-sm text-gray-700 dark:text-gray-300"
                         >
-                          <span className="font-medium">
-                            {a.farmName} — Lot {a.lot} • Âge actuel : {a.currentAge} J → Vaccin prévu à {a.vaccineAgeLabel}
-                          </span>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-medium">
+                              {a.farmName} — Lot {a.lot} • Âge actuel : {a.currentAge} J → Vaccin prévu à {a.vaccineAgeLabel}
+                            </span>
+                            {a.planDate && (
+                              <span className="text-xs text-muted-foreground">
+                                Réaffichée le {formatDate(a.planDate)}
+                                {a.rescheduleTime ? ` à ${formatTimeDisplay(a.rescheduleTime)} (Casablanca)` : ""}
+                              </span>
+                            )}
+                          </div>
                           {canConfirmOrReschedule && (
                             <div className="flex gap-1.5 shrink-0">
                               <Button size="sm" variant="outline" onClick={() => handleRescheduleOpen(a)} className="gap-1 h-7 text-xs">
@@ -307,20 +360,117 @@ export default function VaccinationAlertsBanner() {
           </div>
 
           {rescheduleFor && (
-            <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30">
-              <span className="text-sm font-medium">Nouvelle date :</span>
-              <Input
-                type="date"
-                value={rescheduleDate}
-                onChange={(e) => setRescheduleDate(e.target.value)}
-                className="w-40"
+            <div className="relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-muted/50 to-muted/30 p-4 shadow-sm">
+              <BorderBeam
+                size={60}
+                duration={8}
+                colorFrom="#8b5cf6"
+                colorTo="#06b6d4"
+                borderWidth={1}
+                className="rounded-xl"
               />
-              <Button size="sm" onClick={handleRescheduleSubmit}>
-                Valider
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setRescheduleFor(null)}>
-                Annuler
-              </Button>
+              <div className="relative flex flex-wrap items-center gap-3">
+                <span className="text-sm font-medium text-foreground/90">
+                  Date et heure (Casablanca GMT+1) :
+                </span>
+                <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="min-w-[160px] justify-start gap-2 border-input/80 bg-background/95 font-normal hover:bg-accent/50 hover:border-primary/30"
+                    >
+                      <CalendarIcon className="h-4 w-4 shrink-0 opacity-70" />
+                      {rescheduleDate
+                        ? format(new Date(rescheduleDate + "T12:00:00"), "dd/MM/yyyy", { locale: fr })
+                        : "Choisir une date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto overflow-hidden rounded-xl border-border/80 bg-gradient-to-br from-popover to-popover/95 p-0 shadow-lg" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={rescheduleDate ? new Date(rescheduleDate + "T12:00:00") : undefined}
+                      onSelect={(date) => {
+                        if (date) {
+                          setRescheduleDate(format(date, "yyyy-MM-dd"));
+                          setDatePickerOpen(false);
+                        }
+                      }}
+                      locale={fr}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+                <Popover open={timePickerOpen} onOpenChange={setTimePickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="min-w-[120px] justify-start gap-2 border-input/80 bg-background/95 font-mono font-semibold tabular-nums hover:bg-accent/50 hover:border-primary/30"
+                    >
+                      <Clock className="h-4 w-4 shrink-0 opacity-70" />
+                      {rescheduleTime || "09:00"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto overflow-hidden rounded-xl border-border/80 bg-gradient-to-br from-popover to-popover/95 p-4 shadow-lg" align="start">
+                    <BlurFade inView={false} delay={0} duration={0.25} offset={4} blur="4px">
+                      <div className="flex items-center gap-3">
+                        <div className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Heures</span>
+                          <Select
+                            value={timeHour}
+                            onValueChange={(v) => setTimeFromParts(v, timeMinute)}
+                          >
+                            <SelectTrigger className="h-10 w-[80px] border-primary/20 font-mono text-base font-semibold tabular-nums transition-colors hover:border-primary/40">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-[220px]">
+                              {HOURS.map((h) => (
+                                <SelectItem key={h} value={h} className="font-mono tabular-nums">
+                                  {h}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <span className="mt-7 text-2xl font-bold tabular-nums text-muted-foreground/80">:</span>
+                        <div className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Minutes</span>
+                          <Select
+                            value={timeMinute}
+                            onValueChange={(v) => setTimeFromParts(timeHour, v)}
+                          >
+                            <SelectTrigger className="h-10 w-[80px] border-primary/20 font-mono text-base font-semibold tabular-nums transition-colors hover:border-primary/40">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-[220px]">
+                              {MINUTES.map((m) => (
+                                <SelectItem key={m} value={m} className="font-mono tabular-nums">
+                                  {m}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    </BlurFade>
+                  </PopoverContent>
+                </Popover>
+                <ShimmerButton
+                  onClick={handleRescheduleSubmit}
+                  className="shrink-0 px-5 py-2 text-sm font-semibold"
+                  background="hsl(var(--primary))"
+                  shimmerColor="rgba(255,255,255,0.4)"
+                >
+                  Valider
+                </ShimmerButton>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setRescheduleFor(null)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  Annuler
+                </Button>
+              </div>
             </div>
           )}
 

@@ -920,13 +920,13 @@ export const api = {
         { method: "POST", token: token ?? getStoredToken() }
       ),
     reschedule: (
-      params: { farmId: number; lot: string; planningId: number; rescheduleDate: string },
+      params: { farmId: number; lot: string; planningId: number; rescheduleDate: string; rescheduleTime?: string | null },
       token?: string | null
     ) => {
       const qs = `farmId=${params.farmId}&lot=${encodeURIComponent(params.lot)}&planningId=${params.planningId}`;
       return apiFetch<void>(`/api/vaccination-alerts/reschedule?${qs}`, {
         method: "POST",
-        body: JSON.stringify({ rescheduleDate: params.rescheduleDate }),
+        body: JSON.stringify({ rescheduleDate: params.rescheduleDate, rescheduleTime: params.rescheduleTime ?? null }),
         token: token ?? getStoredToken(),
       });
     },
@@ -1921,6 +1921,8 @@ export interface VaccinationAlertResponse {
   notes?: string[] | null;
   /** True when alert came from a reschedule (reappeared on chosen date) */
   rescheduled?: boolean;
+  /** Time "HH:mm" in Morocco when email will be sent on reschedule date. Null = midnight. */
+  rescheduleTime?: string | null;
 }
 
 /** Liste des employés — request (global list, not tied to farm) */
