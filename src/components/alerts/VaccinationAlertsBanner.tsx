@@ -30,6 +30,7 @@ import { BlurFade } from "@/components/ui/blur-fade";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { api, type VaccinationAlertResponse } from "@/lib/api";
 import { VACCINATION_ALERTS_REFRESH_EVENT } from "@/lib/vaccinationAlertsEvents";
+import { initAlertSound, unlockAndPlayVaccinationAlertSound, playVaccinationAlertSound } from "@/lib/alertSound";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -111,6 +112,28 @@ export default function VaccinationAlertsBanner() {
     return () => window.removeEventListener(VACCINATION_ALERTS_REFRESH_EVENT, handler);
   }, [fetchAlerts]);
 
+  useEffect(() => {
+    initAlertSound();
+  }, []);
+
+  // Every 10 min: check for unconfirmed vaccination alerts and play reminder sound (works after any first user interaction)
+  useEffect(() => {
+    const TEN_MIN_MS = 10 * 60 * 1000;
+    const checkAndPlay = () => {
+      api.vaccinationAlerts
+        .list({ farmId: canAccessAllFarms ? selectedFarmId ?? undefined : undefined })
+        .then((res) => {
+          const list = res?.alerts ?? [];
+          if (list.length > 0) {
+            playVaccinationAlertSound();
+          }
+        })
+        .catch(() => {});
+    };
+    const id = setInterval(checkAndPlay, TEN_MIN_MS);
+    return () => clearInterval(id);
+  }, [selectedFarmId, canAccessAllFarms]);
+
   // Deep-link from email: ?openVaccinationAlerts=1 opens the dialog
   useEffect(() => {
     if (searchParams.get("openVaccinationAlerts") === "1") {
@@ -174,7 +197,10 @@ export default function VaccinationAlertsBanner() {
       <div className="fixed top-4 right-4 md:right-6 z-50">
         <button
           type="button"
-          onClick={() => setDialogOpen(true)}
+          onClick={() => {
+            if (hasUnconfirmedAlerts) unlockAndPlayVaccinationAlertSound();
+            setDialogOpen(true);
+          }}
           className={`
             relative flex items-center gap-1 rounded-lg border bg-card/95 backdrop-blur-sm px-1.5 py-1 shadow
             transition-all hover:shadow-md hover:scale-[1.02]
