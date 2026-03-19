@@ -116,9 +116,9 @@ export default function VaccinationAlertsBanner() {
     initAlertSound();
   }, []);
 
-  // Every 10 min: check for unconfirmed vaccination alerts and play reminder sound (works after any first user interaction)
+  // Every 5 min: check for unconfirmed vaccination alerts and play reminder sound (works after any first user interaction)
   useEffect(() => {
-    const TEN_MIN_MS = 10 * 60 * 1000;
+    const FIVE_MIN_MS = 5 * 60 * 1000;
     const checkAndPlay = () => {
       api.vaccinationAlerts
         .list({ farmId: canAccessAllFarms ? selectedFarmId ?? undefined : undefined })
@@ -130,7 +130,7 @@ export default function VaccinationAlertsBanner() {
         })
         .catch(() => {});
     };
-    const id = setInterval(checkAndPlay, TEN_MIN_MS);
+    const id = setInterval(checkAndPlay, FIVE_MIN_MS);
     return () => clearInterval(id);
   }, [selectedFarmId, canAccessAllFarms]);
 
