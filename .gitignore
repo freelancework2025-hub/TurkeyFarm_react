@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Local env files — never commit (VITE_* vars are baked into the bundle at build time)
+.env
+.env.local
+.env.*.local
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
