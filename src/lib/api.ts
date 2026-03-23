@@ -2184,7 +2184,7 @@ export interface SaveStockAlimentRequest {
 /** Suivi Coût Hebdo — one cost line (e.g. AMORTISSEMENT) for Prix de revient. */
 export interface ResumeCoutsHebdoSummaryResponse {
   costLines: SuiviCoutHebdoResponse[];
-  computedRows: { designation: string; valeurS1: number; cumul: number }[];
+  computedRows: { designation: string; valeurS1: number | null; cumul: number | null }[];
   poidsVifProduitKg: number | null;
   totalCumul: number;
   effectifRestantFinSemaine: number;

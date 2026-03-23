@@ -25,6 +25,7 @@ import ResumeCoutsHebdoTable from "@/components/suivi-technique/ResumeCoutsHebdo
 import { api, type FarmResponse, getStoredSelectedFarm } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { exportToExcel, exportToPdf } from "@/lib/resumeCoutsHebdoExport";
+import { toOptionalNumber } from "@/lib/formatResumeAmount";
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
 
@@ -189,19 +190,19 @@ export default function ResumeCoutsHebdoPage() {
       ) : (
         <ResumeCoutsHebdoTable
           semaine={semaine}
-          rows={summary?.costLines ?? []}
+          rows={summary.costLines ?? []}
           computedRows={
-            summary?.computedRows?.map((r) => ({
+            summary.computedRows?.map((r) => ({
               designation: r.designation,
-              valeurS1: Number(r.valeurS1) || 0,
-              cumul: Number(r.cumul) || 0,
+              valeurS1: toOptionalNumber(r.valeurS1),
+              cumul: toOptionalNumber(r.cumul),
             })) ?? []
           }
-          poidsVifProduitKg={summary?.poidsVifProduitKg != null ? Number(summary.poidsVifProduitKg) : null}
-          effectifRestantFinSemaine={summary?.effectifRestantFinSemaine ?? null}
-          totalNbreProduction={summary?.totalNbreProduction ?? null}
-          prixRevientParSujet={summary?.prixRevientParSujet != null ? Number(summary.prixRevientParSujet) : null}
-          prixRevientParKg={summary?.prixRevientParKg != null ? Number(summary.prixRevientParKg) : null}
+          poidsVifProduitKg={summary.poidsVifProduitKg != null ? Number(summary.poidsVifProduitKg) : null}
+          effectifRestantFinSemaine={summary.effectifRestantFinSemaine ?? null}
+          totalNbreProduction={summary.totalNbreProduction ?? null}
+          prixRevientParSujet={summary.prixRevientParSujet != null ? Number(summary.prixRevientParSujet) : null}
+          prixRevientParKg={summary.prixRevientParKg != null ? Number(summary.prixRevientParKg) : null}
           canCreate={canCreate}
           canUpdate={canUpdate}
           farmId={farmId}

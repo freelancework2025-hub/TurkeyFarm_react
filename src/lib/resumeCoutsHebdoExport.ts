@@ -5,7 +5,9 @@
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
-import type { SuiviCoutHebdoResponse, ResumeCoutsHebdoSummaryResponse } from "@/lib/api";
+import type { ResumeCoutsHebdoSummaryResponse } from "@/lib/api";
+import { formatResumeAmount as formatNum } from "@/lib/formatResumeAmount";
+import { buildDisplayRows, getEffectiveCumul, toNum } from "@/lib/resumeCoutsHebdoDisplay";
 
 export interface ResumeCoutsHebdoExportParams {
   farmName: string;
@@ -25,36 +27,6 @@ const TOTAL_BG = "FFD8D6D0";
 const BORDER_THIN = { style: "thin" as const };
 const BORDERS_ALL = { top: BORDER_THIN, left: BORDER_THIN, bottom: BORDER_THIN, right: BORDER_THIN };
 
-const COMPUTED_ORDER: Record<string, number> = {
-  AMORTISSEMENT: 0,
-  DINDONNEAUX: 1,
-  ALIMENT: 2,
-  "PDTS VETERINAIRES": 3,
-  "PDTS D'HYGIENE": 4,
-  GAZ: 5,
-  PAILLE: 6,
-  ELECTRICITE: 7,
-  "M.O (JOUR DE TRAVAIL)": 8,
-  "ENTRETIEN ET REP": 9,
-  DIVERS: 10,
-};
-
-function designationOrder(d: string | null | undefined): number {
-  const up = d?.toUpperCase();
-  return up != null && up in COMPUTED_ORDER ? COMPUTED_ORDER[up] : 10;
-}
-
-function toNum(v: unknown): number | null {
-  if (v == null) return null;
-  const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
-  return Number.isFinite(n) ? n : null;
-}
-
-function formatNum(v: number | null | undefined): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(".", ",");
-}
-
 function formatPct(v: number | null | undefined): string {
   if (v == null || Number.isNaN(v)) return "—";
   return `${v.toFixed(2).replace(".", ",")} %`;
@@ -64,51 +36,12 @@ function safeFileName(parts: string[]): string {
   return parts.join("_").replace(/[^\w\-_]/g, "_");
 }
 
-function buildDisplayRows(
-  costLines: SuiviCoutHebdoResponse[],
-  computedRows: { designation: string; valeurS1: number; cumul: number }[],
-  semaine: string,
-  farmId: number,
-  lot: string
-): SuiviCoutHebdoResponse[] {
-  const withPlaceholders = [...costLines];
-  for (const des of ["AMORTISSEMENT", "DINDONNEAUX"]) {
-    if (!withPlaceholders.some((r) => r.designation?.toUpperCase() === des)) {
-      withPlaceholders.push({
-        id: 0,
-        farmId,
-        lot,
-        semaine,
-        designation: des,
-        valeurS1: null,
-        cumul: null,
-      } as SuiviCoutHebdoResponse);
-    }
-  }
-  const computed = computedRows.map((c) => ({
-    id: -1,
-    farmId: 0,
-    lot: "",
-    semaine: "",
-    designation: c.designation,
-    valeurS1: c.valeurS1,
-    cumul: c.cumul,
-  })) as SuiviCoutHebdoResponse[];
-  const merged = [...withPlaceholders, ...computed];
-  return merged.sort((a, b) => {
-    const oa = designationOrder(a.designation);
-    const ob = designationOrder(b.designation);
-    if (oa !== ob) return oa - ob;
-    return (a.designation ?? "").localeCompare(b.designation ?? "");
-  });
-}
-
 export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promise<void> {
   const { farmName, lot, semaine, batiments, summary } = params;
   const { costLines, computedRows, poidsVifProduitKg, effectifRestantFinSemaine, totalNbreProduction, prixRevientParSujet, prixRevientParKg } = summary;
 
   const displayRows = buildDisplayRows(costLines, computedRows ?? [], semaine, params.farmId, params.lot);
-  const totalCumul = displayRows.reduce((s, r) => s + (toNum(r.cumul) ?? toNum(r.valeurS1) ?? 0), 0);
+  const totalCumul = displayRows.reduce((s, r) => s + (getEffectiveCumul(r) ?? 0), 0);
   const totalS1 = displayRows.reduce((s, r) => s + (toNum(r.valeurS1) ?? 0), 0);
   const totalCumulDhKg = poidsVifProduitKg != null && poidsVifProduitKg > 0 ? totalCumul / poidsVifProduitKg : null;
   const prixSujet = prixRevientParSujet != null ? prixRevientParSujet : totalCumul > 0 && effectifRestantFinSemaine != null && totalNbreProduction != null && effectifRestantFinSemaine + totalNbreProduction > 0 ? totalCumul / (effectifRestantFinSemaine + totalNbreProduction) : null;
@@ -171,7 +104,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
   currentRow++;
   let dataIdx = 0;
   for (const r of displayRows) {
-    const effectiveCumul = toNum(r.cumul) ?? toNum(r.valeurS1);
+    const effectiveCumul = getEffectiveCumul(r);
     const cumulDhKg = poidsVifProduitKg != null && poidsVifProduitKg > 0 && effectiveCumul != null ? effectiveCumul / poidsVifProduitKg : null;
     const pct = totalCumul > 0 && effectiveCumul != null ? (effectiveCumul / totalCumul) * 100 : null;
     ws.getCell(currentRow, 1).value = r.designation ?? "—";
@@ -184,7 +117,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
       if (dataIdx % 2 === 1) ws.getCell(currentRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
       if (c >= 2 && c <= 4) {
         const val = ws.getCell(currentRow, c).value;
-        if (typeof val === "number") ws.getCell(currentRow, c).numFmt = "#,##0.00";
+        if (typeof val === "number") ws.getCell(currentRow, c).numFmt = "# ##0.00";
       }
     }
     currentRow++;
@@ -201,7 +134,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
     cell.font = { bold: true };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
     cell.border = BORDERS_ALL;
-    if (c >= 2 && c <= 4 && typeof cell.value === "number") cell.numFmt = "#,##0.00";
+    if (c >= 2 && c <= 4 && typeof cell.value === "number") cell.numFmt = "# ##0.00";
   }
   currentRow += 2;
 
@@ -227,7 +160,7 @@ export function exportToPdf(params: ResumeCoutsHebdoExportParams): void {
   const { costLines, computedRows, poidsVifProduitKg, effectifRestantFinSemaine, totalNbreProduction, prixRevientParSujet, prixRevientParKg } = summary;
 
   const displayRows = buildDisplayRows(costLines, computedRows ?? [], semaine, params.farmId, params.lot);
-  const totalCumul = displayRows.reduce((s, r) => s + (toNum(r.cumul) ?? toNum(r.valeurS1) ?? 0), 0);
+  const totalCumul = displayRows.reduce((s, r) => s + (getEffectiveCumul(r) ?? 0), 0);
   const totalS1 = displayRows.reduce((s, r) => s + (toNum(r.valeurS1) ?? 0), 0);
   const totalCumulDhKg = poidsVifProduitKg != null && poidsVifProduitKg > 0 ? totalCumul / poidsVifProduitKg : null;
 
@@ -254,7 +187,7 @@ export function exportToPdf(params: ResumeCoutsHebdoExportParams): void {
 
   const headerCols = ["DESIGNATION", semaine, "CUMUL", "CUMUL DH/KG", "%"];
   const body: string[][] = displayRows.map((r) => {
-    const effectiveCumul = toNum(r.cumul) ?? toNum(r.valeurS1);
+    const effectiveCumul = getEffectiveCumul(r);
     const cumulDhKg = poidsVifProduitKg != null && poidsVifProduitKg > 0 && effectiveCumul != null ? effectiveCumul / poidsVifProduitKg : null;
     const pct = totalCumul > 0 && effectiveCumul != null ? (effectiveCumul / totalCumul) * 100 : null;
     return [

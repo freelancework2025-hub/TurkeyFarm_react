@@ -27,6 +27,7 @@ import {
 } from "@/lib/api";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 import { exportLivraisonsAlimentExcel, exportToPdf } from "@/lib/livraisonsAlimentExport";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS D'ALIMENT
@@ -48,7 +49,7 @@ const MIN_TABLE_ROWS = 7;
 interface LivraisonRow {
   id: string;
   serverId?: number;
-  age: string;
+  age: string; // Stored sequential age from API when present; display uses computeAgeByRowId
   date: string;
   sem: string;
   designation: string;
@@ -74,11 +75,38 @@ function fromNum(n: number | null | undefined): string {
   return n != null ? String(n) : "";
 }
 
+/** Display quantity (grouped, no fraction). */
+function formatQtyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 0) : "—";
+}
+
+/** Display unit price / money (grouped + 2 decimals). */
+function formatMoneyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+/** MONTANT column: stored value or qte × prix when empty. */
+function formatMontantCell(row: LivraisonRow): string {
+  const m = toOptionalNumber(row.montant);
+  if (m != null) return formatGroupedNumber(m, 2);
+  const q = toOptionalNumber(row.qte);
+  const p = toOptionalNumber(row.prixPerUnit);
+  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  return "—";
+}
+
 /** Add one day to a YYYY-MM-DD date string. */
 function addOneDay(isoDate: string): string {
   const d = new Date(isoDate + "T12:00:00");
   d.setDate(d.getDate() + 1);
   return d.toISOString().split("T")[0];
+}
+
+/** Semaine label from row (SEM). */
+function getSemFromRow(r: { sem?: string }): string {
+  return (r.sem || "").trim();
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order). */
@@ -210,14 +238,14 @@ export default function LivraisonsAliment() {
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today). */
   const getStartDateForSemaine = useCallback(
     (semaine: string): string => {
-      const sems = new Set(rows.map((r) => (r.sem || "").trim()).filter(Boolean));
+      const sems = new Set(rows.map((r) => getSemFromRow(r)).filter(Boolean));
       sems.add(semaine.trim());
       const semOrder = sortSemaines([...sems]);
       const idx = semOrder.indexOf(semaine.trim());
       if (idx < 0) return today;
       if (idx === 0) return previousLotLastDate ?? today;
       const prevSem = semOrder[idx - 1];
-      const prevRows = rows.filter((r) => (r.sem || "").trim() === prevSem);
+      const prevRows = rows.filter((r) => getSemFromRow(r) === prevSem);
       if (prevRows.length === 0) return today;
       const dates = prevRows.map((r) => r.date).filter((d) => d?.trim());
       if (dates.length === 0) return today;
@@ -256,61 +284,43 @@ export default function LivraisonsAliment() {
         movementType: r.movementType ?? "DELIVERY",
         notes: r.notes ?? "",
       }));
-      
-      // Ensure MIN_TABLE_ROWS for the selected semaine (if semaine is selected)
-      if (hasSemaineInUrl && selectedSemaine) {
-        const forSem = mapped.filter((r) => (r.sem || "").trim() === selectedSemaine);
-        if (isReadOnly) {
-          // Read-only: show only what exists
-          setRows(mapped);
-        } else if (forSem.length >= MIN_TABLE_ROWS) {
-          // Already have enough rows for this semaine
-          setRows(mapped);
-        } else {
-          // Need to add empty rows to reach MIN_TABLE_ROWS
-          const toAdd = MIN_TABLE_ROWS - forSem.length;
-          // Calculate start date inline to avoid circular dependency
-          const startDate = forSem.length > 0
-            ? (() => {
-                const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
-                if (dates.length === 0) return previousLotLastDate ?? today;
-                const maxD = dates.sort()[dates.length - 1];
-                return addOneDay(maxD);
-              })()
-            : previousLotLastDate ?? today;
-          const newRows: LivraisonRow[] = [];
-          let nextDate = startDate;
-          for (let i = 0; i < toAdd; i++) {
-            newRows.push(emptyRow(selectedSemaine, nextDate));
-            nextDate = addOneDay(nextDate);
-          }
-          setRows([...mapped, ...newRows]);
-        }
-      } else {
-        setRows(mapped);
-      }
+      // Keep server dates as-is so AGE order matches persisted data after refresh (no client-side date rewrite).
+      setRows(mapped);
     } catch {
-      if (hasSemaineInUrl && selectedSemaine && canCreate) {
-        // On error, create MIN_TABLE_ROWS empty rows for the selected semaine
-        const startDate = previousLotLastDate ?? today;
-        const newRows: LivraisonRow[] = [];
-        let nextDate = startDate;
-        for (let i = 0; i < MIN_TABLE_ROWS; i++) {
-          newRows.push(emptyRow(selectedSemaine, nextDate));
-          nextDate = addOneDay(nextDate);
-        }
-        setRows(newRows);
-      } else {
-        setRows([]);
-      }
+      setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, toast, hasSemaineInUrl, selectedSemaine, isReadOnly, canCreate, previousLotLastDate, today, isSelectedLotClosed]);
+  }, [showFarmSelector, pageFarmId, lotFilter, isSelectedLotClosed]);
 
   useEffect(() => {
     loadMovements();
   }, [loadMovements]);
+
+  /** Pad to MIN_TABLE_ROWS for the selected semaine (same timing as Livraisons Électricité). */
+  useEffect(() => {
+    if (!hasSemaineInUrl || !selectedSemaine) return;
+    if (isReadOnly) return;
+    const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
+    if (forSem.length >= MIN_TABLE_ROWS) return;
+    const toAdd = MIN_TABLE_ROWS - forSem.length;
+    const startDate =
+      forSem.length > 0
+        ? (() => {
+            const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
+            if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
+            const maxD = dates.sort()[dates.length - 1];
+            return addOneDay(maxD);
+          })()
+        : getStartDateForSemaine(selectedSemaine);
+    const newRows: LivraisonRow[] = [];
+    let nextDate = startDate;
+    for (let i = 0; i < toAdd; i++) {
+      newRows.push(emptyRow(selectedSemaine, nextDate));
+      nextDate = addOneDay(nextDate);
+    }
+    setRows((prev) => [...prev, ...newRows]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine, isReadOnly]);
 
   useEffect(() => {
     if (!lotFilter.trim() || !pageFarmId || lots.length === 0) {
@@ -356,7 +366,7 @@ export default function LivraisonsAliment() {
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
-    const currentRows = rows.filter((r) => (r.sem || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
     const nextDate =
       lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
@@ -365,7 +375,7 @@ export default function LivraisonsAliment() {
   };
 
   const removeRow = (id: string) => {
-    const currentRows = rows.filter((r) => (r.sem || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
     if (row?.serverId != null && !canDelete) return;
@@ -397,11 +407,35 @@ export default function LivraisonsAliment() {
     );
   };
 
-  /** Computed AGE (1, 2, 3...) for each row, ordered by semaine then date. */
+  /** Computed AGE for save logic and draft rows; ordering uses sem + date (+ DB age ties). */
   const ageByRowId = React.useMemo(
-    () => computeAgeByRowId(rows, (r) => r.sem, (r) => r.date),
+    () =>
+      computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date, (r) => {
+        const n = parseInt(String(r.age).trim(), 10);
+        return Number.isNaN(n) ? undefined : n;
+      }),
     [rows]
   );
+
+  /**
+   * Display AGE: use persisted aliment_movement.age when the row is saved (matches DB after refresh).
+   * Unsaved / padded lines still use the computed sequential age.
+   */
+  const displayAgeByRowId = React.useMemo(() => {
+    const m = new Map<string, number | string>();
+    if (loading) return m; // Empty during load to avoid stale visuals
+    for (const r of rows) {
+      if (r.serverId != null) {
+        const db = parseInt(String(r.age).trim(), 10);
+        if (!Number.isNaN(db)) {
+          m.set(r.id, db);
+          continue;
+        }
+      }
+      m.set(r.id, ageByRowId.get(r.id) ?? "—");
+    }
+    return m;
+  }, [rows, ageByRowId, loading]);
 
   /** Build request DTO from a row (for both create and update). */
   const rowToRequest = (r: LivraisonRow, computedAge?: number): LivraisonAlimentRequest => {
@@ -410,9 +444,14 @@ export default function LivraisonsAliment() {
     const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte != null && prix >= 0 ? qte * prix : null);
-    // SEM = S1, S2... (semaine label); AGE = sequential 1,2,3...
-    const sem = (r.sem || "").trim() || selectedSemaine || null;
-    const age = computedAge ?? (r.age.trim() !== "" ? parseInt(r.age, 10) : null);
+    // SEM = S1, S2... (semaine label); AGE = sequential 1,2,3… (computed when saving, like Électricité)
+    const sem = getSemFromRow(r) || selectedSemaine || null;
+    const age =
+      computedAge != null
+        ? computedAge
+        : r.age.trim() !== ""
+          ? parseInt(r.age, 10)
+          : null;
     return {
       farmId: pageFarmId ?? undefined,
       lot: lotFilter.trim() || null,
@@ -488,7 +527,14 @@ export default function LivraisonsAliment() {
         toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
         setRows((prev) =>
           prev.map((r) =>
-            r.id === row.id ? { ...r, serverId: created.id } : r
+            r.id === row.id
+              ? {
+                  ...r,
+                  serverId: created.id,
+                  age: created.age != null ? String(created.age) : r.age,
+                  sem: created.sem ?? r.sem,
+                }
+              : r
           )
         );
         return; // Don't reload; we've updated local state with serverId
@@ -544,9 +590,14 @@ export default function LivraisonsAliment() {
 
   /** Rows for the selected semaine only; sorted by date (day 1, day 2, ...). */
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => (r.sem || "").trim() === selectedSemaine)].sort(
-        (a, b) => (a.date || "").localeCompare(b.date || "")
-      )
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
+        const ageA = displayAgeByRowId.get(a.id);
+        const ageB = displayAgeByRowId.get(b.id);
+        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+        if (numA !== numB) return numA - numB;
+        return (a.date || "").localeCompare(b.date || "");
+      })
     : [];
 
   /** Total for current semaine only. */
@@ -564,13 +615,13 @@ export default function LivraisonsAliment() {
 
   /** Cumul = sum of totals of all semaines up to and including selectedSemaine (ordered S1, S2, ...). */
   const cumulForSelectedSemaine = (() => {
-    const sems = new Set(rows.map((r) => (r.sem || "").trim()).filter(Boolean));
+    const sems = new Set(rows.map((r) => getSemFromRow(r)).filter(Boolean));
     const semOrder = sortSemaines([...sems]);
     const idx = semOrder.indexOf(selectedSemaine);
     const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
     let running = { qte: 0, prix: 0, montant: 0, maleQty: 0, femaleQty: 0 };
     for (const sem of semsUpTo) {
-      const weekRows = rows.filter((r) => (r.sem || "").trim() === sem);
+      const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
         running.qte += toNum(r.qte);
         running.prix += toNum(r.prixPerUnit);
@@ -598,7 +649,7 @@ export default function LivraisonsAliment() {
         rows: currentRows,
         weekTotal,
         cumul: cumulForSelectedSemaine,
-        ageByRowId,
+        ageByRowId: displayAgeByRowId,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
     } catch {
@@ -615,7 +666,7 @@ export default function LivraisonsAliment() {
       rows: currentRows,
       weekTotal,
       cumul: cumulForSelectedSemaine,
-      ageByRowId,
+      ageByRowId: displayAgeByRowId,
     });
     toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
   };
@@ -905,7 +956,7 @@ export default function LivraisonsAliment() {
                       <th className="min-w-[120px]">FOURNISSEUR</th>
                       <th className="min-w-[90px]">N° BL</th>
                       <th className="min-w-[90px]">N° BR</th>
-                      <th className="min-w-[70px]">QTE</th>
+                      <th className="min-w-[128px] w-[8.5rem]">QTE</th>
                       <th className="min-w-[80px]">SEX</th>
                       <th className="min-w-[80px]">PRIX</th>
                       <th className="min-w-[90px]">MONTANT</th>
@@ -936,7 +987,7 @@ export default function LivraisonsAliment() {
                           return (
                             <tr key={row.id}>
                               <td className="text-sm font-medium text-muted-foreground">
-                                {ageByRowId.get(row.id) ?? "—"}
+                                {displayAgeByRowId.get(row.id) ?? "—"}
                               </td>
                               <td>
                                 <input
@@ -947,7 +998,7 @@ export default function LivraisonsAliment() {
                                 />
                               </td>
                               <td className="text-sm font-medium text-muted-foreground">
-                                {(row.sem || "").trim() || selectedSemaine || "—"}
+                                {getSemFromRow(row) || selectedSemaine || "—"}
                               </td>
                               <td>
                                 <input
@@ -989,15 +1040,21 @@ export default function LivraisonsAliment() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.qte}
-                                  onChange={(e) => updateRow(row.id, "qte", e.target.value)}
-                                  placeholder="—"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                />
+                              <td className="min-w-[128px]">
+                                {rowReadOnly ? (
+                                  <span className="block text-right tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.qte)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.qte}
+                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                    placeholder="—"
+                                    min={0}
+                                    className="w-full min-w-[7.5rem] tabular-nums text-right"
+                                  />
+                                )}
                               </td>
                               <td>
                                 <select
@@ -1012,36 +1069,56 @@ export default function LivraisonsAliment() {
                                 </select>
                               </td>
                               <td>
-                                <input
-                                  type="number"
-                                  value={row.prixPerUnit}
-                                  onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
-                                  placeholder="—"
-                                  step="0.01"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                />
+                                {rowReadOnly ? (
+                                  <span className="block text-right tabular-nums px-1 py-0.5">
+                                    {formatMoneyDisplay(row.prixPerUnit)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.prixPerUnit}
+                                    onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                    placeholder="—"
+                                    step="0.01"
+                                    min={0}
+                                    className="w-full min-w-[5.5rem] tabular-nums text-right"
+                                  />
+                                )}
                               </td>
-                              <td className="font-semibold text-sm">{row.montant || "—"}</td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.maleQty}
-                                  onChange={(e) => updateRow(row.id, "maleQty", e.target.value)}
-                                  placeholder="0"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                />
+                              <td className="font-semibold text-sm text-right tabular-nums whitespace-nowrap">
+                                {formatMontantCell(row)}
                               </td>
                               <td>
-                                <input
-                                  type="number"
-                                  value={row.femaleQty}
-                                  onChange={(e) => updateRow(row.id, "femaleQty", e.target.value)}
-                                  placeholder="0"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                />
+                                {rowReadOnly ? (
+                                  <span className="block text-right tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.maleQty)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.maleQty}
+                                    onChange={(e) => updateRow(row.id, "maleQty", e.target.value)}
+                                    placeholder="0"
+                                    min={0}
+                                    className="w-full min-w-[5rem] tabular-nums text-right"
+                                  />
+                                )}
+                              </td>
+                              <td>
+                                {rowReadOnly ? (
+                                  <span className="block text-right tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.femaleQty)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.femaleQty}
+                                    onChange={(e) => updateRow(row.id, "femaleQty", e.target.value)}
+                                    placeholder="0"
+                                    min={0}
+                                    className="w-full min-w-[5rem] tabular-nums text-right"
+                                  />
+                                )}
                               </td>
                               <td>
                                 {canSaveRow && (
@@ -1082,12 +1159,22 @@ export default function LivraisonsAliment() {
                           </td>
                           <td>—</td>
                           <td>—</td>
-                          <td>{weekTotal.qte}</td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(weekTotal.qte, 0)}
+                          </td>
                           <td>—</td>
-                          <td>{weekTotal.prix.toFixed(2)}</td>
-                          <td>{weekTotal.montant.toFixed(2)}</td>
-                          <td>{weekTotal.maleQty}</td>
-                          <td>{weekTotal.femaleQty}</td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(weekTotal.prix, 2)}
+                          </td>
+                          <td className="text-right tabular-nums whitespace-nowrap font-semibold">
+                            {formatGroupedNumber(weekTotal.montant, 2)}
+                          </td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(weekTotal.maleQty, 0)}
+                          </td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(weekTotal.femaleQty, 0)}
+                          </td>
                           <td></td>
                           <td></td>
                         </tr>
@@ -1097,12 +1184,22 @@ export default function LivraisonsAliment() {
                           </td>
                           <td>—</td>
                           <td>—</td>
-                          <td>{cumulForSelectedSemaine.qte}</td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(cumulForSelectedSemaine.qte, 0)}
+                          </td>
                           <td>—</td>
-                          <td>{cumulForSelectedSemaine.prix.toFixed(2)}</td>
-                          <td>{cumulForSelectedSemaine.montant.toFixed(2)}</td>
-                          <td>{cumulForSelectedSemaine.maleQty}</td>
-                          <td>{cumulForSelectedSemaine.femaleQty}</td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(cumulForSelectedSemaine.prix, 2)}
+                          </td>
+                          <td className="text-right tabular-nums whitespace-nowrap font-semibold">
+                            {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
+                          </td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(cumulForSelectedSemaine.maleQty, 0)}
+                          </td>
+                          <td className="text-right tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(cumulForSelectedSemaine.femaleQty, 0)}
+                          </td>
                           <td></td>
                           <td></td>
                         </tr>

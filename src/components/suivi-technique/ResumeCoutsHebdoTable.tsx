@@ -9,6 +9,8 @@
 
 import { useState, useMemo } from "react";
 import { api, type SuiviCoutHebdoResponse } from "@/lib/api";
+import { formatResumeAmount } from "@/lib/formatResumeAmount";
+import { buildDisplayRows, getEffectiveCumul, toNum } from "@/lib/resumeCoutsHebdoDisplay";
 import { Loader2 } from "lucide-react";
 
 export interface ResumeCoutsHebdoTableProps {
@@ -17,7 +19,7 @@ export interface ResumeCoutsHebdoTableProps {
   /** Cost lines from API (e.g. AMORTISSEMENT) */
   rows: SuiviCoutHebdoResponse[];
   /** Read-only rows from module totals (ALIMENT, PDTS VETERINAIRES, etc.): S1 = total Montant for the chosen week */
-  computedRows?: { designation: string; valeurS1: number; cumul: number }[];
+  computedRows?: { designation: string; valeurS1: number | null; cumul: number | null }[];
   /** POIDS VIF PRODUIT EN KG from STOCK — Tous bâtiments — S1 (Résumé hebdomadaire de la production) */
   poidsVifProduitKg: number | null;
   /** EFFECTIF RESTANT FIN DE SEMAINE from production résumé (for PRIX DE REVIENT/SUJET and /KG) */
@@ -47,40 +49,6 @@ const EDITABLE_DESIGNATIONS = [DESIGNATION_AMORTISSEMENT, DESIGNATION_DINDONNEAU
 function isEditableByRespTech(designation: string | null | undefined): boolean {
   const d = designation?.toUpperCase();
   return EDITABLE_DESIGNATIONS.some((ed) => ed === d);
-}
-
-/** Designation sort order: AMORTISSEMENT, DINDONNEAUX, then module rows (ALIMENT, PDTS VETERINAIRES, ...), then others. */
-const COMPUTED_DESIGNATION_ORDER: Record<string, number> = {
-  AMORTISSEMENT: 0,
-  DINDONNEAUX: 1,
-  ALIMENT: 2,
-  "PDTS VETERINAIRES": 3,
-  "PDTS D'HYGIENE": 4,
-  GAZ: 5,
-  PAILLE: 6,
-  ELECTRICITE: 7,
-  "M.O (JOUR DE TRAVAIL)": 8,
-  "ENTRETIEN ET REP": 9,
-  DIVERS: 10,
-};
-
-function designationOrder(designation: string | null | undefined): number {
-  const d = designation?.toUpperCase();
-  if (d != null && d in COMPUTED_DESIGNATION_ORDER)
-    return COMPUTED_DESIGNATION_ORDER[d as keyof typeof COMPUTED_DESIGNATION_ORDER];
-  return 10;
-}
-
-/** Safely coerce API value (number, string, null) to number for calculations. */
-function toNumber(value: unknown): number | null {
-  if (value == null) return null;
-  const n = typeof value === "number" ? value : parseFloat(String(value).replace(",", "."));
-  return Number.isFinite(n) ? n : null;
-}
-
-function formatNum(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
 }
 
 function formatPct(value: number | null | undefined): string {
@@ -123,50 +91,11 @@ export default function ResumeCoutsHebdoTable({
     return canUpdate;
   };
 
-  // Merge API rows (with placeholders for AMORTISSEMENT/DINDONNEAUX) and computed rows from modules
-  const displayRows = useMemo((): SuiviCoutHebdoResponse[] => {
-    const withPlaceholders = [...rows];
-    for (const designation of EDITABLE_DESIGNATIONS) {
-      const hasRow = rows.some((r) => r.designation?.toUpperCase() === designation);
-      if (!hasRow) {
-        withPlaceholders.push({
-          id: 0,
-          farmId,
-          lot,
-          semaine,
-          designation,
-          valeurS1: null,
-          cumul: null,
-        } as SuiviCoutHebdoResponse);
-      }
-    }
-    const computedAsRows: SuiviCoutHebdoResponse[] = computedRows.map((c, idx) => ({
-      id: -(idx + 1),
-      farmId: 0,
-      lot: "",
-      semaine: "",
-      designation: c.designation,
-      valeurS1: c.valeurS1,
-      cumul: c.cumul,
-    })) as SuiviCoutHebdoResponse[];
-    const merged = [...withPlaceholders, ...computedAsRows];
-    return merged.sort((a, b) => {
-      const orderA = designationOrder(a.designation);
-      const orderB = designationOrder(b.designation);
-      if (orderA !== orderB) return orderA - orderB;
-      return (a.designation ?? "").localeCompare(b.designation ?? "");
-    });
-  }, [rows, computedRows, farmId, lot, semaine]);
-
-  /**
-   * Effective cumul for a row: use cumul when set, otherwise valeurS1 for the chosen week (S1).
-   * So when only S1 is entered, CUMUL DH/KG and % are still calculated (cumul = valeurS1 for that week).
-   */
-  const getEffectiveCumul = (row: SuiviCoutHebdoResponse): number | null => {
-    const c = toNumber(row.cumul);
-    if (c != null) return c;
-    return toNumber(row.valeurS1);
-  };
+  // Same merge / dedupe / order as Excel & PDF export (resumeCoutsHebdoDisplay.buildDisplayRows).
+  const displayRows = useMemo(
+    () => buildDisplayRows(rows, computedRows, semaine, farmId, lot),
+    [rows, computedRows, semaine, farmId, lot]
+  );
 
   const totalCumul = useMemo(() => {
     return displayRows.reduce(
@@ -177,7 +106,7 @@ export default function ResumeCoutsHebdoTable({
 
   const totalS1 = useMemo(() => {
     return displayRows.reduce(
-      (sum, r) => sum + (toNumber(r.valeurS1) ?? 0),
+      (sum, r) => sum + (toNum(r.valeurS1) ?? 0),
       0
     );
   }, [displayRows]);
@@ -305,16 +234,16 @@ export default function ResumeCoutsHebdoTable({
                           onClick={() => startEdit(row)}
                           className="rounded border border-border bg-muted/30 px-2 py-1 text-sm tabular-nums hover:bg-muted/50"
                         >
-                          {formatNum(row.valeurS1)}
+                          {formatResumeAmount(row.valeurS1)}
                         </button>
                       ) : (
                         <span className="tabular-nums text-foreground">
-                          {formatNum(row.valeurS1)}
+                          {formatResumeAmount(row.valeurS1)}
                         </span>
                       )
                     ) : (
                       <span className="tabular-nums text-foreground">
-                        {formatNum(row.valeurS1)}
+                        {formatResumeAmount(row.valeurS1)}
                       </span>
                     )}
                   </td>
@@ -329,12 +258,12 @@ export default function ResumeCoutsHebdoTable({
                       />
                     ) : (
                       <span className="tabular-nums text-foreground">
-                        {formatNum(effectiveCumul)}
+                        {formatResumeAmount(effectiveCumul)}
                       </span>
                     )}
                   </td>
                   <td className="px-3 py-2 border-r border-border text-center tabular-nums text-foreground">
-                    {formatNum(cumulDhKg)}
+                    {formatResumeAmount(cumulDhKg)}
                   </td>
                   <td className="px-3 py-2 text-center tabular-nums text-foreground">
                     {formatPct(pct)}
@@ -347,13 +276,13 @@ export default function ResumeCoutsHebdoTable({
             <tr className="border-t-2 border-border bg-sky-100 dark:bg-sky-950/40 font-semibold text-foreground">
               <td className="px-4 py-2.5 border-r border-border">Total</td>
               <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
-                {formatNum(totalS1)}
+                {formatResumeAmount(totalS1)}
               </td>
               <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
-                {formatNum(totalCumul)}
+                {formatResumeAmount(totalCumul)}
               </td>
               <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
-                {formatNum(totalCumulDhKg)}
+                {formatResumeAmount(totalCumulDhKg)}
               </td>
               <td className="px-3 py-2.5 text-center tabular-nums">
                 {totalCumul > 0 ? formatPct(100) : formatPct(null)}
@@ -383,7 +312,7 @@ export default function ResumeCoutsHebdoTable({
                   PRIX DE REVIENT/SUJET
                 </td>
                 <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
-                  {formatNum(
+                  {formatResumeAmount(
                     prixRevientParSujet != null
                       ? prixRevientParSujet
                       : totalCumul > 0 &&
@@ -400,7 +329,7 @@ export default function ResumeCoutsHebdoTable({
                   PRIX DE REVIENT/KG
                 </td>
                 <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
-                  {formatNum(
+                  {formatResumeAmount(
                     prixRevientParKg != null
                       ? prixRevientParKg
                       : totalCumulDhKg
