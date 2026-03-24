@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Save, Trash2, UserPlus } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Trash2, UserPlus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,7 +25,6 @@ import {
   type MainOeuvreResponse,
   type MainOeuvreRequest,
   type LotWithStatusResponse,
-  getStoredSelectedFarm,
 } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/mainOeuvreExport";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
@@ -34,12 +33,14 @@ import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
  * MAIN D'ŒUVRE
  * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
  * Each semaine has its own table; TOTAL = jours for current semaine, CUMUL = running jours.
- * Table: Date, Semaine (age), Employé, Temps (1 jour or 1/2 demijour). Permissions: canCreate/canUpdate/canDelete.
- * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
- * Only filled lines (date + employé) are created on Save, so they can save line 1 → locked; then fill and save line 2 → both locked; etc.
+ * Table: AGE, Date, Semaine (S1…), Employé, Temps (1 jour or 1/2 demijour).
+ * ✓ par ligne : crée les employés non encore enregistrés (batch sur ce jour) ou met à jour tous les enregistrements du jour si canUpdate.
+ * Suppression ligne / entrée persistée : hasFullAccess (Admin/RT) ; brouillons : canCreate.
+ * AGE / SEM: même logique que Livraisons Aliment.
  */
 
-const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+/** Quick-pick S1-S36; S37+ via champ libre (same as Livraisons Aliment). */
+const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
 
 interface EmployerEntry {
@@ -54,15 +55,18 @@ interface EmployerEntry {
 interface MainOeuvreRow {
   id: string;
   date: string;
-  age: string; // Legacy; SEM = semaine, AGE = computed
+  age: string; // Stored sequential age from API when present; display uses displayAgeByRowId
   sem: string;
   entries: EmployerEntry[]; // Multiple employees per date
   observation: string;
 }
 
-/** Get SEM from row (sem or age for backward compat). */
+/** Semaine label: prefer sem; legacy rows may have stored S1/S2… in age only. */
 function getSemFromRow(r: { sem?: string; age?: string }): string {
-  return (r.sem || r.age || "").trim();
+  const sem = (r.sem || "").trim();
+  if (sem) return sem;
+  const legacy = (r.age || "").trim();
+  return /^S\d+$/i.test(legacy) ? legacy : "";
 }
 
 function addOneDay(isoDate: string): string {
@@ -127,7 +131,7 @@ export default function MainOeuvre() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId, isAdministrateur, isResponsableTechnique, isBackofficeEmployer } = useAuth();
+  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName, isAdministrateur, isResponsableTechnique, isBackofficeEmployer } = useAuth();
   const showMontantColumn = isAdministrateur || isResponsableTechnique || isBackofficeEmployer;
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
@@ -143,7 +147,7 @@ export default function MainOeuvre() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
-  const [saving, setSaving] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [addingToRowId, setAddingToRowId] = useState<string | null>(null);
   const [addingEmployerId, setAddingEmployerId] = useState<number | null>(null);
@@ -161,6 +165,19 @@ export default function MainOeuvre() {
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
+
+  const lastExportFarmIdRef = React.useRef<number | null>(null);
+  useEffect(() => {
+    if (!canAccessAllFarms || !pageFarmId || showFarmSelector) return;
+    const hasSelectedFarm = farms.some((f) => f.id === pageFarmId);
+    if (hasSelectedFarm) return;
+    if (lastExportFarmIdRef.current === pageFarmId) return;
+    lastExportFarmIdRef.current = pageFarmId;
+    api.farms
+      .list()
+      .then((list) => setFarms(list))
+      .catch(() => { });
+  }, [canAccessAllFarms, pageFarmId, showFarmSelector, farms]);
 
   useEffect(() => {
     if (showFarmSelector || !pageFarmId) return;
@@ -209,11 +226,11 @@ export default function MainOeuvre() {
     [selectedFarmId, lotFilter, setSearchParams]
   );
 
-  const emptyRow = (age?: string, overrideDate?: string): MainOeuvreRow => ({
+  const emptyRow = (sem?: string, overrideDate?: string): MainOeuvreRow => ({
     id: crypto.randomUUID(),
     date: overrideDate ?? today,
-    age: age ?? "",
-    sem: age ?? "",
+    age: "", // AGE computed on display / save (like Livraisons Aliment)
+    sem: sem ?? "",
     entries: [],
     observation: "",
   });
@@ -258,6 +275,9 @@ export default function MainOeuvre() {
       const mapped: MainOeuvreRow[] = Array.from(byKey.entries()).map(([key, recs]) => {
         const [datePart, semPart] = key.split("|");
         const first = recs[0]!;
+        const semRaw = (first.sem ?? "").trim();
+        const ageRaw = first.age != null ? String(first.age).trim() : "";
+        const legacySemInAge = !semRaw && /^S\d+$/i.test(ageRaw);
         const entries: EmployerEntry[] = recs.map((r) => ({
           id: crypto.randomUUID(),
           serverId: r.id,
@@ -269,12 +289,13 @@ export default function MainOeuvre() {
         return {
           id: crypto.randomUUID(),
           date: datePart,
-          age: first.age ?? semPart,
-          sem: semPart,
+          age: legacySemInAge ? "" : ageRaw,
+          sem: semRaw || (legacySemInAge ? ageRaw : semPart),
           entries,
           observation: first.observation ?? "",
         };
       });
+      // Keep server dates as-is so AGE order matches persisted data after refresh (Livraisons Aliment workflow).
       setRows(mapped);
     } catch {
       /* API error — logged in backend only */
@@ -332,6 +353,7 @@ export default function MainOeuvre() {
 
   useEffect(() => {
     if (!hasSemaineInUrl || !selectedSemaine) return;
+    if (isReadOnly) return;
     const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
@@ -351,7 +373,7 @@ export default function MainOeuvre() {
       nextDate = addOneDay(nextDate);
     }
     setRows((prev) => [...prev, ...newRows]);
-  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine, isReadOnly]);
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
@@ -369,7 +391,7 @@ export default function MainOeuvre() {
     const row = rows.find((r) => r.id === id);
     if (!row) return;
     const savedEntryIds = row.entries.filter((e) => e.serverId != null).map((e) => e.serverId!);
-    if (savedEntryIds.length > 0 && !canDelete) return;
+    if (savedEntryIds.length > 0 && !hasFullAccess) return;
     if (savedEntryIds.length > 0) {
       Promise.all(savedEntryIds.map((sid) => api.mainOeuvre.delete(sid)))
         .then(() => loadMovements())
@@ -408,7 +430,7 @@ export default function MainOeuvre() {
   const removeEntry = (rowId: string, entryId: string) => {
     const row = rows.find((r) => r.id === rowId);
     const entry = row?.entries.find((e) => e.id === entryId);
-    if (entry?.serverId != null && !canDelete) return;
+    if (entry?.serverId != null && !hasFullAccess) return;
     if (entry?.serverId != null) {
       api.mainOeuvre
         .delete(entry.serverId)
@@ -425,10 +447,35 @@ export default function MainOeuvre() {
     );
   };
 
+  /** Computed AGE for save logic and draft rows; ordering uses sem + date (+ DB age ties). */
   const ageByRowId = React.useMemo(
-    () => computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date),
+    () =>
+      computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date, (r) => {
+        const n = parseInt(String(r.age).trim(), 10);
+        return Number.isNaN(n) ? undefined : n;
+      }),
     [rows]
   );
+
+  /**
+   * Display AGE: use persisted age when the row has saved entries (matches DB after refresh).
+   * Unsaved / padded lines use the computed sequential age.
+   */
+  const displayAgeByRowId = React.useMemo(() => {
+    const m = new Map<string, number | string>();
+    if (loading) return m;
+    for (const r of rows) {
+      if (r.entries.some((e) => e.serverId != null)) {
+        const db = parseInt(String(r.age).trim(), 10);
+        if (!Number.isNaN(db)) {
+          m.set(r.id, db);
+          continue;
+        }
+      }
+      m.set(r.id, ageByRowId.get(r.id) ?? "—");
+    }
+    return m;
+  }, [rows, ageByRowId, loading]);
 
   const entryToRequest = (
     r: MainOeuvreRow,
@@ -439,12 +486,18 @@ export default function MainOeuvre() {
     const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
     const jours = entryJours(e.fullDay);
     const montant = Math.round(salaire * jours * 100) / 100;
+    const age =
+      computedAge != null
+        ? String(computedAge)
+        : r.age.trim() !== ""
+          ? r.age.trim()
+          : undefined;
     return {
       farmId: pageFarmId ?? undefined,
       lot: lotFilter.trim() || null,
       date: r.date || today,
-      age: computedAge != null ? String(computedAge) : undefined,
-      sem: getSemFromRow(r) || undefined,
+      age,
+      sem: (getSemFromRow(r) || selectedSemaine || "").trim() || undefined,
       employerId: e.employerId,
       fullDay: e.fullDay,
       montant,
@@ -452,15 +505,7 @@ export default function MainOeuvre() {
     };
   };
 
-  const handleSave = async () => {
-    if (!canCreate) {
-      toast({
-        title: "Non autorisé",
-        description: "Vous ne pouvez pas enregistrer les données.",
-        variant: "destructive",
-      });
-      return;
-    }
+  const saveRow = async (row: MainOeuvreRow) => {
     if (!lotFilter.trim() || !selectedSemaine) {
       toast({
         title: "Lot et semaine requis",
@@ -469,47 +514,86 @@ export default function MainOeuvre() {
       });
       return;
     }
-    const forSem = (r: MainOeuvreRow) => getSemFromRow(r) === selectedSemaine;
-    const rowsForSem = rows.filter(forSem).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const firstWithUnsaved = rowsForSem.find((r) =>
-      r.entries.some((e) => e.serverId == null)
-    );
-    const unsavedEntries = firstWithUnsaved?.entries.filter((e) => e.serverId == null) ?? [];
-
-    if (!firstWithUnsaved || firstWithUnsaved.date.trim() === "" || unsavedEntries.length === 0) {
+    if (!row.date?.trim()) {
       toast({
-        title: "Aucune donnée à enregistrer",
-        description: "Ajoutez au moins un employé (employé + temps + Confirmer) pour le jour à enregistrer.",
+        title: "Date requise",
+        description: "Renseignez la date pour cette ligne.",
         variant: "destructive",
       });
       return;
     }
 
-    setSaving(true);
-    try {
-      const computedAge = ageByRowId.get(firstWithUnsaved.id);
-      const requests = unsavedEntries.map((e) =>
-        entryToRequest(firstWithUnsaved, e, computedAge)
-      );
-      await api.mainOeuvre.createBatch(requests, pageFarmId ?? undefined);
-      toast({
-        title: "Jour enregistré",
-        description: `Le ${firstWithUnsaved.date} a été enregistré avec ${unsavedEntries.length} employé(s).`,
-      });
-      loadMovements();
-    } catch {
-      /* API error — logged in backend only */
-    } finally {
-      setSaving(false);
+    const unsavedEntries = row.entries.filter((e) => e.serverId == null);
+    const allPersisted =
+      row.entries.length > 0 && row.entries.every((e) => e.serverId != null);
+
+    if (unsavedEntries.length > 0) {
+      if (!canCreate) {
+        toast({
+          title: "Non autorisé",
+          description: "Vous ne pouvez pas enregistrer de nouvelles données.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const computedAge = ageByRowId.get(row.id);
+      const requests = unsavedEntries.map((e) => entryToRequest(row, e, computedAge));
+      setSavingRowId(row.id);
+      try {
+        await api.mainOeuvre.createBatch(requests, pageFarmId ?? undefined);
+        toast({
+          title: "Jour enregistré",
+          description: `Le ${row.date} a été enregistré avec ${unsavedEntries.length} employé(s).`,
+        });
+        loadMovements();
+      } catch {
+        /* API error — logged in backend only */
+      } finally {
+        setSavingRowId(null);
+      }
+      return;
     }
+
+    if (allPersisted && canUpdate) {
+      const computedAge = ageByRowId.get(row.id);
+      setSavingRowId(row.id);
+      try {
+        await Promise.all(
+          row.entries.map((e) =>
+            api.mainOeuvre.update(e.serverId!, entryToRequest(row, e, computedAge)),
+          ),
+        );
+        toast({
+          title: "Ligne mise à jour",
+          description: `Les données du ${row.date} ont été enregistrées.`,
+        });
+        loadMovements();
+      } catch {
+        /* API error — logged in backend only */
+      } finally {
+        setSavingRowId(null);
+      }
+      return;
+    }
+
+    toast({
+      title: "Rien à enregistrer",
+      description:
+        "Ajoutez un employé (Confirmer) pour créer, ou vous n'avez pas la permission de modifier cette ligne.",
+      variant: "destructive",
+    });
   };
 
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
+        const ageA = displayAgeByRowId.get(a.id);
+        const ageB = displayAgeByRowId.get(b.id);
+        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+        if (numA !== numB) return numA - numB;
+        return (a.date || "").localeCompare(b.date || "");
+      })
     : [];
-  const firstEditableRowIndex = currentRows.findIndex((r) =>
-    r.entries.length === 0 || r.entries.some((e) => e.serverId == null)
-  );
   const weekTotalJours = currentRows.reduce((sum, r) => sum + rowTotalJours(r.entries), 0);
   const rowMontant = (r: MainOeuvreRow) =>
     r.entries.reduce((sum, e) => {
@@ -540,13 +624,13 @@ export default function MainOeuvre() {
     );
   })();
 
-  const colCount = showMontantColumn ? 8 : 7; // AGE, date, semaine, employé, temps, [montant], observation, actions
+  const colCount = showMontantColumn ? 9 : 8; // AGE, date, semaine, employé, temps, [montant], observation, ✓, actions
 
   const canShowExport = pageFarmId != null && hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && !showFarmSelector;
   const exportFarmName =
     canAccessAllFarms && isValidFarmId
       ? (farms.find((f) => f.id === pageFarmId)?.name ?? "Ferme")
-      : (getStoredSelectedFarm()?.name ?? "Ferme");
+      : (selectedFarmName ?? "Ferme");
 
   const handleExportExcel = async () => {
     if (!canShowExport) return;
@@ -568,7 +652,7 @@ export default function MainOeuvre() {
           observation: r.observation,
         })),
         employers,
-        ageByRowId,
+        ageByRowId: displayAgeByRowId,
         weekTotalJours,
         cumulJours,
         weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontant(r), 0),
@@ -600,7 +684,7 @@ export default function MainOeuvre() {
         observation: r.observation,
       })),
       employers,
-      ageByRowId,
+      ageByRowId: displayAgeByRowId,
       weekTotalJours,
       cumulJours,
       weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontant(r), 0),
@@ -792,7 +876,7 @@ export default function MainOeuvre() {
                 type="text"
                 value={newSemaineInput}
                 onChange={(e) => setNewSemaineInput(e.target.value)}
-                placeholder="ex. S25, S26..."
+                placeholder="ex. S37, S38..."
                 className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
               />
               <button
@@ -850,30 +934,20 @@ export default function MainOeuvre() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
                   <h2 className="text-lg font-display font-bold text-foreground">Main d&apos;œuvre</h2>
-                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                  {!isReadOnly && canCreate && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Cliquez « Ajouter » pour choisir un employé et son temps de travail, puis « Confirmer ». Vous pouvez ajouter plusieurs employés par jour. Le montant est la somme de tous les employés. Cliquez « Enregistrer » quand vous avez terminé.
+                      Chaque ligne = un jour. Ajoutez un ou plusieurs employés (Confirmer), puis enregistrez la ligne avec ✓. Les lignes déjà enregistrées peuvent être modifiées par les profils autorisés (✓ pour mettre à jour).
                     </p>
                   )}
                 </div>
-                {(canCreate || canUpdate) && (
+                {canCreate && (
                   <div className="flex gap-2">
-                    {canCreate && (
-                      <button
-                        type="button"
-                        onClick={addRow}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                      >
-                        <Plus className="w-4 h-4" /> Ligne
-                      </button>
-                    )}
                     <button
                       type="button"
-                      onClick={handleSave}
-                      disabled={saving || loading || !currentRows.some((r) => r.entries.some((e) => e.serverId == null))}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                      onClick={addRow}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                     >
-                      <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
+                      <Plus className="w-4 h-4" /> Ligne
                     </button>
                   </div>
                 )}
@@ -883,13 +957,21 @@ export default function MainOeuvre() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[100px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
+                      <th
+                        className="w-12 min-w-12 max-w-12 shrink-0 px-1 text-center"
+                        title="Âge séquentiel (1, 2, 3…) sur tout le lot"
+                      >
+                        AGE
+                      </th>
                       <th className="min-w-[120px]">Date</th>
-                      <th className="min-w-[70px]">Semaine</th>
+                      <th className="min-w-[70px]" title="Semaine (S1, S2…)">Semaine</th>
                       <th className="min-w-[320px]">Employé (nom complet)</th>
                       <th className="min-w-[140px]">Temps de travail</th>
                       {showMontantColumn && <th className="min-w-[100px]">Montant</th>}
                       <th className="min-w-[180px]">Observation</th>
+                      <th className="w-10" title="Enregistrer cette ligne">
+                        ✓
+                      </th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
@@ -902,18 +984,27 @@ export default function MainOeuvre() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row, rowIndex) => {
-                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
+                        {currentRows.map((row) => {
                           const hasSavedEntries = row.entries.some((e) => e.serverId != null);
-                          const rowReadOnly = isReadOnly || (hasSavedEntries && !row.entries.some((e) => e.serverId == null)) || !isFirstEditable;
-                          const canEditThisRow = isFirstEditable && !isReadOnly;
-                          const showDelete = hasSavedEntries ? canDelete : canCreate;
+                          const allPersisted =
+                            row.entries.length > 0 && row.entries.every((e) => e.serverId != null);
+                          const hasDraft = row.entries.some((e) => e.serverId == null);
+                          const rowReadOnly =
+                            isReadOnly ||
+                            (row.entries.length === 0 && !canCreate) ||
+                            (hasDraft && !canCreate) ||
+                            (allPersisted && !canUpdate);
+                          const canEditThisRow = !rowReadOnly;
+                          const showDelete = hasSavedEntries ? hasFullAccess : canCreate;
+                          const canSaveThisRow =
+                            (hasDraft && canCreate) || (allPersisted && canUpdate && row.entries.length > 0);
+                          const isSavingRow = savingRowId === row.id;
                           const isAdding = addingToRowId === row.id;
                           const montantRow = rowMontant(row);
                           return (
                             <tr key={row.id}>
-                              <td className="text-sm tabular-nums">
-                                {ageByRowId.get(row.id) ?? "—"}
+                              <td className="w-12 min-w-12 max-w-12 shrink-0 px-1 text-center text-sm tabular-nums">
+                                {displayAgeByRowId.get(row.id) ?? "—"}
                               </td>
                               <td>
                                 <input
@@ -925,7 +1016,7 @@ export default function MainOeuvre() {
                                 />
                               </td>
                               <td className="text-sm">
-                                {getSemFromRow(row) || "—"}
+                                {getSemFromRow(row) || selectedSemaine || "—"}
                               </td>
                               <td>
                                 <div className="flex flex-nowrap items-center gap-2 overflow-x-auto min-w-0">
@@ -1040,6 +1131,23 @@ export default function MainOeuvre() {
                                   />
                                 )}
                               </td>
+                              <td className="text-center">
+                                {canSaveThisRow && (
+                                  <button
+                                    type="button"
+                                    onClick={() => saveRow(row)}
+                                    disabled={loading || isSavingRow}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-primary hover:bg-primary/10 disabled:opacity-50"
+                                    title="Enregistrer cette ligne"
+                                  >
+                                    {isSavingRow ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Check className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                )}
+                              </td>
                               <td>
                                 {showDelete && (
                                   <button
@@ -1068,25 +1176,25 @@ export default function MainOeuvre() {
                               <td colSpan={3} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine} (jours)
                               </td>
-                              <td>—</td>
+                              <td />
                               <td className="font-semibold text-sm">{weekTotalJours}</td>
                               {showMontantColumn && (
                                 <td className="font-semibold text-sm tabular-nums">
                                   {currentRows.reduce((sum, r) => sum + rowMontant(r), 0).toFixed(2)}
                                 </td>
                               )}
-                              <td colSpan={2}></td>
+                              <td colSpan={3}></td>
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={3} className="text-sm font-medium text-muted-foreground">
                                 CUMUL (jours)
                               </td>
-                              <td>—</td>
+                              <td />
                               <td className="font-semibold text-sm">{cumulJours}</td>
                               {showMontantColumn && (
                                 <td className="font-semibold text-sm tabular-nums">{cumulMontant.toFixed(2)}</td>
                               )}
-                              <td colSpan={2}></td>
+                              <td colSpan={3}></td>
                             </tr>
                           </>
                         )}

@@ -36,17 +36,19 @@ import { exportToExcel, exportToPdf } from "@/lib/livraisonGazExport";
  * Vide sanitaire row at top (per lot). Same permission matrix: canCreate/canUpdate/canDelete.
  * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
  * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → Enregistrer → locked; then day 2 → Enregistrer → locked. Only the first unsaved row is editable.
- * Columns: Date, age (semaine), designation, fournisseur, qte, prix, montant, N°BL, N°BR, male, femelle.
+ * AGE / SEM: same workflow as Livraisons Aliment (computeAgeByRowId, displayAgeByRowId, persist numeric age; SEM = S1, S2…).
+ * Columns: AGE, DATE, SEM, …
  */
 
-const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+/** Quick-pick S1-S36; S37+ via champ libre (same as Livraisons Aliment). */
+const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
 
 interface GazRow {
   id: string;
   serverId?: number;
   date: string;
-  age: string; // Legacy; SEM = semaine, AGE = computed
+  age: string; // Stored sequential age from API when present; display uses displayAgeByRowId
   sem: string;
   designation: string;
   supplier: string;
@@ -84,9 +86,12 @@ function addOneDay(isoDate: string): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Get SEM from row (sem or age for backward compat). */
+/** Semaine label: prefer sem; legacy rows may have stored S1/S2… in age only. */
 function getSemFromRow(r: { sem?: string; age?: string }): string {
-  return (r.sem || r.age || "").trim();
+  const sem = (r.sem || "").trim();
+  if (sem) return sem;
+  const legacy = (r.age || "").trim();
+  return /^S\d+$/i.test(legacy) ? legacy : "";
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order). */
@@ -192,7 +197,7 @@ export default function LivraisonGaz() {
   const emptyRow = (sem?: string, overrideDate?: string): GazRow => ({
     id: crypto.randomUUID(),
     date: overrideDate ?? today,
-    age: "",
+    age: "", // AGE computed on display / save (like Livraisons Aliment)
     sem: sem ?? "",
     designation: "",
     supplier: "",
@@ -233,22 +238,28 @@ export default function LivraisonGaz() {
         farmId: pageFarmId ?? undefined,
         lot: lotFilter.trim() || undefined,
       });
-      const mapped: GazRow[] = list.map((r: LivraisonGazResponse) => ({
-        id: crypto.randomUUID(),
-        serverId: r.id,
-        date: r.date ?? "",
-        age: r.age ?? "",
-        sem: r.sem ?? r.age ?? "",
-        designation: r.designation ?? "",
-        supplier: r.supplier ?? "",
-        deliveryNoteNumber: r.deliveryNoteNumber ?? "",
-        qte: fromNum(r.qte),
-        prixPerUnit: fromNum(r.prixPerUnit),
-        montant: fromNum(r.montant),
-        numeroBR: r.numeroBR ?? "",
-        male: fromNum(r.male),
-        femelle: fromNum(r.femelle),
-      }));
+      const mapped: GazRow[] = list.map((r: LivraisonGazResponse) => {
+        const semRaw = (r.sem ?? "").trim();
+        const ageRaw = r.age != null ? String(r.age).trim() : "";
+        const legacySemInAge = !semRaw && /^S\d+$/i.test(ageRaw);
+        return {
+          id: crypto.randomUUID(),
+          serverId: r.id,
+          date: r.date ?? "",
+          age: legacySemInAge ? "" : ageRaw,
+          sem: semRaw || (legacySemInAge ? ageRaw : ""),
+          designation: r.designation ?? "",
+          supplier: r.supplier ?? "",
+          deliveryNoteNumber: r.deliveryNoteNumber ?? "",
+          qte: fromNum(r.qte),
+          prixPerUnit: fromNum(r.prixPerUnit),
+          montant: fromNum(r.montant),
+          numeroBR: r.numeroBR ?? "",
+          male: fromNum(r.male),
+          femelle: fromNum(r.femelle),
+        };
+      });
+      // Keep server dates as-is so AGE order matches persisted data after refresh (Livraisons Aliment workflow).
       setRows(mapped);
       const vsRes = await api.videSanitaireGaz
         .get({ farmId: pageFarmId ?? undefined, lot: lotFilter.trim() || undefined }, undefined)
@@ -292,7 +303,7 @@ export default function LivraisonGaz() {
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, toast, isSelectedLotClosed]);
+  }, [showFarmSelector, pageFarmId, lotFilter, isSelectedLotClosed]);
 
   useEffect(() => {
     loadMovements();
@@ -342,6 +353,7 @@ export default function LivraisonGaz() {
 
   useEffect(() => {
     if (!hasSemaineInUrl || !selectedSemaine) return;
+    if (isReadOnly) return;
     const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
@@ -361,7 +373,7 @@ export default function LivraisonGaz() {
       nextDate = addOneDay(nextDate);
     }
     setRows((prev) => [...prev, ...newRows]);
-  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine, isReadOnly]);
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
@@ -419,10 +431,35 @@ export default function LivraisonGaz() {
     });
   };
 
+  /** Computed AGE for save logic and draft rows; ordering uses sem + date (+ DB age ties). */
   const ageByRowId = React.useMemo(
-    () => computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date),
+    () =>
+      computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date, (r) => {
+        const n = parseInt(String(r.age).trim(), 10);
+        return Number.isNaN(n) ? undefined : n;
+      }),
     [rows]
   );
+
+  /**
+   * Display AGE: use persisted age when the row is saved (matches DB after refresh).
+   * Unsaved / padded lines use the computed sequential age.
+   */
+  const displayAgeByRowId = React.useMemo(() => {
+    const m = new Map<string, number | string>();
+    if (loading) return m;
+    for (const r of rows) {
+      if (r.serverId != null) {
+        const db = parseInt(String(r.age).trim(), 10);
+        if (!Number.isNaN(db)) {
+          m.set(r.id, db);
+          continue;
+        }
+      }
+      m.set(r.id, ageByRowId.get(r.id) ?? "—");
+    }
+    return m;
+  }, [rows, ageByRowId, loading]);
 
   const rowToRequest = (r: GazRow, computedAge?: number): LivraisonGazRequest => {
     const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
@@ -430,8 +467,13 @@ export default function LivraisonGaz() {
     const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte != null && prix >= 0 ? qte * prix : null);
     const male = r.male.trim() !== "" ? toNum(r.male) : null;
     const femelle = r.femelle.trim() !== "" ? toNum(r.femelle) : null;
-    const sem = (r.sem || "").trim() || selectedSemaine || null;
-    const age = computedAge != null ? String(computedAge) : (r.age.trim() || null);
+    const sem = getSemFromRow(r) || selectedSemaine || null;
+    const age =
+      computedAge != null
+        ? String(computedAge)
+        : r.age.trim() !== ""
+          ? r.age.trim()
+          : null;
     return {
       farmId: pageFarmId ?? undefined,
       lot: lotFilter.trim() || null,
@@ -550,7 +592,14 @@ export default function LivraisonGaz() {
   };
 
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
+        const ageA = displayAgeByRowId.get(a.id);
+        const ageB = displayAgeByRowId.get(b.id);
+        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+        if (numA !== numB) return numA - numB;
+        return (a.date || "").localeCompare(b.date || "");
+      })
     : [];
   const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
   const videSanitaireReadOnly = isReadOnly || (hasExistingVideSanitaire && !canUpdate);
@@ -611,7 +660,7 @@ export default function LivraisonGaz() {
         rows: currentRows,
         weekTotal,
         cumul: cumulForSelectedSemaine,
-        ageByRowId,
+        ageByRowId: displayAgeByRowId,
         videSanitaire,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
@@ -629,7 +678,7 @@ export default function LivraisonGaz() {
       rows: currentRows,
       weekTotal,
       cumul: cumulForSelectedSemaine,
-      ageByRowId,
+      ageByRowId: displayAgeByRowId,
       videSanitaire,
     });
     toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
@@ -810,7 +859,7 @@ export default function LivraisonGaz() {
                 type="text"
                 value={newSemaineInput}
                 onChange={(e) => setNewSemaineInput(e.target.value)}
-                placeholder="ex. S25, S26..."
+                placeholder="ex. S37, S38..."
                 className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
               />
               <button
@@ -901,7 +950,7 @@ export default function LivraisonGaz() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
+                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…) sur tout le lot">AGE</th>
                       <th className="min-w-[100px]">Date</th>
                       <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
                       <th className="min-w-[180px]">designation</th>
@@ -1015,7 +1064,7 @@ export default function LivraisonGaz() {
                           return (
                             <tr key={row.id}>
                               <td className="text-sm font-medium text-muted-foreground">
-                                {ageByRowId.get(row.id) ?? "—"}
+                                {displayAgeByRowId.get(row.id) ?? "—"}
                               </td>
                               <td>
                                 <input
@@ -1026,7 +1075,7 @@ export default function LivraisonGaz() {
                                 />
                               </td>
                               <td className="text-sm font-medium text-muted-foreground">
-                                {(row.sem || "").trim() || selectedSemaine || "—"}
+                                {getSemFromRow(row) || selectedSemaine || "—"}
                               </td>
                               <td>
                                 <input

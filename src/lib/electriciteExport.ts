@@ -16,16 +16,12 @@ export interface ElectriciteRowExport {
   prixPerUnit: string;
   montant: string;
   numeroBR: string;
-  male: string;
-  femelle: string;
 }
 
 export interface ElectriciteExportTotals {
   qte: number;
   prix: number;
   montant: number;
-  male: number;
-  femelle: number;
 }
 
 export interface ElectriciteExportParams {
@@ -38,7 +34,7 @@ export interface ElectriciteExportParams {
   ageByRowId: Map<string, string | number>;
 }
 
-const COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "QTE", "PRIX", "MONTANT", "N° BR", "MALE", "FEMELLE"];
+const COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "QTE", "PRIX", "MONTANT", "N° BR"];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
@@ -55,8 +51,6 @@ function rowToArray(row: ElectriciteRowExport, age: string | number): (string | 
     safeStr(row.prixPerUnit) || "—",
     safeStr(row.montant) || "—",
     safeStr(row.numeroBR) || "—",
-    safeStr(row.male) || "—",
-    safeStr(row.femelle) || "—",
   ];
 }
 
@@ -70,8 +64,8 @@ function toConfig(params: ElectriciteExportParams): ITableExportConfig {
     semaine,
     rows,
     rowToArray,
-    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant, "", weekTotal.male, weekTotal.femelle],
-    cumulRow: ["CUMUL", "", "", "", "", cumul.qte, cumul.prix, cumul.montant, "", cumul.male, cumul.femelle],
+    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant, ""],
+    cumulRow: ["CUMUL", "", "", "", "", cumul.qte, cumul.prix, cumul.montant, ""],
     ageByRowId,
     fileNamePrefix: "Livraisons_Electricite",
     numberFormatColumns: [5, 6, 7],

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Plus, Save, Calendar, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Plus, Check, Calendar, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -26,24 +26,25 @@ import {
   type LotWithStatusResponse,
 } from "@/lib/api";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
-import { getStoredSelectedFarm } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/produitsVeterinairesExport";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS PRODUITS VETERINAIRES
  * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
  * Each semaine has its own table; TOTAL = current semaine, CUMUL = semaines up to current.
- * Permission matrix: canCreate for add/save, canUpdate for saved rows, canDelete for delete.
- * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
- * Only filled lines (at least date) are created on Save, so they can save line 1 → locked; then fill and save line 2 → both locked; etc.
- * Columns: DATE, sem (AGE), DESIGNATION, FOURNISSEUR, UG, QTE, PRIX, MONTANT, N° BR.
+ * Permission matrix: canCreate for add/save; canUpdate for saved rows (Admin/RT only).
+ * Persisted-row delete (trash): Admin/RT only (hasFullAccess). RF may remove unsaved padded rows only.
+ * PER-ROW FLOW: All rows are editable (per permissions). Fill any row and click ✓ to save that row. Create uses POST; update uses PUT.
+ * AGE / SEM: same workflow as Livraisons Aliment — SEM = S1, S2…; AGE = sequential (computeAgeByRowId + persist); display uses DB age when saved.
+ * Columns: AGE, DATE, SEM, …
  */
 
 interface VetRow {
   id: string;
   serverId?: number;
   date: string;
-  age: string; // Legacy; SEM = semaine, AGE = computed
+  age: string; // Stored sequential age from API when present; display uses displayAgeByRowId
   sem: string;
   designation: string;
   supplier: string;
@@ -55,8 +56,28 @@ interface VetRow {
 }
 
 function toNum(s: string): number {
-  const n = parseFloat(String(s).replace(",", "."));
+  const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
   return Number.isNaN(n) ? 0 : n;
+}
+
+function formatQtyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+function formatMoneyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+/** MONTANT column: stored value or qte × prix when empty (same as Livraisons Aliment). */
+function formatMontantCell(row: VetRow): string {
+  const m = toOptionalNumber(row.montant);
+  if (m != null) return formatGroupedNumber(m, 2);
+  const q = toOptionalNumber(row.qte);
+  const p = toOptionalNumber(row.prixPerUnit);
+  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  return "—";
 }
 
 function fromNum(n: number | null | undefined): string {
@@ -70,9 +91,12 @@ function addOneDay(isoDate: string): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Get SEM from row (sem or age for backward compat). */
+/** Semaine label: prefer sem; legacy rows may have stored S1/S2… in age only. */
 function getSemFromRow(r: { sem?: string; age?: string }): string {
-  return (r.sem || r.age || "").trim();
+  const sem = (r.sem || "").trim();
+  if (sem) return sem;
+  const legacy = (r.age || "").trim();
+  return /^S\d+$/i.test(legacy) ? legacy : "";
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order). */
@@ -87,30 +111,8 @@ function sortLots(lotList: string[]): string[] {
   });
 }
 
-/** Ensure within each semaine, row dates are consecutive (day +1). Uses min date per group as start. */
-function normalizeRowsConsecutiveDates<T extends { id: string; date: string; sem?: string; age?: string }>(
-  rows: T[],
-  getSemaine: (r: { sem?: string; age?: string }) => string
-): T[] {
-  const bySem = new Map<string, T[]>();
-  for (const r of rows) {
-    const sem = (getSemaine(r) || "").trim();
-    if (!bySem.has(sem)) bySem.set(sem, []);
-    bySem.get(sem)!.push(r);
-  }
-  const dateById = new Map<string, string>();
-  for (const [, group] of bySem) {
-    const sorted = [...group].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    let d = sorted[0]?.date?.trim() || "";
-    for (let i = 0; i < sorted.length; i++) {
-      dateById.set(sorted[i].id, d);
-      d = addOneDay(d);
-    }
-  }
-  return rows.map((r) => ({ ...r, date: dateById.get(r.id) ?? r.date }));
-}
-
-const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+/** Quick-pick S1-S36; S37+ via champ libre (same as Livraisons Aliment). */
+const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
 
 export default function ProduitsVeterinaires() {
@@ -125,7 +127,7 @@ export default function ProduitsVeterinaires() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId } = useAuth();
+  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -138,7 +140,9 @@ export default function ProduitsVeterinaires() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const isSelectedLotClosed = Boolean(lotFilter.trim() && lotsWithStatus.find((l) => l.lot === lotFilter.trim())?.closed);
-  const [saving, setSaving] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  /** While focused, QTE shows raw editable string; blurred shows grouped + .00 (Livraisons Aliment). */
+  const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
@@ -153,6 +157,19 @@ export default function ProduitsVeterinaires() {
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
+
+  const lastExportFarmIdRef = React.useRef<number | null>(null);
+  useEffect(() => {
+    if (!canAccessAllFarms || !pageFarmId || showFarmSelector) return;
+    const hasSelectedFarm = farms.some((f) => f.id === pageFarmId);
+    if (hasSelectedFarm) return;
+    if (lastExportFarmIdRef.current === pageFarmId) return;
+    lastExportFarmIdRef.current = pageFarmId;
+    api.farms
+      .list()
+      .then((list) => setFarms(list))
+      .catch(() => { });
+  }, [canAccessAllFarms, pageFarmId, showFarmSelector, farms]);
 
   useEffect(() => {
     if (showFarmSelector || !pageFarmId) return;
@@ -194,7 +211,7 @@ export default function ProduitsVeterinaires() {
   const emptyRow = (sem?: string, overrideDate?: string): VetRow => ({
     id: crypto.randomUUID(),
     date: overrideDate ?? today,
-    age: "",
+    age: "", // AGE computed on display / save (like Livraisons Aliment)
     sem: sem ?? "",
     designation: "",
     supplier: "",
@@ -233,28 +250,39 @@ export default function ProduitsVeterinaires() {
         farmId: pageFarmId ?? undefined,
         lot: lotFilter.trim() || undefined,
       });
-      const mapped: VetRow[] = list.map((r: LivraisonProduitVeterinaireResponse) => ({
-        id: crypto.randomUUID(),
-        serverId: r.id,
-        date: r.date ?? "",
-        age: r.age ?? "",
-        sem: r.sem ?? r.age ?? "",
-        designation: r.designation ?? "",
-        supplier: r.supplier ?? "",
-        ug: r.ug ?? "",
-        qte: fromNum(r.qte),
-        prixPerUnit: fromNum(r.prixPerUnit),
-        montant: fromNum(r.montant),
-        deliveryNoteNumber: r.deliveryNoteNumber ?? "",
-      }));
-      setRows(normalizeRowsConsecutiveDates(mapped, getSemFromRow));
+      const mapped: VetRow[] = list.map((r: LivraisonProduitVeterinaireResponse) => {
+        const semRaw = (r.sem ?? "").trim();
+        const ageRaw = r.age != null ? String(r.age).trim() : "";
+        const legacySemInAge = !semRaw && /^S\d+$/i.test(ageRaw);
+        return {
+          id: crypto.randomUUID(),
+          serverId: r.id,
+          date: r.date ?? "",
+          age: legacySemInAge ? "" : ageRaw,
+          sem: semRaw || (legacySemInAge ? ageRaw : ""),
+          designation: r.designation ?? "",
+          supplier: r.supplier ?? "",
+          ug: r.ug ?? "",
+          qte: (() => {
+            const s = fromNum(r.qte);
+            if (!String(s).trim()) return "";
+            const n = toOptionalNumber(s);
+            return n != null ? n.toFixed(2) : "";
+          })(),
+          prixPerUnit: fromNum(r.prixPerUnit),
+          montant: fromNum(r.montant),
+          deliveryNoteNumber: r.deliveryNoteNumber ?? "",
+        };
+      });
+      // Keep server dates as-is so AGE order matches persisted data after refresh (Livraisons Aliment workflow).
+      setRows(mapped);
     } catch {
       /* API error — logged in backend only */
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, toast, isSelectedLotClosed]);
+  }, [showFarmSelector, pageFarmId, lotFilter, isSelectedLotClosed]);
 
   useEffect(() => {
     loadMovements();
@@ -304,6 +332,7 @@ export default function ProduitsVeterinaires() {
 
   useEffect(() => {
     if (!hasSemaineInUrl || !selectedSemaine) return;
+    if (isReadOnly) return;
     const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
@@ -323,7 +352,7 @@ export default function ProduitsVeterinaires() {
       nextDate = addOneDay(nextDate);
     }
     setRows((prev) => [...prev, ...newRows]);
-  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine, isReadOnly]);
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
@@ -339,7 +368,7 @@ export default function ProduitsVeterinaires() {
     const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !canDelete) return;
+    if (row?.serverId != null && !hasFullAccess) return;
     if (row?.serverId != null) {
       api.livraisonsProduitsVeterinaires
         .delete(row.serverId)
@@ -367,84 +396,47 @@ export default function ProduitsVeterinaires() {
     );
   };
 
+  /** Computed AGE for save logic and draft rows; ordering uses sem + date (+ DB age ties). */
   const ageByRowId = React.useMemo(
-    () => computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date),
+    () =>
+      computeAgeByRowId(rows, (r) => getSemFromRow(r), (r) => r.date, (r) => {
+        const n = parseInt(String(r.age).trim(), 10);
+        return Number.isNaN(n) ? undefined : n;
+      }),
     [rows]
   );
 
-  const rowToRequest = (r: VetRow, computedAge?: number): LivraisonProduitVeterinaireRequest => {
-    const qte = toNum(r.qte);
-    const prix = toNum(r.prixPerUnit);
-    const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte >= 0 && prix >= 0 ? qte * prix : null);
-    const sem = (r.sem || "").trim() || selectedSemaine || null;
-    const age = computedAge != null ? String(computedAge) : (r.age.trim() || null);
-    return {
-      farmId: pageFarmId ?? undefined,
-      lot: lotFilter.trim() || null,
-      date: r.date || today,
-      age,
-      sem,
-      designation: r.designation.trim() || null,
-      supplier: r.supplier.trim() || null,
-      ug: r.ug.trim() || null,
-      deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
-      qte: qte > 0 ? qte : null,
-      prixPerUnit: prix > 0 ? prix : null,
-      montant: montant != null && montant >= 0 ? montant : null,
-    };
-  };
-
-  const handleSave = async () => {
-    if (!canCreate) {
-      toast({
-        title: "Non autorisé",
-        description: "Vous ne pouvez pas enregistrer les données.",
-        variant: "destructive",
-      });
-      return;
+  /**
+   * Display AGE: use persisted age when the row is saved (matches DB after refresh).
+   * Unsaved / padded lines use the computed sequential age.
+   */
+  const displayAgeByRowId = React.useMemo(() => {
+    const m = new Map<string, number | string>();
+    if (loading) return m;
+    for (const r of rows) {
+      if (r.serverId != null) {
+        const db = parseInt(String(r.age).trim(), 10);
+        if (!Number.isNaN(db)) {
+          m.set(r.id, db);
+          continue;
+        }
+      }
+      m.set(r.id, ageByRowId.get(r.id) ?? "—");
     }
-    if (!lotFilter.trim() || !selectedSemaine) {
-      toast({
-        title: "Lot et semaine requis",
-        description: "Indiquez le lot et la semaine avant d'enregistrer.",
-        variant: "destructive",
-      });
-      return;
-    }
-    const forSem = (r: VetRow) => getSemFromRow(r) === selectedSemaine;
-    const unsavedForSem = rows
-      .filter((r) => forSem(r) && r.serverId == null)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const firstUnsaved = unsavedForSem[0];
-
-    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
-      toast({
-        title: "Aucune ligne à enregistrer",
-        description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setSaving(true);
-    try {
-      const computedAge = ageByRowId.get(firstUnsaved.id);
-      await api.livraisonsProduitsVeterinaires.createBatch([rowToRequest(firstUnsaved, computedAge)], pageFarmId ?? undefined);
-      toast({
-        title: "Jour enregistré",
-        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
-      });
-      loadMovements();
-    } catch {
-      /* API error — logged in backend only */
-    } finally {
-      setSaving(false);
-    }
-  };
+    return m;
+  }, [rows, ageByRowId, loading]);
 
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
+        const ageA = displayAgeByRowId.get(a.id);
+        const ageB = displayAgeByRowId.get(b.id);
+        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+        if (numA !== numB) return numA - numB;
+        return (a.date || "").localeCompare(b.date || "");
+      })
     : [];
-  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
+
   const weekTotal = (() => {
     const t = { qte: 0, prix: 0, montant: 0 };
     for (const r of currentRows) {
@@ -454,6 +446,7 @@ export default function ProduitsVeterinaires() {
     }
     return t;
   })();
+
   const cumulForSelectedSemaine = (() => {
     let running = { qte: 0, prix: 0, montant: 0 };
     const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
@@ -471,13 +464,124 @@ export default function ProduitsVeterinaires() {
     return running;
   })();
 
-  const colCount = 10;
+  const rowToRequest = (r: VetRow, computedAge?: number): LivraisonProduitVeterinaireRequest => {
+    const qteParsed = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const prix = toNum(r.prixPerUnit);
+    const montant =
+      r.montant.trim() !== ""
+        ? toNum(r.montant)
+        : qteParsed != null && prix >= 0
+          ? qteParsed * prix
+          : null;
+    const sem = getSemFromRow(r) || selectedSemaine || null;
+    const age =
+      computedAge != null
+        ? String(computedAge)
+        : r.age.trim() !== ""
+          ? r.age.trim()
+          : null;
+    return {
+      farmId: pageFarmId ?? undefined,
+      lot: lotFilter.trim() || null,
+      date: r.date || today,
+      age,
+      sem,
+      designation: r.designation.trim() || null,
+      supplier: r.supplier.trim() || null,
+      ug: r.ug.trim() || null,
+      deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
+      qte: qteParsed ?? null,
+      prixPerUnit: prix > 0 ? prix : null,
+      montant: montant != null && montant >= 0 ? montant : null,
+    };
+  };
+
+  /** Save a single row: create if unsaved, update if already saved. */
+  const saveRow = async (row: VetRow) => {
+    const canSaveNew = row.serverId == null && canCreate;
+    const canSaveExisting = row.serverId != null && canUpdate;
+    if (!canSaveNew && !canSaveExisting) {
+      toast({
+        title: "Non autorisé",
+        description: "Vous ne pouvez pas enregistrer cette ligne.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!lotFilter.trim() || !selectedSemaine) {
+      toast({
+        title: "Lot et semaine requis",
+        description: "Indiquez le lot et la semaine.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!row.date?.trim()) {
+      toast({
+        title: "Date requise",
+        description: "Remplissez la date pour enregistrer la ligne.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const hasContent =
+      (row.designation?.trim() ?? "") !== "" ||
+      (row.supplier?.trim() ?? "") !== "" ||
+      (row.ug?.trim() ?? "") !== "" ||
+      (row.qte?.trim() ?? "") !== "" ||
+      (row.deliveryNoteNumber?.trim() ?? "") !== "";
+    if (!hasContent) {
+      toast({
+        title: "Ligne incomplète",
+        description: "Remplissez au moins un champ (désignation, fournisseur, UG, quantité ou N° BR).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingRowId(row.id);
+    try {
+      const computedAge = ageByRowId.get(row.id) ?? undefined;
+      const req = rowToRequest(row, computedAge);
+      if (row.serverId != null) {
+        await api.livraisonsProduitsVeterinaires.update(row.serverId, req);
+        toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
+      } else {
+        const created = await api.livraisonsProduitsVeterinaires.create(req);
+        toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
+        setRows((prev) =>
+          prev.map((r) =>
+            r.id === row.id
+              ? {
+                  ...r,
+                  serverId: created.id,
+                  age: created.age != null ? String(created.age) : r.age,
+                  sem: created.sem ?? r.sem,
+                }
+              : r
+          )
+        );
+        return;
+      }
+      loadMovements();
+    } catch {
+      toast({
+        title: "Erreur",
+        description: "Impossible d'enregistrer la ligne.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingRowId(null);
+    }
+  };
+
+  const colCount = 12;
 
   const canShowExport = hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && pageFarmId != null;
   const exportFarmName =
     canAccessAllFarms && isValidFarmId
-      ? (farms.find((f) => f.id === pageFarmId)?.name ?? "Ferme")
-      : (getStoredSelectedFarm()?.name ?? "Ferme");
+      ? (farms.find((f) => f.id === selectedFarmId)?.name ?? selectedFarmName ?? "Ferme")
+      : (selectedFarmName ?? "Ferme");
 
   const handleExportExcel = async () => {
     if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
@@ -489,7 +593,7 @@ export default function ProduitsVeterinaires() {
         rows: currentRows,
         weekTotal,
         cumul: cumulForSelectedSemaine,
-        ageByRowId,
+        ageByRowId: displayAgeByRowId,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
     } catch {
@@ -506,7 +610,7 @@ export default function ProduitsVeterinaires() {
       rows: currentRows,
       weekTotal,
       cumul: cumulForSelectedSemaine,
-      ageByRowId,
+      ageByRowId: displayAgeByRowId,
     });
     toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
   };
@@ -686,7 +790,7 @@ export default function ProduitsVeterinaires() {
                 type="text"
                 value={newSemaineInput}
                 onChange={(e) => setNewSemaineInput(e.target.value)}
-                placeholder="ex. S25, S26..."
+                placeholder="ex. S37, S38..."
                 className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
               />
               <button
@@ -746,30 +850,20 @@ export default function ProduitsVeterinaires() {
                   <h2 className="text-lg font-display font-bold text-foreground">
                     Livraisons produits vétérinaires
                   </h2>
-                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                  {!isReadOnly && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                      Remplissez les lignes puis cliquez sur ✓ pour enregistrer chaque ligne.
                     </p>
                   )}
                 </div>
-                {(canCreate || canUpdate) && (
-                  <div className="flex gap-2">
-                    {canCreate && (
-                      <button
-                        type="button"
-                        onClick={addRow}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                      >
-                        <Plus className="w-4 h-4" /> Ligne
-                      </button>
-                    )}
+                {canCreate && (
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={handleSave}
-                      disabled={saving || loading || firstEditableRowIndex < 0}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                      onClick={addRow}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                     >
-                      <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
+                      <Plus className="w-4 h-4" /> Ligne
                     </button>
                   </div>
                 )}
@@ -779,16 +873,17 @@ export default function ProduitsVeterinaires() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
+                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…) sur tout le lot">AGE</th>
                       <th className="min-w-[100px]">DATE</th>
                       <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
-                      <th className="min-w-[180px]">DESIGNATION</th>
+                      <th className="min-w-[180px]">DÉSIGNATION</th>
                       <th className="min-w-[120px]">FOURNISSEUR</th>
                       <th className="min-w-[80px]">UG</th>
-                      <th className="min-w-[70px]">QTE</th>
-                      <th className="min-w-[80px]">PRIX</th>
-                      <th className="min-w-[90px]">MONTANT</th>
+                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
+                      <th className="min-w-[80px] !text-center">PRIX</th>
+                      <th className="min-w-[90px] !text-center">MONTANT</th>
                       <th className="min-w-[90px]">N° BR</th>
+                      <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">✓</th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
@@ -801,14 +896,19 @@ export default function ProduitsVeterinaires() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row, rowIndex) => {
-                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
-                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                        {currentRows.map((row) => {
+                          const rowReadOnly =
+                            isReadOnly ||
+                            (row.serverId == null && !canCreate) ||
+                            (row.serverId != null && !canUpdate);
+                          const canSaveRow =
+                            (row.serverId == null && canCreate) || (row.serverId != null && canUpdate);
+                          const showDelete = row.serverId != null ? hasFullAccess : canCreate;
+                          const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>
                               <td className="text-sm font-medium text-muted-foreground">
-                                {ageByRowId.get(row.id) ?? "—"}
+                                {displayAgeByRowId.get(row.id) ?? "—"}
                               </td>
                               <td>
                                 <input
@@ -820,7 +920,7 @@ export default function ProduitsVeterinaires() {
                                 />
                               </td>
                               <td className="text-sm font-medium text-muted-foreground">
-                                {(row.sem || "").trim() || selectedSemaine || "—"}
+                                {getSemFromRow(row) || selectedSemaine || "—"}
                               </td>
                               <td>
                                 <input
@@ -852,30 +952,63 @@ export default function ProduitsVeterinaires() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.qte}
-                                  onChange={(e) => updateRow(row.id, "qte", e.target.value)}
-                                  placeholder="—"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                  className="bg-transparent border-0 outline-none text-sm w-full"
-                                />
+                              <td className="min-w-[128px] text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.qte)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      qteFocusRowId === row.id
+                                        ? row.qte
+                                        : toOptionalNumber(row.qte) != null
+                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
+                                          : ""
+                                    }
+                                    onFocus={() => setQteFocusRowId(row.id)}
+                                    onBlur={(e) => {
+                                      setQteFocusRowId(null);
+                                      const raw = e.target.value;
+                                      if (raw.trim() === "") {
+                                        updateRow(row.id, "qte", "");
+                                        return;
+                                      }
+                                      const n = toOptionalNumber(raw);
+                                      if (n == null || n < 0) {
+                                        updateRow(row.id, "qte", "");
+                                      } else {
+                                        updateRow(row.id, "qte", n.toFixed(2));
+                                      }
+                                    }}
+                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                    placeholder="—"
+                                    className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.prixPerUnit}
-                                  onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
-                                  placeholder="—"
-                                  step="0.01"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                  className="bg-transparent border-0 outline-none text-sm w-full"
-                                />
+                              <td className="text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatMoneyDisplay(row.prixPerUnit)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.prixPerUnit}
+                                    onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                    placeholder="—"
+                                    step="0.01"
+                                    min={0}
+                                    className="w-full min-w-[5.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td className="font-semibold text-sm">{row.montant || "—"}</td>
+                              <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
+                                {formatMontantCell(row)}
+                              </td>
                               <td>
                                 <input
                                   type="text"
@@ -885,6 +1018,23 @@ export default function ProduitsVeterinaires() {
                                   disabled={rowReadOnly}
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
+                              </td>
+                              <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
+                                {canSaveRow && (
+                                  <button
+                                    type="button"
+                                    onClick={() => saveRow(row)}
+                                    disabled={isSaving || loading}
+                                    className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
+                                    title="Enregistrer la ligne"
+                                  >
+                                    {isSaving ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <Check className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                )}
                               </td>
                               <td>
                                 {showDelete && (
@@ -905,22 +1055,36 @@ export default function ProduitsVeterinaires() {
                           <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             TOTAL {selectedSemaine}
                           </td>
-                          <td>—</td>
-                          <td>{weekTotal.qte}</td>
-                          <td>{weekTotal.prix.toFixed(2)}</td>
-                          <td>{weekTotal.montant.toFixed(2)}</td>
-                          <td>—</td>
+                          <td className="text-center" />
+                          <td className="text-center tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(weekTotal.qte, 2)}
+                          </td>
+                          <td className="text-center tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(weekTotal.prix, 2)}
+                          </td>
+                          <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                            {formatGroupedNumber(weekTotal.montant, 2)}
+                          </td>
+                          <td className="text-center" />
+                          <td className="w-9 max-w-9 !px-1" />
                           <td></td>
                         </tr>
                         <tr className="bg-muted/50">
                           <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             CUMUL
                           </td>
-                          <td>—</td>
-                          <td>{cumulForSelectedSemaine.qte}</td>
-                          <td>{cumulForSelectedSemaine.prix.toFixed(2)}</td>
-                          <td>{cumulForSelectedSemaine.montant.toFixed(2)}</td>
-                          <td>—</td>
+                          <td className="text-center" />
+                          <td className="text-center tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(cumulForSelectedSemaine.qte, 2)}
+                          </td>
+                          <td className="text-center tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(cumulForSelectedSemaine.prix, 2)}
+                          </td>
+                          <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                            {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
+                          </td>
+                          <td className="text-center" />
+                          <td className="w-9 max-w-9 !px-1" />
                           <td></td>
                         </tr>
                       </>

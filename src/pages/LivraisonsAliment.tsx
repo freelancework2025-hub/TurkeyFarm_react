@@ -37,8 +37,8 @@ import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount"
  * stock is shared across all batiments (B1 then B2 then B3…), and the next week = rest of previous week + livraisons.
  * Rule: B1 = Stock_prev + Livraisons_sexe − Stock_actuel. B2+ = Stock_transfer − Stock_actuel
  * (Stock_transfer = stock du dernier bâtiment actif du même sexe dans la semaine). CUMUL = 0 jusqu'à calcul.
- * Permission matrix: same as Sorties — canCreate for add/save, canUpdate for saved rows, canDelete for delete.
- * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
+ * Permission matrix: canCreate for add/save; canUpdate for saved rows (Admin/RT only).
+ * Persisted-row delete (trash): Admin/RT only (hasFullAccess). RF may remove unsaved padded rows only.
  * PER-ROW FLOW: All rows are editable. Fill any row and click the check icon to save that row to the database.
  * Saved rows can be updated (if canUpdate) or remain read-only. Other rows stay editable until saved.
  */
@@ -134,7 +134,7 @@ export default function LivraisonsAliment() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
+  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
   const [newSemaineInput, setNewSemaineInput] = useState("");
@@ -148,7 +148,6 @@ export default function LivraisonsAliment() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
-  const [savingAll, setSavingAll] = useState(false);
   /** While focused, QTE shows raw editable string; blurred shows grouped + .00 */
   const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
@@ -386,7 +385,7 @@ export default function LivraisonsAliment() {
     const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !canDelete) return;
+    if (row?.serverId != null && !hasFullAccess) return;
     if (row?.serverId != null) {
       api.livraisonsAliment
         .delete(row.serverId)
@@ -580,43 +579,6 @@ export default function LivraisonsAliment() {
       });
     } finally {
       setSavingRowId(null);
-    }
-  };
-
-  /** True if row has minimum content to be saved (date + at least one of designation, supplier, qte, deliveryNoteNumber). */
-  const hasRowContent = (row: LivraisonRow) =>
-    (row.designation?.trim() ?? "") !== "" ||
-    (row.supplier?.trim() ?? "") !== "" ||
-    (row.qte?.trim() ?? "") !== "" ||
-    (row.deliveryNoteNumber?.trim() ?? "") !== "";
-
-  /** Save all unsaved rows that have date and content. */
-  const saveAllUnsavedRows = async () => {
-    if (!lotFilter.trim() || !selectedSemaine) {
-      toast({ title: "Lot et semaine requis", description: "Indiquez le lot et la semaine.", variant: "destructive" });
-      return;
-    }
-    const unsavedWithData = currentRows.filter(
-      (r) => r.serverId == null && r.date?.trim() && hasRowContent(r) && canCreate
-    );
-    if (unsavedWithData.length === 0) {
-      toast({
-        title: "Rien à enregistrer",
-        description: "Remplissez la date et au moins un champ (désignation, fournisseur, quantité ou N° BL) pour une ou plusieurs lignes.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setSavingAll(true);
-    try {
-      for (const row of unsavedWithData) {
-        await saveRow(row);
-      }
-      if (unsavedWithData.length > 1) {
-        toast({ title: "Enregistrement terminé", description: `${unsavedWithData.length} ligne(s) enregistrée(s).` });
-      }
-    } finally {
-      setSavingAll(false);
     }
   };
 
@@ -944,28 +906,8 @@ export default function LivraisonsAliment() {
                     </p>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
-                  {(canCreate || canUpdate) && !isReadOnly && (
-                    <button
-                      type="button"
-                      onClick={saveAllUnsavedRows}
-                      disabled={
-                        loading ||
-                        savingAll ||
-                        !currentRows.some((r) => r.serverId == null && r.date?.trim() && hasRowContent(r) && canCreate)
-                      }
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none transition-opacity"
-                      title="Enregistrer toutes les lignes remplies (date + au moins un champ)"
-                    >
-                      {savingAll ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Check className="w-4 h-4" />
-                      )}
-                      Enregistrer
-                    </button>
-                  )}
-                  {canCreate && (
+                {canCreate && (
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={addRow}
@@ -973,8 +915,8 @@ export default function LivraisonsAliment() {
                     >
                       <Plus className="w-4 h-4" /> Ligne
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
 
               <div className="overflow-x-auto">
@@ -1012,7 +954,7 @@ export default function LivraisonsAliment() {
                             (row.serverId != null && !canUpdate);
                           const canSaveRow =
                             (row.serverId == null && canCreate) || (row.serverId != null && canUpdate);
-                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                          const showDelete = row.serverId != null ? hasFullAccess : canCreate;
                           const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>

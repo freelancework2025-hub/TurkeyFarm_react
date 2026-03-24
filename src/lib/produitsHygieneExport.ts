@@ -29,7 +29,7 @@ export interface HygieneExportTotals {
   femelle: number;
 }
 
-/** Vide sanitaire: single row at top of table (per lot). */
+/** Vide sanitaire: one export line per row (sem VS). */
 export interface VideSanitaireHygiene {
   date: string;
   supplier: string;
@@ -48,7 +48,9 @@ export interface ProduitsHygieneExportParams {
   weekTotal: HygieneExportTotals;
   cumul: HygieneExportTotals;
   ageByRowId: Map<string, string | number>;
-  /** Optional Vide sanitaire row to include at top. */
+  /** Vide sanitaire lines at top (multi-ligne). */
+  videSanitaireRows?: VideSanitaireHygiene[];
+  /** @deprecated Prefer videSanitaireRows */
   videSanitaire?: VideSanitaireHygiene;
 }
 
@@ -76,26 +78,34 @@ function rowToArray(row: HygieneRowExport, age: string | number): (string | numb
 }
 
 function toConfig(params: ProduitsHygieneExportParams): ITableExportConfig {
-  const { farmName, lot, semaine, rows, weekTotal, cumul, ageByRowId, videSanitaire } = params;
+  const { farmName, lot, semaine, rows, weekTotal, cumul, ageByRowId, videSanitaireRows, videSanitaire } = params;
   const prefixRows: (string | number)[][] = [];
-  if (videSanitaire) {
-    const qte = parseFloat(String(videSanitaire.qte).replace(",", "."));
-    const prix = parseFloat(String(videSanitaire.prixPerUnit).replace(",", "."));
+  const vsLines =
+    videSanitaireRows && videSanitaireRows.length > 0
+      ? videSanitaireRows
+      : videSanitaire
+        ? [videSanitaire]
+        : [];
+  for (const vs of vsLines) {
+    const qte = parseFloat(String(vs.qte).replace(",", "."));
+    const prix = parseFloat(String(vs.prixPerUnit).replace(",", "."));
     const montant =
-      videSanitaire.montant.trim() !== ""
-        ? parseFloat(String(videSanitaire.montant).replace(",", "."))
-        : (!Number.isNaN(qte) && !Number.isNaN(prix) ? qte * prix : 0);
+      vs.montant.trim() !== ""
+        ? parseFloat(String(vs.montant).replace(",", "."))
+        : !Number.isNaN(qte) && !Number.isNaN(prix)
+          ? qte * prix
+          : 0;
     prefixRows.push([
       "—",
-      safeStr(videSanitaire.date) || "—",
-      "—",
+      safeStr(vs.date) || "—",
+      "VS",
       "Vide sanitaire",
-      safeStr(videSanitaire.supplier) || "—",
-      safeStr(videSanitaire.deliveryNoteNumber) || "—",
+      safeStr(vs.supplier) || "—",
+      safeStr(vs.deliveryNoteNumber) || "—",
       Number.isNaN(qte) ? "—" : qte,
       Number.isNaN(prix) ? "—" : prix,
       Number.isNaN(montant) ? "—" : montant,
-      safeStr(videSanitaire.numeroBR) || "—",
+      safeStr(vs.numeroBR) || "—",
       "—",
       "—",
     ]);

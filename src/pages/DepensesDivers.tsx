@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Loader2, Plus, Save, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Loader2, Plus, Check, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -25,23 +25,21 @@ import {
   type DepenseDiversRequest,
   type LotWithStatusResponse,
 } from "@/lib/api";
-import { computeAgeByRowId } from "@/utils/semaineAgeUtils";
-import { getStoredSelectedFarm } from "@/lib/api";
+import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/depensesDiversExport";
+import { toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
  * DÉPENSES DIVERS
  * Flow: Farm → Lot → Semaine → Vide sanitaire table (top) + Dépenses divers table (main).
  * Vide sanitaire: dedicated table with DATE, désignation, fournisseur, N°BL, N°BR, UG, quantité, prix, montant. TOTAL and CUMUL for quantité and montant.
  * Main table: TOTAL = current semaine, CUMUL = vide sanitaire cumul + semaines up to current.
- * Permission matrix (per permission.mdc):
- * - canCreate: add new rows, save new rows. RESPONSABLE_FERME can add/save; saved rows become read-only for them.
- * - canUpdate: edit saved rows. ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only.
- * - canDelete: delete saved rows. ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only.
- * - Unsaved rows: only first editable can be edited; canCreate users can remove unsaved rows.
+ * Permission: canCreate / canUpdate (Admin/RT). Persisted delete: hasFullAccess only; RF can remove unsaved lines.
+ * PER-ROW: ✓ saves one line (POST/PUT) for Vide sanitaire (age=VS) and main table alike.
  */
 
-const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+/** Quick-pick S1–S36; S37+ via champ libre. */
+const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
 
 /** Options de désignation : l'utilisateur peut sélectionner ou saisir librement. */
@@ -52,7 +50,8 @@ interface DepenseDiversRow {
   id: string;
   serverId?: number;
   date: string;
-  age: string;
+  /** Semaine (S1, S2…) ou VS — mappé sur le champ API `age`. */
+  sem: string;
   designation: string;
   supplier: string;
   deliveryNoteNumber: string;
@@ -65,7 +64,7 @@ interface DepenseDiversRow {
 }
 
 function toNum(s: string): number {
-  const n = parseFloat(String(s).replace(",", "."));
+  const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
   return Number.isNaN(n) ? 0 : n;
 }
 
@@ -79,16 +78,26 @@ function addOneDay(isoDate: string): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Sort semaines: S1, S2, ... S24, then custom (e.g. S25). */
-function sortSemaines(sems: string[]): string[] {
-  return [...sems].sort((a, b) => {
-    const numA = parseInt(a.replace(/^S(\d+)$/i, "$1"), 10);
-    const numB = parseInt(b.replace(/^S(\d+)$/i, "$1"), 10);
-    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-    if (!Number.isNaN(numA)) return -1;
-    if (!Number.isNaN(numB)) return 1;
-    return a.localeCompare(b);
-  });
+/** Semaine / VS depuis la ligne (champ UI `sem`). */
+function getSemFromRow(r: DepenseDiversRow): string {
+  return (r.sem || "").trim();
+}
+
+/** Aligné sur DepenseDiversService.isFilledRow ; vide sanitaire exige au moins un champ métier (pas seulement l’âge VS). */
+function isFilledDepenseRequest(req: DepenseDiversRequest, isVs: boolean): boolean {
+  if (!req.date?.trim()) return false;
+  const qteOk = req.qte != null && req.qte > 0;
+  const montantOk = req.montant != null && req.montant > 0;
+  const meaningful =
+    !!(req.designation?.trim()) ||
+    !!(req.supplier?.trim()) ||
+    qteOk ||
+    !!(req.deliveryNoteNumber?.trim()) ||
+    !!(req.numeroBR?.trim()) ||
+    !!(req.ug?.trim()) ||
+    montantOk;
+  if (isVs) return meaningful;
+  return meaningful || !!(req.age?.trim());
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order by number or string). */
@@ -115,7 +124,7 @@ export default function DepensesDivers() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId } = useAuth();
+  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -128,7 +137,7 @@ export default function DepensesDivers() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
-  const [saving, setSaving] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
@@ -143,6 +152,19 @@ export default function DepensesDivers() {
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
+
+  const lastExportFarmIdRef = React.useRef<number | null>(null);
+  useEffect(() => {
+    if (!canAccessAllFarms || !pageFarmId || showFarmSelector) return;
+    const hasSelectedFarm = farms.some((f) => f.id === pageFarmId);
+    if (hasSelectedFarm) return;
+    if (lastExportFarmIdRef.current === pageFarmId) return;
+    lastExportFarmIdRef.current = pageFarmId;
+    api.farms
+      .list()
+      .then((list) => setFarms(list))
+      .catch(() => { });
+  }, [canAccessAllFarms, pageFarmId, showFarmSelector, farms]);
 
   useEffect(() => {
     if (showFarmSelector || !pageFarmId) return;
@@ -181,10 +203,10 @@ export default function DepensesDivers() {
     [selectedFarmId, lotFilter, setSearchParams]
   );
 
-  const emptyRow = (age?: string, overrideDate?: string): DepenseDiversRow => ({
+  const emptyRow = (sem?: string, overrideDate?: string): DepenseDiversRow => ({
     id: crypto.randomUUID(),
     date: overrideDate ?? today,
-    age: age ?? "",
+    sem: sem ?? "",
     designation: "",
     supplier: "",
     deliveryNoteNumber: "",
@@ -199,14 +221,14 @@ export default function DepensesDivers() {
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today for first lot). */
   const getStartDateForSemaine = useCallback(
     (semaine: string): string => {
-      const ages = new Set(rows.map((r) => (r.age || "").trim()).filter((a) => a && a !== VS_AGE));
+      const ages = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_AGE));
       ages.add(semaine.trim());
       const semOrder = sortSemaines([...ages]);
       const idx = semOrder.indexOf(semaine.trim());
       if (idx < 0) return today;
       if (idx === 0) return previousLotLastDate ?? today;
       const prevSem = semOrder[idx - 1];
-      const prevRows = rows.filter((r) => (r.age || "").trim() === prevSem);
+      const prevRows = rows.filter((r) => getSemFromRow(r) === prevSem);
       if (prevRows.length === 0) return today;
       const dates = prevRows.map((r) => r.date).filter((d) => d?.trim());
       if (dates.length === 0) return today;
@@ -228,13 +250,18 @@ export default function DepensesDivers() {
         id: crypto.randomUUID(),
         serverId: r.id,
         date: r.date ?? "",
-        age: r.age ?? "",
+        sem: (r.age ?? "").trim(),
         designation: r.designation ?? "",
         supplier: r.supplier ?? "",
         deliveryNoteNumber: r.deliveryNoteNumber ?? "",
         numeroBR: r.numeroBR ?? "",
         ug: r.ug ?? "",
-        qte: fromNum(r.qte),
+        qte: (() => {
+          const s = fromNum(r.qte);
+          if (!String(s).trim()) return "";
+          const n = toOptionalNumber(s);
+          return n != null ? n.toFixed(2) : "";
+        })(),
         prixPerUnit: fromNum(r.prixPerUnit),
         montant: fromNum(r.montant),
         lot: r.lot ?? "",
@@ -246,7 +273,7 @@ export default function DepensesDivers() {
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, lotFilter, toast, isSelectedLotClosed]);
+  }, [showFarmSelector, pageFarmId, lotFilter, isSelectedLotClosed]);
 
   useEffect(() => {
     loadMovements();
@@ -296,8 +323,8 @@ export default function DepensesDivers() {
   }, [selectedFarmId, lotFilter, hasSemaineInUrl, trimmedSemaine, setSearchParams]);
 
   useEffect(() => {
-    if (!hasSemaineInUrl || !selectedSemaine) return;
-    const forSem = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    if (!hasSemaineInUrl || !selectedSemaine || isReadOnly) return;
+    const forSem = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (forSem.length >= MIN_TABLE_ROWS) return;
     const toAdd = MIN_TABLE_ROWS - forSem.length;
     const startDate =
@@ -316,11 +343,11 @@ export default function DepensesDivers() {
       nextDate = addOneDay(nextDate);
     }
     setRows((prev) => [...prev, ...newRows]);
-  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine]);
+  }, [hasSemaineInUrl, selectedSemaine, rows.length, getStartDateForSemaine, isReadOnly]);
 
   const addRow = () => {
     if (!canCreate || !selectedSemaine) return;
-    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
     const nextDate =
       lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
@@ -330,7 +357,7 @@ export default function DepensesDivers() {
 
   const addRowVideSanitaire = () => {
     if (!canCreate || !lotFilter.trim()) return;
-    const vsRows = rows.filter((r) => (r.age || "").trim() === VS_AGE);
+    const vsRows = rows.filter((r) => getSemFromRow(r) === VS_AGE);
     const lastRow = vsRows.length > 0 ? vsRows[vsRows.length - 1] : null;
     const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
     const newRow = { ...emptyRow(VS_AGE), date: nextDate };
@@ -340,7 +367,7 @@ export default function DepensesDivers() {
   const removeRowVideSanitaire = (id: string) => {
     const row = rows.find((r) => r.id === id);
     if (!row) return;
-    if (row.serverId != null && !canDelete) return;
+    if (row.serverId != null && !hasFullAccess) return;
     if (row.serverId != null) {
       api.depensesDivers
         .delete(row.serverId)
@@ -351,65 +378,11 @@ export default function DepensesDivers() {
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
-  const handleSaveVideSanitaire = async () => {
-    if (!canCreate || !lotFilter.trim()) return;
-    const unsavedVs = rows
-      .filter((r) => (r.age || "").trim() === VS_AGE && r.serverId == null)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const firstUnsaved = unsavedVs[0];
-    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
-      toast({
-        title: "Aucune ligne à enregistrer",
-        description: "Remplissez la date pour la ligne vide sanitaire à enregistrer.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.depensesDivers.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
-      toast({
-        title: "Vide sanitaire enregistré",
-        description: `La ligne du ${firstUnsaved.date} a été enregistrée.`,
-      });
-      loadMovements();
-    } catch (err) {
-      toast({
-        title: "Erreur",
-        description: "Impossible d'enregistrer. Vérifiez que la date et au moins un champ sont remplis.",
-        variant: "destructive",
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleUpdateVideSanitaireRow = async (row: DepenseDiversRow) => {
-    if (!canUpdate || row.serverId == null || !lotFilter.trim()) return;
-    setSaving(true);
-    try {
-      await api.depensesDivers.update(row.serverId, rowToRequest(row));
-      toast({
-        title: "Ligne mise à jour",
-        description: `La ligne du ${row.date} a été mise à jour.`,
-      });
-      loadMovements();
-    } catch (err) {
-      toast({
-        title: "Erreur",
-        description: "Impossible de mettre à jour la ligne.",
-        variant: "destructive",
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const removeRow = (id: string) => {
-    const currentRows = rows.filter((r) => (r.age || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !canDelete) return;
+    if (row?.serverId != null && !hasFullAccess) return;
     if (row?.serverId != null) {
       api.depensesDivers
         .delete(row.serverId)
@@ -438,117 +411,181 @@ export default function DepensesDivers() {
   };
 
   const rowToRequest = (r: DepenseDiversRow): DepenseDiversRequest => {
-    const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const qteParsed = r.qte.trim() !== "" ? toNum(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant =
       r.montant.trim() !== ""
         ? toNum(r.montant)
-        : qte != null && prix >= 0
-          ? qte * prix
+        : qteParsed != null && prix >= 0
+          ? qteParsed * prix
           : null;
+    const isVs = getSemFromRow(r) === VS_AGE;
+    const semLabel = r.sem.trim();
+    const ageField = semLabel || (isVs ? VS_AGE : selectedSemaine || null) || null;
     return {
       farmId: pageFarmId ?? undefined,
       lot: r.lot.trim() || lotFilter.trim() || null,
       date: r.date || today,
-      age: r.age.trim() || null,
+      age: ageField,
       designation: r.designation.trim() || null,
       supplier: r.supplier.trim() || null,
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
       numeroBR: r.numeroBR?.trim() || null,
       ug: r.ug?.trim() || null,
-      qte: qte ?? null,
+      qte: qteParsed ?? null,
       prixPerUnit: prix > 0 ? prix : null,
       montant: montant != null && montant >= 0 ? montant : null,
     };
   };
 
-  const handleSave = async () => {
-    if (!canCreate) {
+  const saveRow = async (row: DepenseDiversRow) => {
+    const isVs = getSemFromRow(row) === VS_AGE;
+    const canSaveNew = row.serverId == null && canCreate;
+    const canSaveExisting = row.serverId != null && canUpdate;
+    if (!canSaveNew && !canSaveExisting) {
       toast({
         title: "Non autorisé",
-        description: "Vous ne pouvez pas enregistrer les données.",
+        description: "Vous ne pouvez pas enregistrer cette ligne.",
         variant: "destructive",
       });
       return;
     }
-    if (!lotFilter.trim() || !selectedSemaine) {
+    if (!lotFilter.trim()) {
       toast({
-        title: "Lot et semaine requis",
-        description: "Indiquez le lot et la semaine avant d'enregistrer.",
+        title: "Lot requis",
+        description: "Indiquez un lot.",
         variant: "destructive",
       });
       return;
     }
-    const forSem = (r: DepenseDiversRow) => (r.age || "").trim() === selectedSemaine;
-    const unsavedForSem = rows
-      .filter((r) => forSem(r) && r.serverId == null)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const firstUnsaved = unsavedForSem[0];
+    if (!isVs && !selectedSemaine) {
+      toast({
+        title: "Semaine requise",
+        description: "Choisissez une semaine pour les lignes du tableau principal.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!row.date?.trim()) {
+      toast({
+        title: "Date requise",
+        description: "Remplissez la date pour enregistrer la ligne.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const req = rowToRequest(row);
+    if (!isFilledDepenseRequest(req, isVs)) {
+      toast({
+        title: "Ligne incomplète",
+        description:
+          "Remplissez au moins un champ (désignation, fournisseur, N° BL, N° BR, UG, quantité ou montant).",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
+    setSavingRowId(row.id);
+    try {
+      if (row.serverId != null) {
+        await api.depensesDivers.update(row.serverId, req);
+        toast({
+          title: "Ligne mise à jour",
+          description: `Le ${row.date} a été mis à jour.`,
+        });
+        loadMovements();
+      } else {
+        const created = await api.depensesDivers.create(req);
+        toast({
+          title: isVs ? "Vide sanitaire enregistré" : "Ligne enregistrée",
+          description: `Le ${row.date} a été enregistré.`,
+        });
+        setRows((prev) =>
+          prev.map((r) =>
+            r.id === row.id
+              ? {
+                  ...r,
+                  serverId: created.id,
+                  sem:
+                    created.age != null && String(created.age).trim() !== ""
+                      ? String(created.age).trim()
+                      : r.sem,
+                  lot: created.lot ?? r.lot,
+                }
+              : r
+          )
+        );
+      }
+    } catch {
       toast({
-        title: "Aucune ligne à enregistrer",
-        description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
+        title: "Erreur",
+        description: "Impossible d'enregistrer la ligne.",
         variant: "destructive",
       });
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.depensesDivers.createBatch([rowToRequest(firstUnsaved)], pageFarmId ?? undefined);
-      toast({
-        title: "Jour enregistré",
-        description: `Le ${firstUnsaved.date} a été enregistré. Vous pouvez maintenant remplir le jour suivant.`,
-      });
-      loadMovements();
-    } catch {
-      /* API error — logged in backend only */
     } finally {
-      setSaving(false);
+      setSavingRowId(null);
     }
   };
 
-  const videSanitaireRows = [...rows.filter((r) => (r.age || "").trim() === VS_AGE)].sort((a, b) =>
+  /** Âge séquentiel (jours) pour toutes les lignes hors vide sanitaire ; l’API ne stocke que la semaine dans `age`. */
+  const ageByRowId = React.useMemo(() => {
+    const rowsForAge = rows.filter((r) => getSemFromRow(r) !== VS_AGE);
+    return computeAgeByRowId(rowsForAge, (r) => getSemFromRow(r), (r) => r.date);
+  }, [rows]);
+
+  /** Affichage AGE : pas de valeur numérique persistée côté API pour cette fiche (seulement S1… / VS). */
+  const displayAgeByRowId = React.useMemo(() => {
+    const m = new Map<string, number | string>();
+    if (loading) return m;
+    for (const r of rows) {
+      if (getSemFromRow(r) === VS_AGE) continue;
+      m.set(r.id, ageByRowId.get(r.id) ?? "—");
+    }
+    return m;
+  }, [rows, ageByRowId, loading]);
+
+  const videSanitaireRows = [...rows.filter((r) => getSemFromRow(r) === VS_AGE)].sort((a, b) =>
     (a.date || "").localeCompare(b.date || "")
   );
-  const firstEditableVideSanitaireIndex = videSanitaireRows.findIndex((r) => r.serverId == null);
   const videSanitaireTotalQte = videSanitaireRows.reduce((acc, r) => acc + toNum(r.qte), 0);
   const videSanitaireTotalMontant = videSanitaireRows.reduce((acc, r) => acc + toNum(r.montant), 0);
 
   const currentRows = selectedSemaine
-    ? [...rows.filter((r) => (r.age || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
+        const ageA = displayAgeByRowId.get(a.id);
+        const ageB = displayAgeByRowId.get(b.id);
+        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+        if (numA !== numB) return numA - numB;
+        return (a.date || "").localeCompare(b.date || "");
+      })
     : [];
-  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
   const weekTotalQte = currentRows.reduce((acc, r) => acc + toNum(r.qte), 0);
   const weekTotalMontant = currentRows.reduce((acc, r) => acc + toNum(r.montant), 0);
-  const semainesOnly = new Set(rows.map((r) => (r.age || "").trim()).filter((a) => a && a !== VS_AGE));
+  const semainesOnly = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_AGE));
   const semOrder = sortSemaines([...semainesOnly]);
   const idx = semOrder.indexOf(selectedSemaine ?? "");
   const semsUpTo = idx < 0 ? (selectedSemaine ? [selectedSemaine] : []) : semOrder.slice(0, idx + 1);
   const cumulQte =
     videSanitaireTotalQte +
     semsUpTo.reduce(
-      (sum, sem) => sum + rows.filter((r) => (r.age || "").trim() === sem).reduce((a, r) => a + toNum(r.qte), 0),
+      (sum, sem) => sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + toNum(r.qte), 0),
       0
     );
   const cumulMontant =
     videSanitaireTotalMontant +
     semsUpTo.reduce(
-      (sum, sem) => sum + rows.filter((r) => (r.age || "").trim() === sem).reduce((a, r) => a + toNum(r.montant), 0),
+      (sum, sem) => sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + toNum(r.montant), 0),
       0
     );
-  const ageByRowId = React.useMemo(() => {
-    const rowsForAge = rows.filter((r) => (r.age || "").trim() !== VS_AGE);
-    return computeAgeByRowId(rowsForAge, (r) => (r.age || "").trim(), (r) => r.date);
-  }, [rows]);
-  const colCount = 11;
-  const vsColCount = 10;
+  const colCount = 12;
+  const vsColCount = 11;
 
   const canShowExport = hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && pageFarmId != null;
   const exportFarmName =
     canAccessAllFarms && isValidFarmId
       ? (farms.find((f) => f.id === pageFarmId)?.name ?? "Ferme")
-      : (getStoredSelectedFarm()?.name ?? "Ferme");
+      : (selectedFarmName ?? "Ferme");
 
   const handleExportExcel = async () => {
     if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
@@ -557,12 +594,24 @@ export default function DepensesDivers() {
         farmName: exportFarmName,
         lot: lotFilter.trim(),
         semaine: selectedSemaine,
-        rows: currentRows,
         weekTotalQte,
         weekTotalMontant,
         cumulQte,
         cumulMontant,
-        ageByRowId,
+        ageByRowId: displayAgeByRowId,
+        rows: currentRows.map((r) => ({
+          id: r.id,
+          date: r.date,
+          age: r.sem,
+          designation: r.designation,
+          supplier: r.supplier,
+          deliveryNoteNumber: r.deliveryNoteNumber,
+          numeroBR: r.numeroBR,
+          ug: r.ug,
+          qte: r.qte,
+          prixPerUnit: r.prixPerUnit,
+          montant: r.montant,
+        })),
         videSanitaireRows: videSanitaireRows.map((r) => ({
           date: r.date,
           designation: r.designation,
@@ -589,12 +638,24 @@ export default function DepensesDivers() {
       farmName: exportFarmName,
       lot: lotFilter.trim(),
       semaine: selectedSemaine,
-      rows: currentRows,
       weekTotalQte,
       weekTotalMontant,
       cumulQte,
       cumulMontant,
-      ageByRowId,
+      ageByRowId: displayAgeByRowId,
+      rows: currentRows.map((r) => ({
+        id: r.id,
+        date: r.date,
+        age: r.sem,
+        designation: r.designation,
+        supplier: r.supplier,
+        deliveryNoteNumber: r.deliveryNoteNumber,
+        numeroBR: r.numeroBR,
+        ug: r.ug,
+        qte: r.qte,
+        prixPerUnit: r.prixPerUnit,
+        montant: r.montant,
+      })),
       videSanitaireRows: videSanitaireRows.map((r) => ({
         date: r.date,
         designation: r.designation,
@@ -794,7 +855,7 @@ export default function DepensesDivers() {
                 type="text"
                 value={newSemaineInput}
                 onChange={(e) => setNewSemaineInput(e.target.value)}
-                placeholder="ex. S25, S26..."
+                placeholder="ex. S37, S38…"
                 className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
               />
               <button
@@ -857,24 +918,14 @@ export default function DepensesDivers() {
             <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <h2 className="text-lg font-display font-bold text-foreground">Vide sanitaire</h2>
-                {!isReadOnly && (canCreate || canUpdate) && (
+                {!isReadOnly && canCreate && (
                   <div className="flex gap-2">
-                    {canCreate && (
-                      <button
-                        type="button"
-                        onClick={addRowVideSanitaire}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                      >
-                        <Plus className="w-4 h-4" /> Ligne
-                      </button>
-                    )}
                     <button
                       type="button"
-                      onClick={handleSaveVideSanitaire}
-                      disabled={saving || loading || firstEditableVideSanitaireIndex < 0}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                      onClick={addRowVideSanitaire}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                     >
-                      <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
+                      <Plus className="w-4 h-4" /> Ligne
                     </button>
                   </div>
                 )}
@@ -892,7 +943,10 @@ export default function DepensesDivers() {
                       <th className="w-[9%] min-w-[70px]">Quantité</th>
                       <th className="w-[9%] min-w-[70px]">Prix</th>
                       <th className="w-[10%] min-w-[80px]">Montant</th>
-                      <th className="w-[6%] min-w-[90px]"></th>
+                      <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
+                        ✓
+                      </th>
+                      <th className="w-10"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -904,11 +958,15 @@ export default function DepensesDivers() {
                       </tr>
                     ) : (
                       <>
-                        {videSanitaireRows.map((row, rowIndex) => {
-                          const isFirstEditable =
-                            firstEditableVideSanitaireIndex >= 0 && rowIndex === firstEditableVideSanitaireIndex;
-                          const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
-                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                        {videSanitaireRows.map((row) => {
+                          const rowReadOnly =
+                            isReadOnly ||
+                            (row.serverId == null && !canCreate) ||
+                            (row.serverId != null && !canUpdate);
+                          const canSaveRow =
+                            (row.serverId == null && canCreate) || (row.serverId != null && canUpdate);
+                          const showDelete = row.serverId != null ? hasFullAccess : canCreate;
+                          const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>
                               <td>
@@ -996,19 +1054,24 @@ export default function DepensesDivers() {
                                 />
                               </td>
                               <td className="font-semibold text-sm">{row.montant || "—"}</td>
-                              <td className="align-middle w-[90px]">
-                                <div className="flex items-center justify-end gap-1 min-h-[34px]">
-                                {row.serverId != null && canUpdate && (
+                              <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
+                                {canSaveRow && (
                                   <button
                                     type="button"
-                                    onClick={() => handleUpdateVideSanitaireRow(row)}
-                                    disabled={saving}
-                                    className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs font-medium hover:opacity-90 disabled:opacity-50"
-                                    title="Enregistrer les modifications"
+                                    onClick={() => saveRow(row)}
+                                    disabled={isSaving || loading}
+                                    className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
+                                    title="Enregistrer la ligne"
                                   >
-                                    {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                                    {isSaving ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <Check className="w-4 h-4" />
+                                    )}
                                   </button>
                                 )}
+                              </td>
+                              <td className="align-middle">
                                 {showDelete && (
                                   <button
                                     type="button"
@@ -1019,7 +1082,6 @@ export default function DepensesDivers() {
                                     <Trash2 className="w-4 h-4" />
                                   </button>
                                 )}
-                                </div>
                               </td>
                             </tr>
                           );
@@ -1034,6 +1096,7 @@ export default function DepensesDivers() {
                               <td></td>
                               <td className="font-semibold text-sm">{videSanitaireTotalMontant.toFixed(2)}</td>
                               <td></td>
+                              <td></td>
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={6} className="text-sm font-medium text-muted-foreground">
@@ -1042,7 +1105,8 @@ export default function DepensesDivers() {
                               <td className="font-semibold text-sm">{videSanitaireTotalQte.toFixed(2)}</td>
                               <td></td>
                               <td className="font-semibold text-sm">{videSanitaireTotalMontant.toFixed(2)}</td>
-                              <td className="text-right"></td>
+                              <td></td>
+                              <td></td>
                             </tr>
                           </>
                         )}
@@ -1058,30 +1122,20 @@ export default function DepensesDivers() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
                   <h2 className="text-lg font-display font-bold text-foreground">Dépenses divers</h2>
-                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                  {!isReadOnly && (canCreate || canUpdate) && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                      Chaque ligne = un jour. Enregistrez avec ✓ ; les lignes déjà enregistrées restent modifiables si vous avez le droit de mise à jour.
                     </p>
                   )}
                 </div>
-                {!isReadOnly && (canCreate || canUpdate) && (
+                {!isReadOnly && canCreate && (
                   <div className="flex gap-2">
-                    {canCreate && (
-                      <button
-                        type="button"
-                        onClick={addRow}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                      >
-                        <Plus className="w-4 h-4" /> Ligne
-                      </button>
-                    )}
                     <button
                       type="button"
-                      onClick={handleSave}
-                      disabled={saving || loading || firstEditableRowIndex < 0}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                      onClick={addRow}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                     >
-                      <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
+                      <Plus className="w-4 h-4" /> Ligne
                     </button>
                   </div>
                 )}
@@ -1101,7 +1155,10 @@ export default function DepensesDivers() {
                       <th className="w-[8%] min-w-[60px]">QTE</th>
                       <th className="w-[9%] min-w-[70px]">Prix</th>
                       <th className="w-[10%] min-w-[80px]">Montant</th>
-                      <th className="w-[12%] min-w-[80px]"></th>
+                      <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
+                        ✓
+                      </th>
+                      <th className="w-10"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1113,14 +1170,19 @@ export default function DepensesDivers() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row, rowIndex) => {
-                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                          const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
-                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                        {currentRows.map((row) => {
+                          const rowReadOnly =
+                            isReadOnly ||
+                            (row.serverId == null && !canCreate) ||
+                            (row.serverId != null && !canUpdate);
+                          const canSaveRow =
+                            (row.serverId == null && canCreate) || (row.serverId != null && canUpdate);
+                          const showDelete = row.serverId != null ? hasFullAccess : canCreate;
+                          const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>
                               <td className="text-sm tabular-nums">
-                                {ageByRowId.get(row.id) ?? "—"}
+                                {displayAgeByRowId.get(row.id) ?? "—"}
                               </td>
                               <td>
                                 <input
@@ -1134,8 +1196,8 @@ export default function DepensesDivers() {
                               <td>
                                 <input
                                   type="text"
-                                  value={row.age}
-                                  onChange={(e) => updateRow(row.id, "age", e.target.value)}
+                                  value={row.sem}
+                                  onChange={(e) => updateRow(row.id, "sem", e.target.value)}
                                   placeholder={selectedSemaine}
                                   disabled={rowReadOnly}
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
@@ -1207,7 +1269,24 @@ export default function DepensesDivers() {
                                 />
                               </td>
                               <td className="font-semibold text-sm">{row.montant || "—"}</td>
-                              <td className="text-right">
+                              <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
+                                {canSaveRow && (
+                                  <button
+                                    type="button"
+                                    onClick={() => saveRow(row)}
+                                    disabled={isSaving || loading}
+                                    className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
+                                    title="Enregistrer la ligne"
+                                  >
+                                    {isSaving ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <Check className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                )}
+                              </td>
+                              <td className="text-right align-middle">
                                 {showDelete && (
                                   <button
                                     type="button"
@@ -1238,6 +1317,7 @@ export default function DepensesDivers() {
                               <td className="font-semibold text-sm">{weekTotalQte.toFixed(2)}</td>
                               <td></td>
                               <td className="font-semibold text-sm">{weekTotalMontant.toFixed(2)}</td>
+                              <td></td>
                               <td className="text-right"></td>
                             </tr>
                             <tr className="bg-muted/50">
@@ -1247,6 +1327,7 @@ export default function DepensesDivers() {
                               <td className="font-semibold text-sm">{cumulQte.toFixed(2)}</td>
                               <td></td>
                               <td className="font-semibold text-sm">{cumulMontant.toFixed(2)}</td>
+                              <td></td>
                               <td className="text-right"></td>
                             </tr>
                           </>
