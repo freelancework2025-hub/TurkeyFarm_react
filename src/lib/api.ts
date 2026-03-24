@@ -909,6 +909,16 @@ export const api = {
         { token: token ?? getStoredToken() }
       );
     },
+    /** Same pending logic as list (server: planning + vaccination_alert_confirmation); lightweight for 5‑min sound poll */
+    pending: (params?: { farmId?: number | null }, token?: string | null) => {
+      const search = new URLSearchParams();
+      if (params?.farmId != null) search.set("farmId", String(params.farmId));
+      const qs = search.toString();
+      return apiFetch<VaccinationAlertsPendingResponse>(
+        `/api/vaccination-alerts/pending${qs ? `?${qs}` : ""}`,
+        { token: token ?? getStoredToken() }
+      );
+    },
     sendEmail: (token?: string | null) =>
       apiFetch<void>("/api/vaccination-alerts/send-email", {
         method: "POST",
@@ -1900,6 +1910,10 @@ export interface VaccinationPlanningNoteResponse {
 export interface VaccinationAlertsResponse {
   count: number;
   alerts: VaccinationAlertResponse[];
+}
+
+export interface VaccinationAlertsPendingResponse {
+  pending: boolean;
 }
 
 /** Vaccination reminder alert — triggered day before vaccine age matches */

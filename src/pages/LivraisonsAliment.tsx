@@ -43,7 +43,8 @@ import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount"
  * Saved rows can be updated (if canUpdate) or remain read-only. Other rows stay editable until saved.
  */
 
-const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+/** Quick-pick S1-S36; same AGE rule as earlier weeks (Sn -> ages after (n-1)*7). S37+ via champ libre ci-dessous. */
+const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
 
 interface LivraisonRow {
@@ -67,7 +68,7 @@ interface LivraisonRow {
 }
 
 function toNum(s: string): number {
-  const n = parseFloat(String(s).replace(",", "."));
+  const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
   return Number.isNaN(n) ? 0 : n;
 }
 
@@ -75,10 +76,10 @@ function fromNum(n: number | null | undefined): string {
   return n != null ? String(n) : "";
 }
 
-/** Display quantity (grouped, no fraction). */
+/** Display quantity (grouped thousands + two decimals, e.g. 15 241.00). */
 function formatQtyDisplay(s: string): string {
   const n = toOptionalNumber(s);
-  return n != null ? formatGroupedNumber(n, 0) : "—";
+  return n != null ? formatGroupedNumber(n, 2) : "—";
 }
 
 /** Display unit price / money (grouped + 2 decimals). */
@@ -148,6 +149,8 @@ export default function LivraisonsAliment() {
   const [loading, setLoading] = useState(false);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [savingAll, setSavingAll] = useState(false);
+  /** While focused, QTE shows raw editable string; blurred shows grouped + .00 */
+  const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
@@ -275,7 +278,12 @@ export default function LivraisonsAliment() {
         supplier: r.supplier ?? "",
         deliveryNoteNumber: r.deliveryNoteNumber ?? "",
         numeroBonReception: r.numeroBonReception ?? "",
-        qte: fromNum(r.qte),
+        qte: (() => {
+          const s = fromNum(r.qte);
+          if (!String(s).trim()) return "";
+          const n = toOptionalNumber(s);
+          return n != null ? n.toFixed(2) : "";
+        })(),
         sex: r.sex ?? "",
         prixPerUnit: fromNum(r.prixPerUnit),
         montant: fromNum(r.montant),
@@ -870,7 +878,7 @@ export default function LivraisonsAliment() {
                 type="text"
                 value={newSemaineInput}
                 onChange={(e) => setNewSemaineInput(e.target.value)}
-                placeholder="ex. S25, S26..."
+                placeholder="ex. S37, S38..."
                 className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
               />
               <button
@@ -981,9 +989,9 @@ export default function LivraisonsAliment() {
                       <th className="min-w-[90px]">N° BL</th>
                       <th className="min-w-[90px]">N° BR</th>
                       <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[150px] w-[9.5rem]">SEX</th>
-                      <th className="min-w-[80px]">PRIX</th>
-                      <th className="min-w-[90px]">MONTANT</th>
+                      <th className="min-w-[150px] w-[9.5rem] !text-center">SEX</th>
+                      <th className="min-w-[80px] !text-center">PRIX</th>
+                      <th className="min-w-[90px] !text-center">MONTANT</th>
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">✓</th>
                       <th className="w-10"></th>
                     </tr>
@@ -1062,19 +1070,40 @@ export default function LivraisonsAliment() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td className="min-w-[128px]">
+                              <td className="min-w-[128px] text-center">
                                 {rowReadOnly ? (
-                                  <span className="block text-right tabular-nums px-1 py-0.5">
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
                                     {formatQtyDisplay(row.qte)}
                                   </span>
                                 ) : (
                                   <input
-                                    type="number"
-                                    value={row.qte}
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      qteFocusRowId === row.id
+                                        ? row.qte
+                                        : toOptionalNumber(row.qte) != null
+                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
+                                          : ""
+                                    }
+                                    onFocus={() => setQteFocusRowId(row.id)}
+                                    onBlur={(e) => {
+                                      setQteFocusRowId(null);
+                                      const raw = e.target.value;
+                                      if (raw.trim() === "") {
+                                        updateRow(row.id, "qte", "");
+                                        return;
+                                      }
+                                      const n = toOptionalNumber(raw);
+                                      if (n == null || n < 0) {
+                                        updateRow(row.id, "qte", "");
+                                      } else {
+                                        updateRow(row.id, "qte", n.toFixed(2));
+                                      }
+                                    }}
                                     onChange={(e) => updateRow(row.id, "qte", e.target.value)}
                                     placeholder="—"
-                                    min={0}
-                                    className="w-full min-w-[7.5rem] tabular-nums text-right"
+                                    className="w-full min-w-[7.5rem] tabular-nums text-center"
                                   />
                                 )}
                               </td>
@@ -1091,9 +1120,9 @@ export default function LivraisonsAliment() {
                                   <option value="MALE & FEMELLE">Male & Femelle</option>
                                 </select>
                               </td>
-                              <td>
+                              <td className="text-center">
                                 {rowReadOnly ? (
-                                  <span className="block text-right tabular-nums px-1 py-0.5">
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
                                     {formatMoneyDisplay(row.prixPerUnit)}
                                   </span>
                                 ) : (
@@ -1104,11 +1133,11 @@ export default function LivraisonsAliment() {
                                     placeholder="—"
                                     step="0.01"
                                     min={0}
-                                    className="w-full min-w-[5.5rem] tabular-nums text-right"
+                                    className="w-full min-w-[5.5rem] tabular-nums text-center"
                                   />
                                 )}
                               </td>
-                              <td className="font-semibold text-sm text-right tabular-nums whitespace-nowrap">
+                              <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
                                 {formatMontantCell(row)}
                               </td>
                               <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
@@ -1148,16 +1177,16 @@ export default function LivraisonsAliment() {
                           <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             TOTAL {selectedSemaine}
                           </td>
-                          <td>—</td>
-                          <td>—</td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(weekTotal.qte, 0)}
+                          <td className="text-center" />
+                          <td className="text-center" />
+                          <td className="text-center tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(weekTotal.qte, 2)}
                           </td>
-                          <td>—</td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
+                          <td className="text-center" />
+                          <td className="text-center tabular-nums whitespace-nowrap">
                             {formatGroupedNumber(weekTotal.prix, 2)}
                           </td>
-                          <td className="text-right tabular-nums whitespace-nowrap font-semibold">
+                          <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(weekTotal.montant, 2)}
                           </td>
                           <td className="w-9 max-w-9 !px-1" />
@@ -1167,16 +1196,16 @@ export default function LivraisonsAliment() {
                           <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                             CUMUL
                           </td>
-                          <td>—</td>
-                          <td>—</td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(cumulForSelectedSemaine.qte, 0)}
+                          <td className="text-center" />
+                          <td className="text-center" />
+                          <td className="text-center tabular-nums whitespace-nowrap">
+                            {formatGroupedNumber(cumulForSelectedSemaine.qte, 2)}
                           </td>
-                          <td>—</td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
+                          <td className="text-center" />
+                          <td className="text-center tabular-nums whitespace-nowrap">
                             {formatGroupedNumber(cumulForSelectedSemaine.prix, 2)}
                           </td>
-                          <td className="text-right tabular-nums whitespace-nowrap font-semibold">
+                          <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
                           </td>
                           <td className="w-9 max-w-9 !px-1" />

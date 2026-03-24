@@ -1,10 +1,9 @@
 /**
  * Vaccination alert sound. Uses Web Audio API.
  *
- * - initAlertSound(): Call on app mount. Listens for first user interaction (click/touch/key)
- *   anywhere on the page to unlock audio. After that, 10-min timer works without bell click.
- * - unlockAndPlayVaccinationAlertSound(): Call from bell click for immediate feedback.
- * - playVaccinationAlertSound(): Uses stored context. Works from 10-min timer after unlock.
+ * - initAlertSound(): First user gesture creates/resumes AudioContext only — no beep (browser autoplay unlock).
+ * - unlockAndPlayVaccinationAlertSound(): Bell with pending alerts — unlock if needed, then play tones.
+ * - playVaccinationAlertSound(): Plays tones when context exists (5‑min poll when server reports pending alerts).
  */
 let audioContext: AudioContext | null = null;
 let initDone = false;
@@ -26,25 +25,40 @@ function playTones(ctx: AudioContext): void {
   playTone(1100, 0.15, 0.15);
 }
 
-function unlockContext(): void {
-  if (audioContext) return;
+/** Create or resume Web Audio context on a user gesture — never plays audible tones. */
+function ensureAudioContext(): void {
+  if (audioContext) {
+    if (audioContext.state === "suspended") {
+      void audioContext.resume().catch(() => {});
+    }
+    return;
+  }
   try {
     const Ctx = typeof window !== "undefined" && (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
     if (!Ctx) return;
     const ctx = new Ctx();
-    playTones(ctx);
     audioContext = ctx;
+    if (ctx.state === "suspended") {
+      void ctx.resume().catch(() => {});
+    }
   } catch {
     // Silently fail
   }
 }
 
-/** Call once when app mounts. Unlocks audio on first user interaction anywhere. */
-export function initAlertSound(): void {
+/**
+ * Call once when app mounts. Unlocks audio on first user interaction anywhere — silent (no beep).
+ * Optional callback runs once when the context is first successfully created (for a subtle UI cue).
+ */
+export function initAlertSound(onSilentUnlock?: () => void): void {
   if (initDone || typeof document === "undefined") return;
   initDone = true;
   const unlock = () => {
-    unlockContext();
+    const hadContext = audioContext !== null;
+    ensureAudioContext();
+    if (!hadContext && audioContext !== null) {
+      onSilentUnlock?.();
+    }
     document.removeEventListener("click", unlock);
     document.removeEventListener("touchstart", unlock);
     document.removeEventListener("keydown", unlock);
@@ -54,12 +68,13 @@ export function initAlertSound(): void {
   document.addEventListener("keydown", unlock, { once: true, capture: true });
 }
 
-/** Call from bell click for immediate feedback. Also unlocks if not yet done. */
+/** Bell click when there are pending alerts: ensure context, then play tones. */
 export function unlockAndPlayVaccinationAlertSound(): void {
-  unlockContext();
+  ensureAudioContext();
+  playVaccinationAlertSound();
 }
 
-/** Play using stored context. Works from 10-min timer after any first user interaction. */
+/** Play using stored context. Works from 5‑min poll after silent unlock (user gesture). */
 export function playVaccinationAlertSound(): void {
   try {
     if (!audioContext || audioContext.state === "closed") return;

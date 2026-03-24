@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -57,6 +57,10 @@ export default function VaccinationAlertsBanner() {
   const [rescheduleTime, setRescheduleTime] = useState("09:00");
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
+  /** Brief Magic UI BorderBeam after silent audio unlock when there are no pending alerts (no beep on first click). */
+  const [silentAudioReadyCue, setSilentAudioReadyCue] = useState(false);
+  const alertsRef = useRef<VaccinationAlertResponse[]>([]);
+  const loadingRef = useRef(true);
 
   const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
   const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
@@ -113,18 +117,29 @@ export default function VaccinationAlertsBanner() {
   }, [fetchAlerts]);
 
   useEffect(() => {
-    initAlertSound();
+    alertsRef.current = alerts;
+  }, [alerts]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    initAlertSound(() => {
+      if (loadingRef.current || alertsRef.current.length > 0) return;
+      setSilentAudioReadyCue(true);
+      window.setTimeout(() => setSilentAudioReadyCue(false), 2200);
+    });
   }, []);
 
-  // Every 5 min: check for unconfirmed vaccination alerts and play reminder sound (works after any first user interaction)
+  // Every 5 min: play reminder only if server reports pending unconfirmed alerts (same rules as banner / vaccination_alert_confirmation)
   useEffect(() => {
     const FIVE_MIN_MS = 5 * 60 * 1000;
     const checkAndPlay = () => {
       api.vaccinationAlerts
-        .list({ farmId: canAccessAllFarms ? selectedFarmId ?? undefined : undefined })
+        .pending({ farmId: canAccessAllFarms ? selectedFarmId ?? undefined : undefined })
         .then((res) => {
-          const list = res?.alerts ?? [];
-          if (list.length > 0) {
+          if (res?.pending === true) {
             playVaccinationAlertSound();
           }
         })
@@ -217,12 +232,32 @@ export default function VaccinationAlertsBanner() {
           aria-label={`Rappels vaccination : ${count} alerte${count !== 1 ? "s" : ""} en attente`}
           title={count === 0 ? "Aucune alerte vaccination" : `${count} alerte${count > 1 ? "s" : ""} à prévoir — Cliquez pour voir`}
         >
-          {hasUnconfirmedAlerts && (
+          {(hasUnconfirmedAlerts || silentAudioReadyCue) && (
             <BorderBeam
               size={40}
-              duration={5}
-              colorFrom={alertTheme === "blend" ? "#3b82f6" : alertTheme === "red" ? "#ef4444" : alertTheme === "blue" ? "#3b82f6" : "#d97706"}
-              colorTo={alertTheme === "blend" ? "#ef4444" : alertTheme === "red" ? "#f87171" : alertTheme === "blue" ? "#60a5fa" : "#f59e0b"}
+              duration={hasUnconfirmedAlerts ? 5 : 7}
+              colorFrom={
+                hasUnconfirmedAlerts
+                  ? alertTheme === "blend"
+                    ? "#3b82f6"
+                    : alertTheme === "red"
+                      ? "#ef4444"
+                      : alertTheme === "blue"
+                        ? "#3b82f6"
+                        : "#d97706"
+                  : "#22d3ee"
+              }
+              colorTo={
+                hasUnconfirmedAlerts
+                  ? alertTheme === "blend"
+                    ? "#ef4444"
+                    : alertTheme === "red"
+                      ? "#f87171"
+                      : alertTheme === "blue"
+                        ? "#60a5fa"
+                        : "#f59e0b"
+                  : "#34d399"
+              }
               borderWidth={1}
               className="rounded-lg"
             />

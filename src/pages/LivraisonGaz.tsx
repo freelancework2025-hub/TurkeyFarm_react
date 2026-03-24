@@ -906,7 +906,7 @@ export default function LivraisonGaz() {
                       <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
                       <th className="min-w-[180px]">designation</th>
                       <th className="min-w-[120px]">fournisseur</th>
-                      <th className="min-w-[70px]">QTE</th>
+                      <th className="min-w-[70px] text-center">QTE</th>
                       <th className="min-w-[80px]">prix</th>
                       <th className="min-w-[90px]">montant</th>
                       <th className="min-w-[90px]">N°BL</th>
@@ -948,7 +948,7 @@ export default function LivraisonGaz() {
                               className="min-w-[100px] bg-transparent border-0 outline-none text-sm w-full"
                             />
                           </td>
-                          <td>
+                          <td className="text-center">
                             <input
                               type="number"
                               value={videSanitaire.qte}
@@ -956,7 +956,7 @@ export default function LivraisonGaz() {
                               placeholder="—"
                               min={0}
                               disabled={videSanitaireReadOnly}
-                              className="bg-transparent border-0 outline-none text-sm w-full"
+                              className="bg-transparent border-0 outline-none text-sm w-full text-center"
                             />
                           </td>
                           <td>
@@ -1048,7 +1048,7 @@ export default function LivraisonGaz() {
                                   className="min-w-[100px] bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td>
+                              <td className="text-center">
                                 <input
                                   type="number"
                                   value={row.qte}
@@ -1056,6 +1056,7 @@ export default function LivraisonGaz() {
                                   placeholder="—"
                                   min={0}
                                   disabled={rowReadOnly}
+                                  className="w-full text-center"
                                 />
                               </td>
                               <td>
@@ -1131,11 +1132,11 @@ export default function LivraisonGaz() {
                               <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine}
                               </td>
-                              <td>{weekTotal.qte}</td>
+                              <td className="text-center tabular-nums">{weekTotal.qte}</td>
                               <td>{weekTotal.prix.toFixed(2)}</td>
                               <td>{weekTotal.montant.toFixed(2)}</td>
-                              <td>—</td>
-                              <td>—</td>
+                              <td className="text-center" />
+                              <td className="text-center" />
                               <td>{weekTotal.male}</td>
                               <td>{weekTotal.femelle}</td>
                               <td></td>
@@ -1144,11 +1145,11 @@ export default function LivraisonGaz() {
                               <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                                 CUMUL
                               </td>
-                              <td>{cumulForSelectedSemaine.qte}</td>
+                              <td className="text-center tabular-nums">{cumulForSelectedSemaine.qte}</td>
                               <td>{cumulForSelectedSemaine.prix.toFixed(2)}</td>
                               <td>{cumulForSelectedSemaine.montant.toFixed(2)}</td>
-                              <td>—</td>
-                              <td>—</td>
+                              <td className="text-center" />
+                              <td className="text-center" />
                               <td>{cumulForSelectedSemaine.male}</td>
                               <td>{cumulForSelectedSemaine.femelle}</td>
                               <td></td>
