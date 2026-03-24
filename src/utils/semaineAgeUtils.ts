@@ -65,8 +65,35 @@ export function computeAgeByRowId<T extends { id: string }>(
       return 0;
     });
 
-    semRows.forEach((r, i) => {
-      ageById.set(r.id, baseAge + i + 1);
+    const usedAges = new Set<number>();
+    const withoutStored: T[] = [];
+
+    semRows.forEach((r) => {
+      const sa = getStoredAge?.(r);
+      if (sa != null) {
+        usedAges.add(sa);
+        ageById.set(r.id, sa);
+      } else {
+        withoutStored.push(r);
+      }
+    });
+
+    const availableAges: number[] = [];
+    const maxAgeToGenerate = baseAge + semRows.length + 10;
+    for (let i = 1; i <= maxAgeToGenerate; i++) {
+        const potentialAge = baseAge + i;
+        if (!usedAges.has(potentialAge)) {
+            availableAges.push(potentialAge);
+        }
+    }
+
+    withoutStored.forEach((r, idx) => {
+      if (idx < availableAges.length) {
+         ageById.set(r.id, availableAges[idx]);
+      } else {
+         // Fallback if more rows than anticipated
+         ageById.set(r.id, availableAges[availableAges.length - 1] + (idx - availableAges.length + 1));
+      }
     });
   }
 

@@ -176,7 +176,7 @@ export default function LivraisonsAliment() {
     api.farms
       .list()
       .then((list) => setFarms(list))
-      .catch(() => {});
+      .catch(() => { });
   }, [canAccessAllFarms, pageFarmId, showFarmSelector, farms]);
 
   useEffect(() => {
@@ -307,11 +307,11 @@ export default function LivraisonsAliment() {
     const startDate =
       forSem.length > 0
         ? (() => {
-            const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
-            if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
-            const maxD = dates.sort()[dates.length - 1];
-            return addOneDay(maxD);
-          })()
+          const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
+          if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
+          const maxD = dates.sort()[dates.length - 1];
+          return addOneDay(maxD);
+        })()
         : getStartDateForSemaine(selectedSemaine);
     const newRows: LivraisonRow[] = [];
     let nextDate = startDate;
@@ -402,6 +402,30 @@ export default function LivraisonsAliment() {
             updated.montant = (qte * prix).toFixed(2);
           }
         }
+
+        // Auto-distribute qte into male/female qty based on sex selection
+        if (field === "sex" || field === "qte") {
+          const currentSex = field === "sex" ? value : r.sex;
+          const currentQteStr = field === "qte" ? value : r.qte;
+          const currentQte = toNum(currentQteStr);
+
+          if (currentSex === "MALE") {
+            updated.maleQty = currentQte > 0 ? currentQte.toString() : "";
+            updated.femaleQty = "";
+          } else if (currentSex === "FEMELLE") {
+            updated.femaleQty = currentQte > 0 ? currentQte.toString() : "";
+            updated.maleQty = "";
+          } else if (currentSex === "MALE & FEMELLE") {
+            const maleHalf = Math.floor(currentQte / 2);
+            const femaleHalf = currentQte - maleHalf;
+            updated.maleQty = maleHalf > 0 ? maleHalf.toString() : "";
+            updated.femaleQty = femaleHalf > 0 ? femaleHalf.toString() : "";
+          } else if (!currentSex) {
+            // Option to clear out the split if none is selected, or leave manual intact
+            // Leaving it intact is safer if users manually fill them without picking sex
+          }
+        }
+
         return updated;
       })
     );
@@ -529,11 +553,11 @@ export default function LivraisonsAliment() {
           prev.map((r) =>
             r.id === row.id
               ? {
-                  ...r,
-                  serverId: created.id,
-                  age: created.age != null ? String(created.age) : r.age,
-                  sem: created.sem ?? r.sem,
-                }
+                ...r,
+                serverId: created.id,
+                age: created.age != null ? String(created.age) : r.age,
+                sem: created.sem ?? r.sem,
+              }
               : r
           )
         );
@@ -591,13 +615,13 @@ export default function LivraisonsAliment() {
   /** Rows for the selected semaine only; sorted by date (day 1, day 2, ...). */
   const currentRows = selectedSemaine
     ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
-        const ageA = displayAgeByRowId.get(a.id);
-        const ageB = displayAgeByRowId.get(b.id);
-        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
-        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
-        if (numA !== numB) return numA - numB;
-        return (a.date || "").localeCompare(b.date || "");
-      })
+      const ageA = displayAgeByRowId.get(a.id);
+      const ageB = displayAgeByRowId.get(b.id);
+      const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+      const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+      if (numA !== numB) return numA - numB;
+      return (a.date || "").localeCompare(b.date || "");
+    })
     : [];
 
   /** Total for current semaine only. */
@@ -956,19 +980,17 @@ export default function LivraisonsAliment() {
                       <th className="min-w-[120px]">FOURNISSEUR</th>
                       <th className="min-w-[90px]">N° BL</th>
                       <th className="min-w-[90px]">N° BR</th>
-                      <th className="min-w-[128px] w-[8.5rem]">QTE</th>
-                      <th className="min-w-[80px]">SEX</th>
+                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
+                      <th className="min-w-[150px] w-[9.5rem]">SEX</th>
                       <th className="min-w-[80px]">PRIX</th>
                       <th className="min-w-[90px]">MONTANT</th>
-                      <th className="min-w-[70px]" title="Qté livrée pour Mâle — alimente CONSOMMATION ALIMENT du Mâle">MALE</th>
-                      <th className="min-w-[80px]" title="Qté livrée pour Femelle — alimente CONSOMMATION ALIMENT de la Femelle">FEMELLE</th>
-                      <th className="min-w-[80px]" title="Enregistrer la ligne">✓</th>
+                      <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">✓</th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {loading ? (
-                        <tr>
+                      <tr>
                         <td colSpan={15} className="p-8 text-center text-muted-foreground">
                           Chargement…
                         </td>
@@ -1056,16 +1078,17 @@ export default function LivraisonsAliment() {
                                   />
                                 )}
                               </td>
-                              <td>
+                              <td className="min-w-[150px] w-[9.5rem]">
                                 <select
                                   value={row.sex}
                                   onChange={(e) => updateRow(row.id, "sex", e.target.value)}
                                   disabled={rowReadOnly}
-                                  className="w-full min-w-[70px] bg-transparent border-0 outline-none text-sm rounded px-1 py-0.5"
+                                  className="w-full min-w-[8.5rem] bg-transparent border-0 outline-none text-sm rounded px-1 py-0.5"
                                 >
                                   <option value="">—</option>
                                   <option value="MALE">Male</option>
                                   <option value="FEMELLE">Femelle</option>
+                                  <option value="MALE & FEMELLE">Male & Femelle</option>
                                 </select>
                               </td>
                               <td>
@@ -1088,45 +1111,13 @@ export default function LivraisonsAliment() {
                               <td className="font-semibold text-sm text-right tabular-nums whitespace-nowrap">
                                 {formatMontantCell(row)}
                               </td>
-                              <td>
-                                {rowReadOnly ? (
-                                  <span className="block text-right tabular-nums px-1 py-0.5">
-                                    {formatQtyDisplay(row.maleQty)}
-                                  </span>
-                                ) : (
-                                  <input
-                                    type="number"
-                                    value={row.maleQty}
-                                    onChange={(e) => updateRow(row.id, "maleQty", e.target.value)}
-                                    placeholder="0"
-                                    min={0}
-                                    className="w-full min-w-[5rem] tabular-nums text-right"
-                                  />
-                                )}
-                              </td>
-                              <td>
-                                {rowReadOnly ? (
-                                  <span className="block text-right tabular-nums px-1 py-0.5">
-                                    {formatQtyDisplay(row.femaleQty)}
-                                  </span>
-                                ) : (
-                                  <input
-                                    type="number"
-                                    value={row.femaleQty}
-                                    onChange={(e) => updateRow(row.id, "femaleQty", e.target.value)}
-                                    placeholder="0"
-                                    min={0}
-                                    className="w-full min-w-[5rem] tabular-nums text-right"
-                                  />
-                                )}
-                              </td>
-                              <td>
+                              <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                                 {canSaveRow && (
                                   <button
                                     type="button"
                                     onClick={() => saveRow(row)}
                                     disabled={isSaving || loading}
-                                    className="text-muted-foreground hover:text-primary transition-colors p-1"
+                                    className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
                                     title="Enregistrer la ligne"
                                   >
                                     {isSaving ? (
@@ -1169,13 +1160,7 @@ export default function LivraisonsAliment() {
                           <td className="text-right tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(weekTotal.montant, 2)}
                           </td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(weekTotal.maleQty, 0)}
-                          </td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(weekTotal.femaleQty, 0)}
-                          </td>
-                          <td></td>
+                          <td className="w-9 max-w-9 !px-1" />
                           <td></td>
                         </tr>
                         <tr className="bg-muted/50">
@@ -1194,13 +1179,7 @@ export default function LivraisonsAliment() {
                           <td className="text-right tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
                           </td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(cumulForSelectedSemaine.maleQty, 0)}
-                          </td>
-                          <td className="text-right tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(cumulForSelectedSemaine.femaleQty, 0)}
-                          </td>
-                          <td></td>
+                          <td className="w-9 max-w-9 !px-1" />
                           <td></td>
                         </tr>
                       </>
