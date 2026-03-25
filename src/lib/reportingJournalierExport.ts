@@ -8,6 +8,7 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
 import { api, type SetupInfoResponse, type DailyReportResponse } from "@/lib/api";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 export interface ReportingJournalierExportParams {
   farmName: string;
@@ -281,8 +282,26 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
   }
 
   // Table 1 footer: Total Mâle/Femelle (colspan 4), value in Effectif col; Total Général same
-  const totalMaleFemaleRow = ["Total Mâle / Femelle :", "", "", "", `${totalMale} / ${totalFemale}`, "", "", ""];
-  const totalGeneralRow = ["Total Général :", "", "", "", String(totalMale + totalFemale), "", "", ""];
+  const totalMaleFemaleRow = [
+    "Total Mâle / Femelle :",
+    "",
+    "",
+    "",
+    `${formatGroupedNumber(totalMale, 0)} / ${formatGroupedNumber(totalFemale, 0)}`,
+    "",
+    "",
+    "",
+  ];
+  const totalGeneralRow = [
+    "Total Général :",
+    "",
+    "",
+    "",
+    formatGroupedNumber(totalMale + totalFemale, 0),
+    "",
+    "",
+    "",
+  ];
   for (const arr of [totalMaleFemaleRow, totalGeneralRow]) {
     for (let c = 0; c < EFFECTIF_COLS.length; c++) {
       const cell = ws.getCell(dataRow, c + 1);
@@ -326,7 +345,18 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
   }
 
   const totalMortality = dailyList.reduce((s, r) => s + (r.nbr ?? 0), 0);
-  const totalMortalityRow = ["Total Mortalité :", "", "", "", "", totalMortality, "", "", "", ""];
+  const totalMortalityRow = [
+    "Total Mortalité :",
+    "",
+    "",
+    "",
+    "",
+    formatGroupedNumber(totalMortality, 0),
+    "",
+    "",
+    "",
+    "",
+  ];
   for (let c = 0; c < DAILY_COLS.length; c++) {
     const cell = ws.getCell(dataRow, c + 1);
     cell.value = totalMortalityRow[c] ?? "";
@@ -416,8 +446,26 @@ export async function exportToPdf(params: ReportingJournalierExportParams): Prom
   startY += 6;
 
   const effectifBody: string[][] = setupList.map((r) => effectifRowToArray(r).map(String));
-  effectifBody.push(["Total Mâle / Femelle :", "", "", "", `${totalMale} / ${totalFemale}`, "", "", ""]);
-  effectifBody.push(["Total Général :", "", "", "", String(totalMale + totalFemale), "", "", ""]);
+  effectifBody.push([
+    "Total Mâle / Femelle :",
+    "",
+    "",
+    "",
+    `${formatGroupedNumber(totalMale, 0)} / ${formatGroupedNumber(totalFemale, 0)}`,
+    "",
+    "",
+    "",
+  ]);
+  effectifBody.push([
+    "Total Général :",
+    "",
+    "",
+    "",
+    formatGroupedNumber(totalMale + totalFemale, 0),
+    "",
+    "",
+    "",
+  ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (doc as any).autoTable({
@@ -458,7 +506,7 @@ export async function exportToPdf(params: ReportingJournalierExportParams): Prom
   const effectivePlacement = getEffectivePlacement(setupList, dailyList);
   const dailyBody: string[][] = dailyList.map((r) => dailyRowToArray(r, effectivePlacement).map(String));
   const totalMortality = dailyList.reduce((s, r) => s + (r.nbr ?? 0), 0);
-  dailyBody.push(["Total Mortalité :", "", "", "", "", String(totalMortality), "", "", "", ""]);
+  dailyBody.push(["Total Mortalité :", "", "", "", "", formatGroupedNumber(totalMortality, 0), "", "", "", ""]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (doc as any).autoTable({

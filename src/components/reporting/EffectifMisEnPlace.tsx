@@ -2,6 +2,17 @@ import { useState, useEffect, useCallback } from "react";
 import { Loader2, Info } from "lucide-react";
 import { api, type SetupInfoResponse } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+
+function toNum(s: string): number {
+  const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function formatEffectifDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 0) : "—";
+}
 
 interface SetupInfoRow {
   id: string;
@@ -65,10 +76,10 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
 
   const totalMale = rows
     .filter((r) => r.sex === "Mâle")
-    .reduce((sum, r) => sum + (parseInt(r.effectifMisEnPlace) || 0), 0);
+    .reduce((sum, r) => sum + toNum(r.effectifMisEnPlace), 0);
   const totalFemale = rows
     .filter((r) => r.sex === "Femelle")
-    .reduce((sum, r) => sum + (parseInt(r.effectifMisEnPlace) || 0), 0);
+    .reduce((sum, r) => sum + toNum(r.effectifMisEnPlace), 0);
 
   if (loading) {
     return (
@@ -124,14 +135,14 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
         <table className="table-farm">
           <thead>
             <tr>
-              <th>Date Mise en Place</th>
-              <th>Heure</th>
-              <th>Bâtiment</th>
-              <th>Sexe</th>
-              <th>Effectif Initial</th>
-              <th>Type d'élevage</th>
-              <th>Fournisseur</th>
-              <th>Souche</th>
+              <th className="min-w-[110px]">DATE MISE EN PLACE</th>
+              <th className="min-w-[72px]">HEURE</th>
+              <th className="min-w-[120px]">BÂTIMENT</th>
+              <th className="min-w-[88px]">SEXE</th>
+              <th className="min-w-[112px] !text-center">EFFECTIF INITIAL</th>
+              <th className="min-w-[120px]">TYPE D&apos;ÉLEVAGE</th>
+              <th className="min-w-[120px]">FOURNISSEUR</th>
+              <th className="min-w-[100px]">SOUCHE</th>
             </tr>
           </thead>
           <tbody>
@@ -149,7 +160,9 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
                     {row.sex}
                   </span>
                 </td>
-                <td className="text-sm font-bold">{row.effectifMisEnPlace}</td>
+                <td className="text-sm font-bold text-center tabular-nums whitespace-nowrap">
+                  {formatEffectifDisplay(row.effectifMisEnPlace)}
+                </td>
                 <td className="text-sm">{row.typeElevage}</td>
                 <td className="text-sm">{row.origineFournisseur}</td>
                 <td className="text-sm">{row.souche}</td>
@@ -158,20 +171,20 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
           </tbody>
           <tfoot>
             <tr className="bg-muted/60">
-              <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
+              <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2 text-muted-foreground">
                 Total Mâle / Femelle :
               </td>
-              <td className="px-3 py-2 font-bold text-sm">
-                {totalMale} / {totalFemale}
+              <td className="px-3 py-2 font-bold text-sm text-center tabular-nums whitespace-nowrap">
+                {formatGroupedNumber(totalMale, 0)} / {formatGroupedNumber(totalFemale, 0)}
               </td>
               <td colSpan={3}></td>
             </tr>
             <tr className="bg-muted/60">
-              <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
+              <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2 text-muted-foreground">
                 Total Général :
               </td>
-              <td className="px-3 py-2 font-bold text-sm text-accent">
-                {totalMale + totalFemale}
+              <td className="px-3 py-2 font-bold text-sm text-accent text-center tabular-nums whitespace-nowrap">
+                {formatGroupedNumber(totalMale + totalFemale, 0)}
               </td>
               <td colSpan={3}></td>
             </tr>

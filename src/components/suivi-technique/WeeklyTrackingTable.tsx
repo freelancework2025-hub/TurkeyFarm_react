@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Plus, Save, Trash2, Loader2 } from "lucide-react";
+import { Plus, Save, Trash2, Loader2, Check } from "lucide-react";
 import { api, type SuiviTechniqueHebdoResponse, type SuiviTechniqueHebdoRequest } from "@/lib/api";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -63,6 +64,26 @@ function isSavedRow(id: string): boolean {
   return /^\d+$/.test(id);
 }
 
+function parseDisplayFraction(raw: string | undefined): number | null {
+  if (raw == null || raw.trim() === "") return null;
+  const n = parseFloat(raw.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Mortalité % cells: API/computed strings use dot; display with grouped thousands + dot decimal. */
+function formatPctCell(raw: string | undefined): string {
+  const n = parseDisplayFraction(raw);
+  if (n == null) return "—";
+  return `${formatGroupedNumber(n, 2)} %`;
+}
+
+function formatIntCell(raw: string | undefined): string {
+  if (raw == null || raw.trim() === "") return "—";
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return "—";
+  return formatGroupedNumber(n, 0);
+}
+
 /** Row has meaningful daily data (age, mortality, water). Placeholder rows with only effectif_depart should stay editable. */
 function hasMeaningfulDailyData(row: WeeklyRow): boolean {
   return (
@@ -119,7 +140,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
 
   const [rows, setRows] = useState<WeeklyRow[]>(() => emptyWeekRows(today));
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  /** Row id (string) while that row's daily data is being saved */
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [savingEffectif, setSavingEffectif] = useState(false);
 
   const load = useCallback(async () => {
@@ -216,7 +238,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     } finally {
       setLoading(false);
     }
-  }, [farmId, lot, sex, batiment, semaine, isReadOnly, toast, today]);
+  }, [farmId, lot, sex, batiment, semaine, isReadOnly, toast, today, canCreate, canUpdate, isFirstWeek, onSaveSuccess]);
 
   useEffect(() => {
     load();
@@ -260,53 +282,72 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     );
   };
 
-  const handleSave = async () => {
-    if (!canCreate) {
-      toast({ title: "Non autorisé", description: "Vous ne pouvez pas créer de données.", variant: "destructive" });
+  const rowToRequest = (r: WeeklyRow): SuiviTechniqueHebdoRequest => ({
+    lot,
+    sex,
+    batiment,
+    semaine,
+    effectifDepart: effectifDepart ? parseInt(effectifDepart, 10) : null,
+    recordDate: r.recordDate,
+    ageJour: r.ageJour.trim() !== "" ? parseInt(r.ageJour, 10) : null,
+    mortaliteNbre: r.mortaliteNbre.trim() !== "" ? parseInt(r.mortaliteNbre, 10) : null,
+    consoEauL: r.consoEauL.trim() !== "" ? parseFloat(r.consoEauL) : null,
+    tempMin: r.tempMin.trim() !== "" ? parseFloat(r.tempMin) : null,
+    tempMax: r.tempMax.trim() !== "" ? parseFloat(r.tempMax) : null,
+    vaccination: r.vaccination.trim() || null,
+    traitement: r.traitement.trim() || null,
+    observation: r.observation.trim() || null,
+  });
+
+  /**
+   * Per-row save. Uses PUT upsert when possible. For Responsable Ferme completing a DB placeholder
+   * (no update permission), uses saveBatch([one]) so the backend merges without requiring UPDATE
+   * — never use single-row saveBatch when user has DELETE, or the week would be wiped and replaced.
+   */
+  const saveRow = async (row: WeeklyRow) => {
+    if (!canCreate && !canUpdate) {
+      toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer.", variant: "destructive" });
       return;
     }
-
-    // Responsable de ferme: can only create; exclude already-saved rows from batch EXCEPT placeholder rows
-    // (saved with only effectif_depart) which they can complete by filling age/mortality/water
-    const toSend: SuiviTechniqueHebdoRequest[] = rows
-      .filter((r) => r.recordDate && (r.mortaliteNbre.trim() !== "" || r.consoEauL.trim() !== ""))
-      .filter((r) => canUpdate || !isSavedRow(r.id) || hasMeaningfulDailyData(r))
-      .map((r) => ({
-        lot,
-        sex,
-        batiment,
-        semaine,
-        effectifDepart: effectifDepart ? parseInt(effectifDepart) : null,
-        recordDate: r.recordDate,
-        ageJour: r.ageJour.trim() !== "" ? parseInt(r.ageJour) : null,
-        mortaliteNbre: r.mortaliteNbre.trim() !== "" ? parseInt(r.mortaliteNbre) : null,
-        consoEauL: r.consoEauL.trim() !== "" ? parseFloat(r.consoEauL) : null,
-        tempMin: r.tempMin.trim() !== "" ? parseFloat(r.tempMin) : null,
-        tempMax: r.tempMax.trim() !== "" ? parseFloat(r.tempMax) : null,
-        vaccination: r.vaccination.trim() || null,
-        traitement: r.traitement.trim() || null,
-        observation: r.observation.trim() || null,
-      }));
-
-    if (toSend.length === 0) {
+    if (!row.recordDate?.trim()) {
       toast({
-        title: "Aucune ligne à enregistrer",
-        description: "Renseignez au moins une date et une valeur de mortalité ou consommation d'eau.",
+        title: "Ligne incomplète",
+        description: "Renseignez une date.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (row.mortaliteNbre.trim() === "" && row.consoEauL.trim() === "") {
+      toast({
+        title: "Ligne incomplète",
+        description: "Renseignez au moins la mortalité (nombre) ou la consommation d'eau.",
         variant: "destructive",
       });
       return;
     }
 
-    setSaving(true);
+    const saved = isSavedRow(row.id);
+    const isPlaceholder = row.isPlaceholder ?? !hasMeaningfulDailyData(row);
+    if (saved && !canUpdate && !isPlaceholder) return;
+
+    const payload = rowToRequest(row);
+    const useBatchMergeOnly =
+      !canDelete && saved && isPlaceholder;
+
+    setSavingRowId(row.id);
     try {
-      await api.suiviTechniqueHebdo.saveBatch(toSend, farmId);
-      toast({ title: "Données enregistrées", description: `${toSend.length} ligne(s) enregistrée(s).` });
+      if (useBatchMergeOnly) {
+        await api.suiviTechniqueHebdo.saveBatch([payload], farmId);
+      } else {
+        await api.suiviTechniqueHebdo.save(payload, farmId);
+      }
+      toast({ title: "Ligne enregistrée", description: "Données du jour sauvegardées." });
       onSaveSuccess?.();
       await load();
     } catch {
       /* API error — logged in backend only */
     } finally {
-      setSaving(false);
+      setSavingRowId(null);
     }
   };
 
@@ -437,6 +478,9 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     );
   }
 
+  const showSaveCol = !isReadOnly && (canCreate || canUpdate);
+  const showDeleteCol = !isReadOnly && (canDelete || canCreate);
+
   return (
     <div className="space-y-4">
       {/* Effectif départ: compact card for current semaine */}
@@ -487,22 +531,21 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             <p className="text-xs text-muted-foreground">
               Lot {lot}
             </p>
+            {!isReadOnly && (canCreate || canUpdate) && (
+              <p className="text-xs text-muted-foreground mt-1 max-w-xl">
+                Enregistrez chaque ligne avec ✓. Les rôles sans droit de mise à jour complètent les lignes
+                « brouillon » (effectif seul) via la même action.
+              </p>
+            )}
           </div>
-          {!isReadOnly && (
+          {!isReadOnly && canCreate && (
             <div className="flex gap-2">
               <button
+                type="button"
                 onClick={addRow}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
               >
                 <Plus className="w-4 h-4" /> Ligne
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={!canCreate || saving}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Enregistrer
               </button>
             </div>
           )}
@@ -523,7 +566,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
               <col className="w-[90px]" />
               <col className="w-[90px]" />
               <col style={{ width: "1%", minWidth: 140 }} />
-              {!isReadOnly && (canDelete || canCreate) ? <col className="w-10" /> : null}
+              {showSaveCol ? <col className="w-10" /> : null}
+              {showDeleteCol ? <col className="w-10" /> : null}
             </colgroup>
             <thead>
               <tr className="bg-muted/80 border-b-2 border-border">
@@ -548,7 +592,12 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                 <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border">
                   OBSERVATION
                 </th>
-                {!isReadOnly && (canDelete || canCreate) ? <th className="w-10 border-l border-border"></th> : null}
+                {showSaveCol ? (
+                  <th className="w-10 border-l border-border text-center text-xs font-semibold text-foreground" title="Enregistrer la ligne">
+                    ✓
+                  </th>
+                ) : null}
+                {showDeleteCol ? <th className="w-10 border-l border-border"></th> : null}
               </tr>
               <tr className="bg-muted/60 border-b border-border">
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
@@ -563,7 +612,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">VACCINATION</th>
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">TRAITEMENT</th>
                 <th className="px-1 py-1 border-r border-border"></th>
-                {!isReadOnly && (canDelete || canCreate) ? <th className="border-l border-border"></th> : null}
+                {showSaveCol ? <th className="border-l border-border"></th> : null}
+                {showDeleteCol ? <th className="border-l border-border"></th> : null}
               </tr>
             </thead>
             <tbody>
@@ -684,10 +734,29 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                         readOnly={readOnly}
                       />
                     </td>
-                    {!isReadOnly && (canDelete || canCreate) ? (
+                    {showSaveCol ? (
+                      <td className="border-l border-border text-center align-middle px-0.5">
+                        <button
+                          type="button"
+                          onClick={() => saveRow(row)}
+                          disabled={readOnly || savingRowId !== null}
+                          className="inline-flex items-center justify-center p-1.5 rounded-md text-primary hover:bg-primary/10 disabled:opacity-40 disabled:pointer-events-none"
+                          aria-label="Enregistrer la ligne"
+                          title="Enregistrer cette ligne"
+                        >
+                          {savingRowId === row.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                          ) : (
+                            <Check className="w-4 h-4 shrink-0" />
+                          )}
+                        </button>
+                      </td>
+                    ) : null}
+                    {showDeleteCol ? (
                       <td className="border-l border-border text-center align-middle">
                         {index >= ROWS_PER_WEEK && (canDelete || !saved) ? (
                           <button
+                            type="button"
                             onClick={() => removeRow(row.id)}
                             className="inline-flex p-1.5 text-muted-foreground hover:text-destructive hover:bg-muted rounded transition-colors"
                             disabled={rows.length <= ROWS_PER_WEEK}
@@ -707,26 +776,26 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                 <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border">
                   TOTAL {semaine}
                 </td>
-                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-destructive">
-                  {weeklyTotals.totalMortality}
+                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-destructive whitespace-nowrap">
+                  {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
                 </td>
-                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums">
+                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
                   {rows.length && effectifDepart?.trim() ? (() => {
                     const effectif = parseInt(effectifDepart, 10);
                     if (Number.isNaN(effectif) || effectif <= 0) return "—";
-                    const pct = ((weeklyTotals.totalMortality / effectif) * 100).toFixed(2);
-                    return `${pct.replace(".", ",")} %`;
+                    return `${formatGroupedNumber((weeklyTotals.totalMortality / effectif) * 100, 2)} %`;
                   })() : "—"}
                 </td>
                 <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border"></td>
-                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground">
-                  {weeklyTotals.totalWater.toFixed(1).replace(".", ",")} L
+                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground whitespace-nowrap">
+                  {`${formatGroupedNumber(weeklyTotals.totalWater, 2)} L`}
                 </td>
                 <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border"></td>
                 <td className="px-1.5 py-2 text-center border-r border-border"></td>
                 <td className="px-1.5 py-2 text-center border-r border-border"></td>
                 <td className="px-1.5 py-2 text-center border-r border-border"></td>
-                {!isReadOnly && (canDelete || canCreate) ? <td className="px-1.5 py-2 text-center border-l border-border"></td> : null}
+                {showSaveCol ? <td className="px-1.5 py-2 text-center border-l border-border"></td> : null}
+                {showDeleteCol ? <td className="px-1.5 py-2 text-center border-l border-border"></td> : null}
               </tr>
             </tfoot>
           </table>

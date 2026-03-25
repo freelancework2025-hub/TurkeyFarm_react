@@ -5,6 +5,7 @@
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 export interface ResumeProductionHebdoExportParams {
   farmName: string;
@@ -19,9 +20,9 @@ export interface ResumeProductionHebdoExportParams {
     recordDate: string;
     ageJour: number | null;
     mortaliteNbre: number;
-    mortalitePct: string;
+    mortalitePct: number;
     mortaliteCumul: number;
-    mortaliteCumulPct: string;
+    mortaliteCumulPct: number;
     consoEauL: number;
     tempMin: number | null;
     tempMax: number | null;
@@ -58,8 +59,12 @@ const BORDERS_ALL = { top: BORDER_THIN, left: BORDER_THIN, bottom: BORDER_THIN, 
 
 function formatVal(value: number | null | undefined, unit?: string): string {
   if (value == null || Number.isNaN(value)) return "—";
-  const s = Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
+  const s = Number.isInteger(value) ? formatGroupedNumber(value, 0) : formatGroupedNumber(value, 2);
   return unit ? `${s} ${unit}` : s;
+}
+
+function formatPctExport(p: number): string {
+  return `${formatGroupedNumber(p, 2)} %`;
 }
 
 function safeFileName(parts: string[]): string {
@@ -124,11 +129,11 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   addInfoBlock(ws, [
     ["Date de mise en place", setup.dateMiseEnPlace],
     ["Souche", setup.souche],
-    ["Effectif mis en place", setup.effectifMisEnPlace],
+    ["Effectif mis en place", formatGroupedNumber(setup.effectifMisEnPlace, 0)],
   ]);
 
   addTitle(ws, `2. Effectif départ de ${semaine}`);
-  addInfoBlock(ws, [["Effectif départ", totalEffectifDepart]]);
+  addInfoBlock(ws, [["Effectif départ", formatGroupedNumber(totalEffectifDepart, 0)]]);
 
   addTitle(ws, `3. Suivi hebdomadaire — Tous bâtiments — ${semaine}`);
   const weeklyHeaders = [
@@ -159,14 +164,14 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   const safeStr = (s: string | null | undefined) => (s?.trim() ? s.trim() : "—");
   for (const r of weeklyRows) {
     ws.getCell(currentRow, 1).value = r.recordDate;
-    ws.getCell(currentRow, 2).value = r.ageJour ?? "—";
-    ws.getCell(currentRow, 3).value = r.mortaliteNbre;
-    ws.getCell(currentRow, 4).value = r.mortalitePct ? `${r.mortalitePct.replace(".", ",")} %` : "—";
-    ws.getCell(currentRow, 5).value = r.mortaliteCumul;
-    ws.getCell(currentRow, 6).value = r.mortaliteCumulPct ? `${r.mortaliteCumulPct.replace(".", ",")} %` : "—";
-    ws.getCell(currentRow, 7).value = r.consoEauL;
-    ws.getCell(currentRow, 8).value = r.tempMin != null ? r.tempMin : "—";
-    ws.getCell(currentRow, 9).value = r.tempMax != null ? r.tempMax : "—";
+    ws.getCell(currentRow, 2).value = r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—";
+    ws.getCell(currentRow, 3).value = formatGroupedNumber(r.mortaliteNbre, 0);
+    ws.getCell(currentRow, 4).value = formatPctExport(r.mortalitePct);
+    ws.getCell(currentRow, 5).value = formatGroupedNumber(r.mortaliteCumul, 0);
+    ws.getCell(currentRow, 6).value = formatPctExport(r.mortaliteCumulPct);
+    ws.getCell(currentRow, 7).value = formatGroupedNumber(r.consoEauL, 2);
+    ws.getCell(currentRow, 8).value = r.tempMin != null ? formatGroupedNumber(r.tempMin, 2) : "—";
+    ws.getCell(currentRow, 9).value = r.tempMax != null ? formatGroupedNumber(r.tempMax, 2) : "—";
     ws.getCell(currentRow, 10).value = safeStr(r.vaccination);
     ws.getCell(currentRow, 11).value = safeStr(r.traitement);
     ws.getCell(currentRow, 12).value = safeStr(r.observation);
@@ -179,15 +184,15 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   }
   const totalPct =
     totalEffectifDepart > 0
-      ? `${((weeklyTotals.totalMortality / totalEffectifDepart) * 100).toFixed(2).replace(".", ",")} %`
+      ? formatPctExport((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
       : "—";
   ws.getCell(currentRow, 1).value = `TOTAL ${semaine}`;
   ws.getCell(currentRow, 2).value = "—";
-  ws.getCell(currentRow, 3).value = weeklyTotals.totalMortality;
+  ws.getCell(currentRow, 3).value = formatGroupedNumber(weeklyTotals.totalMortality, 0);
   ws.getCell(currentRow, 4).value = totalPct;
-  ws.getCell(currentRow, 5).value = weeklyTotals.totalMortality;
+  ws.getCell(currentRow, 5).value = formatGroupedNumber(weeklyTotals.totalMortality, 0);
   ws.getCell(currentRow, 6).value = totalPct;
-  ws.getCell(currentRow, 7).value = weeklyTotals.totalWater;
+  ws.getCell(currentRow, 7).value = formatGroupedNumber(weeklyTotals.totalWater, 2);
   ws.getCell(currentRow, 8).value = "—";
   ws.getCell(currentRow, 9).value = "—";
   ws.getCell(currentRow, 10).value = "—";
@@ -233,8 +238,8 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   let prodIdx = 0;
   for (const [label, nb, poids] of prodBody) {
     ws.getCell(currentRow, 1).value = label;
-    ws.getCell(currentRow, 2).value = nb;
-    ws.getCell(currentRow, 3).value = Number.isFinite(poids) ? poids : 0;
+    ws.getCell(currentRow, 2).value = formatGroupedNumber(nb, 0);
+    ws.getCell(currentRow, 3).value = formatGroupedNumber(Number.isFinite(poids) ? poids : 0, 2);
     for (let c = 1; c <= 3; c++) {
       ws.getCell(currentRow, c).border = BORDERS_ALL;
       if (label === "TOTAL") {
@@ -305,7 +310,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   const setupBody: [string, string][] = [
     ["Date de mise en place", setup.dateMiseEnPlace ?? "—"],
     ["Souche", setup.souche ?? "—"],
-    ["Effectif mis en place", String(setup.effectifMisEnPlace ?? "—")],
+    ["Effectif mis en place", formatGroupedNumber(setup.effectifMisEnPlace, 0)],
   ];
   autoTable(doc, {
     head: [["CHAMP", "VALEUR"]],
@@ -324,7 +329,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   y += 6;
   autoTable(doc, {
     head: [["INDICATEUR", "VALEUR"]],
-    body: [["Effectif départ", String(totalEffectifDepart)]],
+    body: [["Effectif départ", formatGroupedNumber(totalEffectifDepart, 0)]],
     startY: y,
     margin: { left: margin, right: margin },
     theme: "grid",
@@ -353,30 +358,30 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   ];
   const weeklyBody = weeklyRows.map((r) => [
     r.recordDate,
-    r.ageJour ?? "—",
-    r.mortaliteNbre,
-    r.mortalitePct ? `${r.mortalitePct} %` : "—",
-    r.mortaliteCumul,
-    r.mortaliteCumulPct ? `${r.mortaliteCumulPct} %` : "—",
-    r.consoEauL.toFixed(1),
-    r.tempMin != null ? r.tempMin : "—",
-    r.tempMax != null ? r.tempMax : "—",
+    r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—",
+    formatGroupedNumber(r.mortaliteNbre, 0),
+    formatPctExport(r.mortalitePct),
+    formatGroupedNumber(r.mortaliteCumul, 0),
+    formatPctExport(r.mortaliteCumulPct),
+    formatGroupedNumber(r.consoEauL, 2),
+    r.tempMin != null ? formatGroupedNumber(r.tempMin, 2) : "—",
+    r.tempMax != null ? formatGroupedNumber(r.tempMax, 2) : "—",
     pdfSafeStr(r.vaccination),
     pdfSafeStr(r.traitement),
     pdfSafeStr(r.observation),
   ]);
   const totalPct =
     totalEffectifDepart > 0
-      ? `${((weeklyTotals.totalMortality / totalEffectifDepart) * 100).toFixed(2)} %`
+      ? formatPctExport((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
       : "—";
   weeklyBody.push([
     `TOTAL ${semaine}`,
     "—",
-    String(weeklyTotals.totalMortality),
+    formatGroupedNumber(weeklyTotals.totalMortality, 0),
     totalPct,
-    String(weeklyTotals.totalMortality),
+    formatGroupedNumber(weeklyTotals.totalMortality, 0),
     totalPct,
-    weeklyTotals.totalWater.toFixed(1),
+    formatGroupedNumber(weeklyTotals.totalWater, 2),
     "—",
     "—",
     "—",
@@ -431,11 +436,11 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   doc.text("5. Suivi de la livraison — Tous bâtiments — " + semaine, margin, y);
   y += 6;
   const prodBody: [string, string, string][] = [
-    ["REPORT", String(production.reportNbre ?? "—"), String(production.reportPoids ?? "—")],
-    ["VENTE", String(production.venteNbre ?? "—"), String(production.ventePoids ?? "—")],
-    ["CONSOMMATION employeur", String(production.consoNbre ?? "—"), String(production.consoPoids ?? "—")],
-    ["AUTRE gratuit", String(production.autreNbre ?? "—"), String(production.autrePoids ?? "—")],
-    ["TOTAL", String(production.totalNbre ?? "—"), String(production.totalPoids ?? "—")],
+    ["REPORT", formatGroupedNumber(production.reportNbre, 0), formatGroupedNumber(production.reportPoids, 2)],
+    ["VENTE", formatGroupedNumber(production.venteNbre, 0), formatGroupedNumber(production.ventePoids, 2)],
+    ["CONSOMMATION employeur", formatGroupedNumber(production.consoNbre, 0), formatGroupedNumber(production.consoPoids, 2)],
+    ["AUTRE gratuit", formatGroupedNumber(production.autreNbre, 0), formatGroupedNumber(production.autrePoids, 2)],
+    ["TOTAL", formatGroupedNumber(production.totalNbre, 0), formatGroupedNumber(production.totalPoids, 2)],
   ];
   autoTable(doc, {
     head: [["INDICATEUR", "NB", "POIDS (kg)"]],

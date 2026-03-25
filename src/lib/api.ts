@@ -1401,6 +1401,7 @@ export interface DailyReportResponse {
 /** Sorties Ferme — request (farm from JWT or optional farmId for Admin/RT) */
 export interface SortieRequest {
   date?: string | null;
+  /** S1→1, S2→2… ; 0 = semaine « VS » (vide sanitaire), aligné avec la page Sorties Ferme. */
   semaine?: number | null;
   lot?: string | null;
   client?: string | null;

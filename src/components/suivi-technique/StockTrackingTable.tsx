@@ -3,6 +3,7 @@ import { Loader2, Save } from "lucide-react";
 import { api, type SuiviStockResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 interface StockTrackingTableProps {
   farmId: number;
@@ -19,7 +20,7 @@ interface StockTrackingTableProps {
 
 function formatNumber(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
+  return Number.isInteger(value) ? formatGroupedNumber(value, 0) : formatGroupedNumber(value, 2);
 }
 
 function normalizeDecimalInput(value: string): string {

@@ -10,6 +10,7 @@ import {
   type ConsoResumeSummary,
 } from "@/lib/api";
 import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumePerformanceTrackingTable";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 const SEXES = ["Mâle", "Femelle"] as const;
 
@@ -32,9 +33,9 @@ interface AggregatedRow {
   recordDate: string;
   ageJour: number | null;
   mortaliteNbre: number;
-  mortalitePct: string;
+  mortalitePct: number;
   mortaliteCumul: number;
-  mortaliteCumulPct: string;
+  mortaliteCumulPct: number;
   consoEauL: number;
   tempMin: number | null;
   tempMax: number | null;
@@ -219,8 +220,8 @@ export default function WeeklyProductionSummaryContent({
     return sortedDates.map((recordDate) => {
       const row = byDate.get(recordDate)!;
       runningCumul += row.mortaliteNbre;
-      const mortalitePct = ((row.mortaliteNbre / effectif) * 100).toFixed(2);
-      const mortaliteCumulPct = ((runningCumul / effectif) * 100).toFixed(2);
+      const mortalitePct = (row.mortaliteNbre / effectif) * 100;
+      const mortaliteCumulPct = (runningCumul / effectif) * 100;
       return {
         recordDate,
         ageJour: row.ageJour,
@@ -248,8 +249,8 @@ export default function WeeklyProductionSummaryContent({
   const lastMortaliteCumulPct = useMemo((): number | null => {
     if (aggregatedRows.length === 0) return null;
     const last = aggregatedRows[aggregatedRows.length - 1];
-    const pct = parseFloat(last.mortaliteCumulPct);
-    return Number.isNaN(pct) ? null : pct;
+    const pct = last.mortaliteCumulPct;
+    return Number.isFinite(pct) ? pct : null;
   }, [aggregatedRows]);
 
   // CONSOMME ALIMENT (semaine) and CUMUL: from resume-summary API (backend computes from stock ± livraisons for S1 and S2+; livraisons may be 0).
@@ -506,7 +507,12 @@ export default function WeeklyProductionSummaryContent({
 
   function formatStockValue(value: number | null | undefined): string {
     if (value == null || Number.isNaN(value)) return "—";
-    return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
+    return Number.isInteger(value) ? formatGroupedNumber(value, 0) : formatGroupedNumber(value, 2);
+  }
+
+  function formatPct(value: number | null | undefined): string {
+    if (value == null || Number.isNaN(value)) return "—";
+    return `${formatGroupedNumber(value, 2)} %`;
   }
 
   if (loading) {
@@ -541,7 +547,7 @@ export default function WeeklyProductionSummaryContent({
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-muted-foreground">Effectif mis en place</label>
             <div className="rounded-md border border-input bg-muted/50 px-3 py-2 text-sm font-semibold text-foreground">
-              {aggregatedSetup.effectifMisEnPlace}
+              {formatGroupedNumber(aggregatedSetup.effectifMisEnPlace, 0)}
             </div>
           </div>
         </div>
@@ -552,7 +558,7 @@ export default function WeeklyProductionSummaryContent({
         <div className="flex flex-col gap-1.5">
           <label className="text-sm font-medium text-foreground">Effectif départ de {semaine}</label>
           <div className="rounded-md border border-input bg-muted/50 px-3 py-2 text-sm font-semibold text-foreground w-28">
-            {totalEffectifDepart}
+            {formatGroupedNumber(totalEffectifDepart, 0)}
           </div>
         </div>
       </div>
@@ -625,25 +631,29 @@ export default function WeeklyProductionSummaryContent({
                     className={`border-b border-border ${index % 2 === 0 ? "bg-card" : "bg-muted/20"}`}
                   >
                     <td className="border-r border-border px-1 py-1">{row.recordDate}</td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">
-                      {row.ageJour != null ? row.ageJour : "—"}
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
+                      {row.ageJour != null ? formatGroupedNumber(row.ageJour, 0) : "—"}
                     </td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">{row.mortaliteNbre}</td>
-                    <td className="border-r border-border px-1 py-1 text-center text-muted-foreground tabular-nums">
-                      {row.mortalitePct ? `${row.mortalitePct.replace(".", ",")} %` : "—"}
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
+                      {formatGroupedNumber(row.mortaliteNbre, 0)}
                     </td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">{row.mortaliteCumul}</td>
-                    <td className="border-r border-border px-1 py-1 text-center text-muted-foreground tabular-nums">
-                      {row.mortaliteCumulPct ? `${row.mortaliteCumulPct.replace(".", ",")} %` : "—"}
+                    <td className="border-r border-border px-1 py-1 text-center text-muted-foreground tabular-nums whitespace-nowrap">
+                      {formatPct(row.mortalitePct)}
                     </td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">
-                      {row.consoEauL.toFixed(1).replace(".", ",")}
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
+                      {formatGroupedNumber(row.mortaliteCumul, 0)}
                     </td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">
-                      {row.tempMin != null ? row.tempMin : "—"}
+                    <td className="border-r border-border px-1 py-1 text-center text-muted-foreground tabular-nums whitespace-nowrap">
+                      {formatPct(row.mortaliteCumulPct)}
                     </td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums">
-                      {row.tempMax != null ? row.tempMax : "—"}
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
+                      {formatGroupedNumber(row.consoEauL, 2)}
+                    </td>
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
+                      {row.tempMin != null ? formatGroupedNumber(row.tempMin, 2) : "—"}
+                    </td>
+                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
+                      {row.tempMax != null ? formatGroupedNumber(row.tempMax, 2) : "—"}
                     </td>
                     <td className="border-r border-border px-1 py-1 text-left">{row.vaccination ?? "—"}</td>
                     <td className="border-r border-border px-1 py-1 text-left">{row.traitement ?? "—"}</td>
@@ -657,24 +667,24 @@ export default function WeeklyProductionSummaryContent({
                 <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border">
                   TOTAL {semaine}
                 </td>
-                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-destructive">
-                  {weeklyTotals.totalMortality}
+                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-destructive whitespace-nowrap">
+                  {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
                 </td>
-                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums">
+                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
                   {totalEffectifDepart > 0
-                    ? `${((weeklyTotals.totalMortality / totalEffectifDepart) * 100).toFixed(2).replace(".", ",")} %`
+                    ? formatPct((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
                     : "—"}
                 </td>
-                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums">
-                  {weeklyTotals.totalMortality}
+                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums whitespace-nowrap">
+                  {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
                 </td>
-                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums">
+                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
                   {totalEffectifDepart > 0
-                    ? `${((weeklyTotals.totalMortality / totalEffectifDepart) * 100).toFixed(2).replace(".", ",")} %`
+                    ? formatPct((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
                     : "—"}
                 </td>
-                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground">
-                  {weeklyTotals.totalWater.toFixed(1).replace(".", ",")} L
+                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground whitespace-nowrap">
+                  {`${formatGroupedNumber(weeklyTotals.totalWater, 2)} L`}
                 </td>
                 <td colSpan={5} className="px-1.5 py-2 text-center border-r border-border"></td>
               </tr>
@@ -733,48 +743,48 @@ export default function WeeklyProductionSummaryContent({
               </tr>
               <tr className="border-b border-border bg-card">
                 <td className="px-4 py-2 border-r border-border font-medium text-foreground">VENTE</td>
-                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40">
-                  {aggregatedProduction.venteNbre}
+                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40 whitespace-nowrap">
+                  {formatGroupedNumber(aggregatedProduction.venteNbre, 0)}
                 </td>
-                <td className="px-4 py-2 text-center tabular-nums bg-muted/40">
+                <td className="px-4 py-2 text-center tabular-nums bg-muted/40 whitespace-nowrap">
                   {Number.isFinite(aggregatedProduction.ventePoids)
-                    ? aggregatedProduction.ventePoids.toFixed(2).replace(".", ",")
-                    : "0"}
+                    ? formatGroupedNumber(aggregatedProduction.ventePoids, 2)
+                    : formatGroupedNumber(0, 2)}
                 </td>
               </tr>
               <tr className="border-b border-border bg-muted/20">
                 <td className="px-4 py-2 border-r border-border font-medium text-foreground">
                   CONSOMMATION employeur
                 </td>
-                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40">
-                  {aggregatedProduction.consoNbre}
+                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40 whitespace-nowrap">
+                  {formatGroupedNumber(aggregatedProduction.consoNbre, 0)}
                 </td>
-                <td className="px-4 py-2 text-center tabular-nums bg-muted/40">
+                <td className="px-4 py-2 text-center tabular-nums bg-muted/40 whitespace-nowrap">
                   {Number.isFinite(aggregatedProduction.consoPoids)
-                    ? aggregatedProduction.consoPoids.toFixed(2).replace(".", ",")
-                    : "0"}
+                    ? formatGroupedNumber(aggregatedProduction.consoPoids, 2)
+                    : formatGroupedNumber(0, 2)}
                 </td>
               </tr>
               <tr className="border-b border-border bg-card">
                 <td className="px-4 py-2 border-r border-border font-medium text-foreground">AUTRE gratuit</td>
-                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40">
-                  {aggregatedProduction.autreNbre}
+                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40 whitespace-nowrap">
+                  {formatGroupedNumber(aggregatedProduction.autreNbre, 0)}
                 </td>
-                <td className="px-4 py-2 text-center tabular-nums bg-muted/40">
+                <td className="px-4 py-2 text-center tabular-nums bg-muted/40 whitespace-nowrap">
                   {Number.isFinite(aggregatedProduction.autrePoids)
-                    ? aggregatedProduction.autrePoids.toFixed(2).replace(".", ",")
-                    : "0"}
+                    ? formatGroupedNumber(aggregatedProduction.autrePoids, 2)
+                    : formatGroupedNumber(0, 2)}
                 </td>
               </tr>
               <tr className="border-b border-border font-semibold bg-muted/50">
                 <td className="px-4 py-2 border-r border-border font-medium text-foreground">TOTAL</td>
-                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40">
-                  {aggregatedProduction.totalNbre}
+                <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40 whitespace-nowrap">
+                  {formatGroupedNumber(aggregatedProduction.totalNbre, 0)}
                 </td>
-                <td className="px-4 py-2 text-center tabular-nums bg-muted/40">
+                <td className="px-4 py-2 text-center tabular-nums bg-muted/40 whitespace-nowrap">
                   {Number.isFinite(aggregatedProduction.totalPoids)
-                    ? aggregatedProduction.totalPoids.toFixed(2).replace(".", ",")
-                    : "0"}
+                    ? formatGroupedNumber(aggregatedProduction.totalPoids, 2)
+                    : formatGroupedNumber(0, 2)}
                 </td>
               </tr>
             </tbody>

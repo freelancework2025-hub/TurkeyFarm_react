@@ -27,7 +27,7 @@ import {
 } from "@/lib/api";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/depensesDiversExport";
-import { toOptionalNumber } from "@/lib/formatResumeAmount";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
  * DÉPENSES DIVERS
@@ -70,6 +70,26 @@ function toNum(s: string): number {
 
 function fromNum(n: number | null | undefined): string {
   return n != null ? String(n) : "";
+}
+
+function formatQtyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+function formatMoneyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+/** MONTANT: stored value or qte × prix when empty (Livraisons Aliment). */
+function formatMontantCell(row: Pick<DepenseDiversRow, "qte" | "prixPerUnit" | "montant">): string {
+  const m = toOptionalNumber(row.montant);
+  if (m != null) return formatGroupedNumber(m, 2);
+  const q = toOptionalNumber(row.qte);
+  const p = toOptionalNumber(row.prixPerUnit);
+  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  return "—";
 }
 
 function addOneDay(isoDate: string): string {
@@ -138,6 +158,9 @@ export default function DepensesDivers() {
   const [loading, setLoading] = useState(false);
   const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  /** QTE: raw while focused, grouped when blurred (Livraisons Aliment). */
+  const [qteFocusVsRowId, setQteFocusVsRowId] = useState<string | null>(null);
+  const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
@@ -548,6 +571,7 @@ export default function DepensesDivers() {
     (a.date || "").localeCompare(b.date || "")
   );
   const videSanitaireTotalQte = videSanitaireRows.reduce((acc, r) => acc + toNum(r.qte), 0);
+  const videSanitaireTotalPrix = videSanitaireRows.reduce((acc, r) => acc + toNum(r.prixPerUnit), 0);
   const videSanitaireTotalMontant = videSanitaireRows.reduce((acc, r) => acc + toNum(r.montant), 0);
 
   const currentRows = selectedSemaine
@@ -561,6 +585,7 @@ export default function DepensesDivers() {
       })
     : [];
   const weekTotalQte = currentRows.reduce((acc, r) => acc + toNum(r.qte), 0);
+  const weekTotalPrix = currentRows.reduce((acc, r) => acc + toNum(r.prixPerUnit), 0);
   const weekTotalMontant = currentRows.reduce((acc, r) => acc + toNum(r.montant), 0);
   const semainesOnly = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_AGE));
   const semOrder = sortSemaines([...semainesOnly]);
@@ -570,6 +595,12 @@ export default function DepensesDivers() {
     videSanitaireTotalQte +
     semsUpTo.reduce(
       (sum, sem) => sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + toNum(r.qte), 0),
+      0
+    );
+  const cumulPrix =
+    videSanitaireTotalPrix +
+    semsUpTo.reduce(
+      (sum, sem) => sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + toNum(r.prixPerUnit), 0),
       0
     );
   const cumulMontant =
@@ -595,8 +626,10 @@ export default function DepensesDivers() {
         lot: lotFilter.trim(),
         semaine: selectedSemaine,
         weekTotalQte,
+        weekTotalPrix,
         weekTotalMontant,
         cumulQte,
+        cumulPrix,
         cumulMontant,
         ageByRowId: displayAgeByRowId,
         rows: currentRows.map((r) => ({
@@ -624,6 +657,7 @@ export default function DepensesDivers() {
           montant: r.montant,
         })),
         videSanitaireTotalQte,
+        videSanitaireTotalPrix,
         videSanitaireTotalMontant,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
@@ -639,8 +673,10 @@ export default function DepensesDivers() {
       lot: lotFilter.trim(),
       semaine: selectedSemaine,
       weekTotalQte,
+      weekTotalPrix,
       weekTotalMontant,
       cumulQte,
+      cumulPrix,
       cumulMontant,
       ageByRowId: displayAgeByRowId,
       rows: currentRows.map((r) => ({
@@ -668,6 +704,7 @@ export default function DepensesDivers() {
         montant: r.montant,
       })),
       videSanitaireTotalQte,
+      videSanitaireTotalPrix,
       videSanitaireTotalMontant,
     });
     toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
@@ -931,18 +968,18 @@ export default function DepensesDivers() {
                 )}
               </div>
               <div className="overflow-x-auto w-full">
-                <table className="table-farm table-fixed w-full">
+                <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="w-[10%] min-w-[90px]">Date</th>
-                      <th className="w-[15%] min-w-[120px]">Désignation</th>
-                      <th className="w-[13%] min-w-[100px]">Fournisseur</th>
-                      <th className="w-[10%] min-w-[80px]">N°BL</th>
-                      <th className="w-[10%] min-w-[80px]">N°BR</th>
-                      <th className="w-[8%] min-w-[60px]">UG</th>
-                      <th className="w-[9%] min-w-[70px]">Quantité</th>
-                      <th className="w-[9%] min-w-[70px]">Prix</th>
-                      <th className="w-[10%] min-w-[80px]">Montant</th>
+                      <th className="min-w-[90px]">DATE</th>
+                      <th className="min-w-[120px]">DÉSIGNATION</th>
+                      <th className="min-w-[100px]">FOURNISSEUR</th>
+                      <th className="min-w-[80px]">N° BL</th>
+                      <th className="min-w-[80px]">N° BR</th>
+                      <th className="min-w-[60px]">UG</th>
+                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
+                      <th className="min-w-[80px] !text-center">PRIX</th>
+                      <th className="min-w-[90px] !text-center">MONTANT</th>
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
                         ✓
                       </th>
@@ -1029,31 +1066,64 @@ export default function DepensesDivers() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.qte}
-                                  onChange={(e) => updateRow(row.id, "qte", e.target.value)}
-                                  placeholder="—"
-                                  min={0}
-                                  step="0.01"
-                                  disabled={rowReadOnly}
-                                  className="bg-transparent border-0 outline-none text-sm w-full"
-                                />
+                              <td className="min-w-[128px] text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.qte)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      qteFocusVsRowId === row.id
+                                        ? row.qte
+                                        : toOptionalNumber(row.qte) != null
+                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
+                                          : ""
+                                    }
+                                    onFocus={() => setQteFocusVsRowId(row.id)}
+                                    onBlur={(e) => {
+                                      setQteFocusVsRowId(null);
+                                      const raw = e.target.value;
+                                      if (raw.trim() === "") {
+                                        updateRow(row.id, "qte", "");
+                                        return;
+                                      }
+                                      const n = toOptionalNumber(raw);
+                                      if (n == null || n < 0) {
+                                        updateRow(row.id, "qte", "");
+                                      } else {
+                                        updateRow(row.id, "qte", n.toFixed(2));
+                                      }
+                                    }}
+                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                    placeholder="—"
+                                    className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.prixPerUnit}
-                                  onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
-                                  placeholder="—"
-                                  step="0.01"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                  className="bg-transparent border-0 outline-none text-sm w-full"
-                                />
+                              <td className="text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatMoneyDisplay(row.prixPerUnit)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.prixPerUnit}
+                                    onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                    placeholder="—"
+                                    step="0.01"
+                                    min={0}
+                                    disabled={rowReadOnly}
+                                    className="w-full min-w-[5.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td className="font-semibold text-sm">{row.montant || "—"}</td>
+                              <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
+                                {formatMontantCell(row)}
+                              </td>
                               <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                                 {canSaveRow && (
                                   <button
@@ -1092,21 +1162,33 @@ export default function DepensesDivers() {
                               <td colSpan={6} className="text-sm font-medium text-muted-foreground">
                                 TOTAL
                               </td>
-                              <td className="font-semibold text-sm">{videSanitaireTotalQte.toFixed(2)}</td>
-                              <td></td>
-                              <td className="font-semibold text-sm">{videSanitaireTotalMontant.toFixed(2)}</td>
-                              <td></td>
-                              <td></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(videSanitaireTotalQte, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(videSanitaireTotalPrix, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(videSanitaireTotalMontant, 2)}
+                              </td>
+                              <td className="w-9 max-w-9 !px-1" />
+                              <td />
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={6} className="text-sm font-medium text-muted-foreground">
                                 CUMUL
                               </td>
-                              <td className="font-semibold text-sm">{videSanitaireTotalQte.toFixed(2)}</td>
-                              <td></td>
-                              <td className="font-semibold text-sm">{videSanitaireTotalMontant.toFixed(2)}</td>
-                              <td></td>
-                              <td></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(videSanitaireTotalQte, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(videSanitaireTotalPrix, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(videSanitaireTotalMontant, 2)}
+                              </td>
+                              <td className="w-9 max-w-9 !px-1" />
+                              <td />
                             </tr>
                           </>
                         )}
@@ -1142,19 +1224,19 @@ export default function DepensesDivers() {
               </div>
 
               <div className="overflow-x-auto w-full">
-                <table className="table-farm table-fixed w-full">
+                <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="w-[7%] min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
-                      <th className="w-[11%] min-w-[90px]">Date</th>
-                      <th className="w-[7%] min-w-[60px]">Sem</th>
-                      <th className="w-[18%] min-w-[120px]">Désignation</th>
-                      <th className="w-[15%] min-w-[100px]">Fournisseur</th>
-                      <th className="w-[10%] min-w-[80px]">N°BL</th>
-                      <th className="w-[10%] min-w-[80px]">N°BR</th>
-                      <th className="w-[8%] min-w-[60px]">QTE</th>
-                      <th className="w-[9%] min-w-[70px]">Prix</th>
-                      <th className="w-[10%] min-w-[80px]">Montant</th>
+                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
+                      <th className="min-w-[100px]">DATE</th>
+                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
+                      <th className="min-w-[180px]">DÉSIGNATION</th>
+                      <th className="min-w-[120px]">FOURNISSEUR</th>
+                      <th className="min-w-[90px]">N° BL</th>
+                      <th className="min-w-[90px]">N° BR</th>
+                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
+                      <th className="min-w-[80px] !text-center">PRIX</th>
+                      <th className="min-w-[90px] !text-center">MONTANT</th>
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
                         ✓
                       </th>
@@ -1181,7 +1263,7 @@ export default function DepensesDivers() {
                           const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>
-                              <td className="text-sm tabular-nums">
+                              <td className="text-sm font-medium text-muted-foreground">
                                 {displayAgeByRowId.get(row.id) ?? "—"}
                               </td>
                               <td>
@@ -1244,31 +1326,64 @@ export default function DepensesDivers() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.qte}
-                                  onChange={(e) => updateRow(row.id, "qte", e.target.value)}
-                                  placeholder="—"
-                                  min={0}
-                                  step="0.01"
-                                  disabled={rowReadOnly}
-                                  className="bg-transparent border-0 outline-none text-sm w-full"
-                                />
+                              <td className="min-w-[128px] text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.qte)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      qteFocusRowId === row.id
+                                        ? row.qte
+                                        : toOptionalNumber(row.qte) != null
+                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
+                                          : ""
+                                    }
+                                    onFocus={() => setQteFocusRowId(row.id)}
+                                    onBlur={(e) => {
+                                      setQteFocusRowId(null);
+                                      const raw = e.target.value;
+                                      if (raw.trim() === "") {
+                                        updateRow(row.id, "qte", "");
+                                        return;
+                                      }
+                                      const n = toOptionalNumber(raw);
+                                      if (n == null || n < 0) {
+                                        updateRow(row.id, "qte", "");
+                                      } else {
+                                        updateRow(row.id, "qte", n.toFixed(2));
+                                      }
+                                    }}
+                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                    placeholder="—"
+                                    className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.prixPerUnit}
-                                  onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
-                                  placeholder="—"
-                                  step="0.01"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                  className="bg-transparent border-0 outline-none text-sm w-full"
-                                />
+                              <td className="text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatMoneyDisplay(row.prixPerUnit)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.prixPerUnit}
+                                    onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                    placeholder="—"
+                                    step="0.01"
+                                    min={0}
+                                    disabled={rowReadOnly}
+                                    className="w-full min-w-[5.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td className="font-semibold text-sm">{row.montant || "—"}</td>
+                              <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
+                                {formatMontantCell(row)}
+                              </td>
                               <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                                 {canSaveRow && (
                                   <button
@@ -1314,21 +1429,33 @@ export default function DepensesDivers() {
                               <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine}
                               </td>
-                              <td className="font-semibold text-sm">{weekTotalQte.toFixed(2)}</td>
-                              <td></td>
-                              <td className="font-semibold text-sm">{weekTotalMontant.toFixed(2)}</td>
-                              <td></td>
-                              <td className="text-right"></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(weekTotalQte, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(weekTotalPrix, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(weekTotalMontant, 2)}
+                              </td>
+                              <td className="w-9 max-w-9 !px-1" />
+                              <td />
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                                 CUMUL (Vide sanitaire + semaines)
                               </td>
-                              <td className="font-semibold text-sm">{cumulQte.toFixed(2)}</td>
-                              <td></td>
-                              <td className="font-semibold text-sm">{cumulMontant.toFixed(2)}</td>
-                              <td></td>
-                              <td className="text-right"></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(cumulQte, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(cumulPrix, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(cumulMontant, 2)}
+                              </td>
+                              <td className="w-9 max-w-9 !px-1" />
+                              <td />
                             </tr>
                           </>
                         )}

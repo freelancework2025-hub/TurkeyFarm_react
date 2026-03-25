@@ -6,7 +6,7 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
 import type { ResumeCoutsHebdoSummaryResponse } from "@/lib/api";
-import { formatResumeAmount as formatNum } from "@/lib/formatResumeAmount";
+import { formatGroupedNumber, formatResumeAmount as formatNum } from "@/lib/formatResumeAmount";
 import { buildDisplayRows, getEffectiveCumul, toNum } from "@/lib/resumeCoutsHebdoDisplay";
 
 export interface ResumeCoutsHebdoExportParams {
@@ -128,7 +128,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
   ws.getCell(currentRow, 2).value = totalS1;
   ws.getCell(currentRow, 3).value = totalCumul;
   ws.getCell(currentRow, 4).value = totalCumulDhKg ?? "—";
-  ws.getCell(currentRow, 5).value = totalCumul > 0 ? "100,00 %" : "—";
+  ws.getCell(currentRow, 5).value = totalCumul > 0 ? formatPct(100) : "—";
   for (let c = 1; c <= 5; c++) {
     const cell = ws.getCell(currentRow, c);
     cell.font = { bold: true };
@@ -198,7 +198,7 @@ export function exportToPdf(params: ResumeCoutsHebdoExportParams): void {
       pct != null ? formatPct(pct) : "—",
     ];
   });
-  body.push(["Total", formatNum(totalS1), formatNum(totalCumul), formatNum(totalCumulDhKg), totalCumul > 0 ? "100,00 %" : "—"]);
+  body.push(["Total", formatNum(totalS1), formatNum(totalCumul), formatNum(totalCumulDhKg), totalCumul > 0 ? formatPct(100) : "—"]);
 
   (doc as unknown as { autoTable: (opts: object) => void }).autoTable({
     head: [headerCols],

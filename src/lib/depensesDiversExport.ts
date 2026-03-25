@@ -41,12 +41,15 @@ export interface DepensesDiversExportParams {
   semaine: string;
   rows: DepenseDiversRowExport[];
   weekTotalQte: number;
+  weekTotalPrix: number;
   weekTotalMontant: number;
   cumulQte: number;
+  cumulPrix: number;
   cumulMontant: number;
   ageByRowId: Map<string, string | number>;
   videSanitaireRows: VideSanitaireDepenseDiversRow[];
   videSanitaireTotalQte: number;
+  videSanitaireTotalPrix: number;
   videSanitaireTotalMontant: number;
 }
 
@@ -67,17 +70,27 @@ function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
+function parseExportNum(raw: string | number | undefined | null): number {
+  if (raw == null) return NaN;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : NaN;
+  const s = String(raw).replace(/[\s\u00A0\u202F]/g, "").replace(",", ".");
+  const n = parseFloat(s);
+  return Number.isNaN(n) ? NaN : n;
+}
+
 function safeFileName(parts: string[]): string {
   return parts.join("_").replace(/[^\w\-_]/g, "_");
 }
 
 function vsRowToArray(r: VideSanitaireDepenseDiversRow): (string | number)[] {
-  const qte = parseFloat(String(r.qte).replace(",", "."));
-  const prix = parseFloat(String(r.prixPerUnit).replace(",", "."));
+  const qte = parseExportNum(r.qte);
+  const prix = parseExportNum(r.prixPerUnit);
   const montant =
     (r.montant ?? "").trim() !== ""
-      ? parseFloat(String(r.montant).replace(",", "."))
-      : (!Number.isNaN(qte) && !Number.isNaN(prix) ? qte * prix : 0);
+      ? parseExportNum(r.montant)
+      : !Number.isNaN(qte) && !Number.isNaN(prix)
+        ? qte * prix
+        : 0;
   return [
     safeStr(r.date) || "—",
     safeStr(r.designation) || "—",
@@ -92,12 +105,14 @@ function vsRowToArray(r: VideSanitaireDepenseDiversRow): (string | number)[] {
 }
 
 function mainRowToArray(row: DepenseDiversRowExport, age: string | number): (string | number)[] {
-  const qte = parseFloat(String(row.qte).replace(",", "."));
-  const prix = parseFloat(String(row.prixPerUnit).replace(",", "."));
+  const qte = parseExportNum(row.qte);
+  const prix = parseExportNum(row.prixPerUnit);
   const montant =
     (row.montant ?? "").trim() !== ""
-      ? parseFloat(String(row.montant).replace(",", "."))
-      : (!Number.isNaN(qte) && !Number.isNaN(prix) ? qte * prix : 0);
+      ? parseExportNum(row.montant)
+      : !Number.isNaN(qte) && !Number.isNaN(prix)
+        ? qte * prix
+        : 0;
   return [
     age ?? "—",
     safeStr(row.date) || "—",
@@ -119,12 +134,15 @@ export async function exportToExcel(params: DepensesDiversExportParams): Promise
     semaine,
     rows,
     weekTotalQte,
+    weekTotalPrix,
     weekTotalMontant,
     cumulQte,
+    cumulPrix,
     cumulMontant,
     ageByRowId,
     videSanitaireRows,
     videSanitaireTotalQte,
+    videSanitaireTotalPrix,
     videSanitaireTotalMontant,
   } = params;
 
@@ -234,8 +252,8 @@ export async function exportToExcel(params: DepensesDiversExportParams): Promise
       fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: TOTAL_BG } },
       border: { top: BORDER_THIN, left: BORDER_THIN, bottom: BORDER_THIN, right: BORDER_THIN },
     };
-    const totalRow = ["TOTAL", "", "", "", "", "", videSanitaireTotalQte, "", videSanitaireTotalMontant];
-    const cumulRow = ["CUMUL", "", "", "", "", "", videSanitaireTotalQte, "", videSanitaireTotalMontant];
+    const totalRow = ["TOTAL", "", "", "", "", "", videSanitaireTotalQte, videSanitaireTotalPrix, videSanitaireTotalMontant];
+    const cumulRow = ["CUMUL", "", "", "", "", "", videSanitaireTotalQte, videSanitaireTotalPrix, videSanitaireTotalMontant];
     for (let r = 0; r < 2; r++) {
       const arr = r === 0 ? totalRow : cumulRow;
       for (let c = 0; c < arr.length; c++) {
@@ -244,7 +262,7 @@ export async function exportToExcel(params: DepensesDiversExportParams): Promise
         cell.font = totalStyle.font;
         cell.fill = totalStyle.fill;
         cell.border = totalStyle.border;
-        if (c === 6 || c === 8) cell.numFmt = "#,##0.00";
+        if (c === 6 || c === 7 || c === 8) cell.numFmt = "#,##0.00";
       }
       dataRow++;
     }
@@ -301,8 +319,8 @@ export async function exportToExcel(params: DepensesDiversExportParams): Promise
     fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: TOTAL_BG } },
     border: { top: BORDER_THIN, left: BORDER_THIN, bottom: BORDER_THIN, right: BORDER_THIN },
   };
-  const mainTotalRow = [`TOTAL ${semaine}`, "", "", "", "", "", "", weekTotalQte, "", weekTotalMontant];
-  const mainCumulRow = ["CUMUL (Vide sanitaire + semaines)", "", "", "", "", "", "", cumulQte, "", cumulMontant];
+  const mainTotalRow = [`TOTAL ${semaine}`, "", "", "", "", "", "", weekTotalQte, weekTotalPrix, weekTotalMontant];
+  const mainCumulRow = ["CUMUL (Vide sanitaire + semaines)", "", "", "", "", "", "", cumulQte, cumulPrix, cumulMontant];
   for (let r = 0; r < 2; r++) {
     const arr = r === 0 ? mainTotalRow : mainCumulRow;
     for (let c = 0; c < arr.length; c++) {
@@ -311,7 +329,7 @@ export async function exportToExcel(params: DepensesDiversExportParams): Promise
       cell.font = mainTotalStyle.font;
       cell.fill = mainTotalStyle.fill;
       cell.border = mainTotalStyle.border;
-      if (c === 7 || c === 9) cell.numFmt = "#,##0.00";
+      if (c === 7 || c === 8 || c === 9) cell.numFmt = "#,##0.00";
     }
     dataRow++;
   }
@@ -333,12 +351,15 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
     semaine,
     rows,
     weekTotalQte,
+    weekTotalPrix,
     weekTotalMontant,
     cumulQte,
+    cumulPrix,
     cumulMontant,
     ageByRowId,
     videSanitaireRows,
     videSanitaireTotalQte,
+    videSanitaireTotalPrix,
     videSanitaireTotalMontant,
   } = params;
 
@@ -371,8 +392,28 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
 
   const vsTableData: string[][] = videSanitaireRows.map((r) => vsRowToArray(r).map(String));
   if (videSanitaireRows.length > 0) {
-    vsTableData.push(["TOTAL", "", "", "", "", "", String(videSanitaireTotalQte), "", String(videSanitaireTotalMontant)]);
-    vsTableData.push(["CUMUL", "", "", "", "", "", String(videSanitaireTotalQte), "", String(videSanitaireTotalMontant)]);
+    vsTableData.push([
+      "TOTAL",
+      "",
+      "",
+      "",
+      "",
+      "",
+      String(videSanitaireTotalQte),
+      String(videSanitaireTotalPrix),
+      String(videSanitaireTotalMontant),
+    ]);
+    vsTableData.push([
+      "CUMUL",
+      "",
+      "",
+      "",
+      "",
+      "",
+      String(videSanitaireTotalQte),
+      String(videSanitaireTotalPrix),
+      String(videSanitaireTotalMontant),
+    ]);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -412,8 +453,30 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
   startY += 6;
 
   const mainTableData: string[][] = rows.map((r) => mainRowToArray(r, ageByRowId.get(r.id) ?? "—").map(String));
-  mainTableData.push([`TOTAL ${semaine}`, "", "", "", "", "", "", String(weekTotalQte), "", String(weekTotalMontant)]);
-  mainTableData.push(["CUMUL (Vide sanitaire + semaines)", "", "", "", "", "", "", String(cumulQte), "", String(cumulMontant)]);
+  mainTableData.push([
+    `TOTAL ${semaine}`,
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    String(weekTotalQte),
+    String(weekTotalPrix),
+    String(weekTotalMontant),
+  ]);
+  mainTableData.push([
+    "CUMUL (Vide sanitaire + semaines)",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    String(cumulQte),
+    String(cumulPrix),
+    String(cumulMontant),
+  ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (doc as any).autoTable({

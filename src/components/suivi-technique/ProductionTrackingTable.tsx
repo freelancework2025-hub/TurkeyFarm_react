@@ -3,6 +3,7 @@ import { Save, Loader2 } from "lucide-react";
 import { api, type SuiviProductionHebdoResponse, type SuiviProductionHebdoRequest } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 type RowKey = "report" | "vente" | "conso" | "autre" | "total";
 
@@ -50,6 +51,20 @@ function normalizePoidsInput(value: string): string {
   const n = parseFloat(trimmed);
   if (Number.isNaN(n) || n < 0) return value;
   return Number.isInteger(n) ? String(Math.round(n)) : String(n);
+}
+
+function displayReadOnlyNbre(v: string | number): string {
+  if (v === "" || v == null) return formatGroupedNumber(0, 0);
+  const n = typeof v === "number" ? v : parseInt(String(v), 10);
+  if (Number.isNaN(n)) return String(v);
+  return formatGroupedNumber(n, 0);
+}
+
+function displayReadOnlyPoids(v: string | number): string {
+  if (v === "" || v == null) return formatGroupedNumber(0, 2);
+  const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+  if (Number.isNaN(n)) return String(v);
+  return formatGroupedNumber(n, 2);
 }
 
 export default function ProductionTrackingTable({ farmId, lot, semaine, sex, batiment, onSaveSuccess, refreshKey }: ProductionTrackingTableProps) {
@@ -215,7 +230,7 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
                 poidsVal = autrePoids;
               } else {
                 nbreVal = totalNbre;
-                poidsVal = typeof totalPoids === "number" && Number.isFinite(totalPoids) ? totalPoids.toFixed(2) : totalPoids;
+                poidsVal = totalPoids;
               }
               const readOnly = row.readOnly || !canEditProduction;
               return (
@@ -230,7 +245,7 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
                   </td>
                   <td className={`border-r border-border align-middle ${numericCellClass}`}>
                     {readOnly ? (
-                      <div className={readOnlyCell}>{typeof nbreVal === "number" ? nbreVal : (nbreVal || "0")}</div>
+                      <div className={readOnlyCell}>{displayReadOnlyNbre(nbreVal)}</div>
                     ) : (
                       <input
                         type="number"
@@ -249,7 +264,7 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
                   </td>
                   <td className={`align-middle ${numericCellClass}`}>
                     {readOnly ? (
-                      <div className={readOnlyCell}>{typeof poidsVal === "number" ? poidsVal : (poidsVal || "0")}</div>
+                      <div className={readOnlyCell}>{displayReadOnlyPoids(poidsVal)}</div>
                     ) : (
                       <input
                         type="number"

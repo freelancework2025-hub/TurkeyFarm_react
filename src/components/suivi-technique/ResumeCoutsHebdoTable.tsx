@@ -9,7 +9,7 @@
 
 import { useState, useMemo } from "react";
 import { api, type SuiviCoutHebdoResponse } from "@/lib/api";
-import { formatResumeAmount } from "@/lib/formatResumeAmount";
+import { formatGroupedNumber, formatResumeAmount, toOptionalNumber } from "@/lib/formatResumeAmount";
 import { buildDisplayRows, getEffectiveCumul, toNum } from "@/lib/resumeCoutsHebdoDisplay";
 import { Loader2 } from "lucide-react";
 
@@ -53,7 +53,7 @@ function isEditableByRespTech(designation: string | null | undefined): boolean {
 
 function formatPct(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
-  return `${value.toFixed(2).replace(".", ",")} %`;
+  return `${formatGroupedNumber(value, 2)} %`;
 }
 
 /** Row is saved when it has a persistent id from API (id > 0). Placeholders have id 0; computed rows id < 0. */
@@ -120,8 +120,10 @@ export default function ResumeCoutsHebdoTable({
   const startEdit = (row: SuiviCoutHebdoResponse) => {
     if (!canEditRow(row)) return;
     setEditingId(row.id);
-    setEditValeurS1(row.valeurS1 != null ? String(row.valeurS1) : "");
-    setEditCumul(row.cumul != null ? String(row.cumul) : "");
+    const v1 = toOptionalNumber(row.valeurS1);
+    const cu = toOptionalNumber(row.cumul);
+    setEditValeurS1(v1 != null ? v1.toFixed(2) : "");
+    setEditCumul(cu != null ? cu.toFixed(2) : "");
   };
 
   const cancelEdit = () => {
@@ -134,13 +136,13 @@ export default function ResumeCoutsHebdoTable({
     if (!canEditRow(row)) return;
     setSaving(true);
     try {
-      const valeurS1 = editValeurS1.trim() === "" ? null : parseFloat(editValeurS1.replace(",", "."));
-      const cumul = editCumul.trim() === "" ? null : parseFloat(editCumul.replace(",", "."));
+      const valeurS1 = editValeurS1.trim() === "" ? null : toOptionalNumber(editValeurS1);
+      const cumul = editCumul.trim() === "" ? null : toOptionalNumber(editCumul);
       await api.suiviCoutHebdo.save(
         {
           designation: row.designation,
-          valeurS1: Number.isFinite(valeurS1) ? valeurS1 : null,
-          cumul: Number.isFinite(cumul) ? cumul : null,
+          valeurS1,
+          cumul,
         },
         { farmId, lot, semaine }
       );
@@ -159,22 +161,22 @@ export default function ResumeCoutsHebdoTable({
         </h3>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[500px] text-sm border-collapse">
+        <table className="table-farm w-full min-w-[520px] text-sm">
           <thead>
             <tr className="border-b border-border bg-sky-100 dark:bg-sky-950/40">
-              <th className="px-4 py-2.5 text-left font-semibold text-foreground border-r border-border">
+              <th className="px-4 py-2.5 text-left font-semibold text-foreground border-r border-border min-w-[180px]">
                 DESIGNATION
               </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border">
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border min-w-[112px] !text-center">
                 {semaine}
               </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border">
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border min-w-[112px] !text-center">
                 CUMUL
               </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border whitespace-nowrap">
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border whitespace-nowrap min-w-[112px] !text-center">
                 CUMUL DH/KG
               </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground">
+              <th className="px-3 py-2.5 text-center font-semibold text-foreground min-w-[88px] !text-center">
                 %
               </th>
             </tr>
@@ -201,14 +203,14 @@ export default function ResumeCoutsHebdoTable({
                   <td className="px-4 py-2 border-r border-border font-medium text-foreground">
                     {row.designation}
                   </td>
-                  <td className="px-3 py-2 border-r border-border text-center align-middle">
+                  <td className="px-3 py-2 border-r border-border text-center align-middle whitespace-nowrap">
                     {isEditableByRespTech(row.designation) ? (
                       isEditing ? (
-                        <div className="flex items-center justify-center gap-1">
+                        <div className="flex items-center justify-center gap-1 flex-wrap">
                           <input
                             type="text"
                             inputMode="decimal"
-                            className="w-24 rounded border border-input bg-background px-2 py-1 text-center text-sm tabular-nums"
+                            className="w-[7.5rem] min-w-[6rem] rounded border border-input bg-background px-2 py-1 text-center text-sm tabular-nums"
                             value={editValeurS1}
                             onChange={(e) => setEditValeurS1(e.target.value)}
                           />
@@ -232,40 +234,40 @@ export default function ResumeCoutsHebdoTable({
                         <button
                           type="button"
                           onClick={() => startEdit(row)}
-                          className="rounded border border-border bg-muted/30 px-2 py-1 text-sm tabular-nums hover:bg-muted/50"
+                          className="rounded border border-border bg-muted/30 px-2 py-1 text-sm tabular-nums hover:bg-muted/50 whitespace-nowrap"
                         >
                           {formatResumeAmount(row.valeurS1)}
                         </button>
                       ) : (
-                        <span className="tabular-nums text-foreground">
+                        <span className="tabular-nums text-foreground whitespace-nowrap">
                           {formatResumeAmount(row.valeurS1)}
                         </span>
                       )
                     ) : (
-                      <span className="tabular-nums text-foreground">
+                      <span className="tabular-nums text-foreground whitespace-nowrap">
                         {formatResumeAmount(row.valeurS1)}
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 border-r border-border text-center align-middle">
+                  <td className="px-3 py-2 border-r border-border text-center align-middle whitespace-nowrap">
                     {isEditableByRespTech(row.designation) && isEditing ? (
                       <input
                         type="text"
                         inputMode="decimal"
-                        className="w-24 rounded border border-input bg-background px-2 py-1 text-center text-sm tabular-nums"
+                        className="w-[7.5rem] min-w-[6rem] rounded border border-input bg-background px-2 py-1 text-center text-sm tabular-nums"
                         value={editCumul}
                         onChange={(e) => setEditCumul(e.target.value)}
                       />
                     ) : (
-                      <span className="tabular-nums text-foreground">
+                      <span className="tabular-nums text-foreground whitespace-nowrap">
                         {formatResumeAmount(effectiveCumul)}
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 border-r border-border text-center tabular-nums text-foreground">
+                  <td className="px-3 py-2 border-r border-border text-center tabular-nums text-foreground whitespace-nowrap">
                     {formatResumeAmount(cumulDhKg)}
                   </td>
-                  <td className="px-3 py-2 text-center tabular-nums text-foreground">
+                  <td className="px-3 py-2 text-center tabular-nums text-foreground whitespace-nowrap">
                     {formatPct(pct)}
                   </td>
                 </tr>
@@ -275,16 +277,16 @@ export default function ResumeCoutsHebdoTable({
           <tfoot>
             <tr className="border-t-2 border-border bg-sky-100 dark:bg-sky-950/40 font-semibold text-foreground">
               <td className="px-4 py-2.5 border-r border-border">Total</td>
-              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
+              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums whitespace-nowrap">
                 {formatResumeAmount(totalS1)}
               </td>
-              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
+              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums whitespace-nowrap">
                 {formatResumeAmount(totalCumul)}
               </td>
-              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums">
+              <td className="px-3 py-2.5 border-r border-border text-center tabular-nums whitespace-nowrap">
                 {formatResumeAmount(totalCumulDhKg)}
               </td>
-              <td className="px-3 py-2.5 text-center tabular-nums">
+              <td className="px-3 py-2.5 text-center tabular-nums whitespace-nowrap">
                 {totalCumul > 0 ? formatPct(100) : formatPct(null)}
               </td>
             </tr>
@@ -295,13 +297,13 @@ export default function ResumeCoutsHebdoTable({
       {/* Table PRIX DE REVIENT/SUJET et PRIX DE REVIENT/KG — below Prix de revient */}
       {(effectifRestantFinSemaine != null || totalNbreProduction != null) && (
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[320px] text-sm border-collapse border-t border-border">
+          <table className="table-farm w-full min-w-[320px] text-sm border-t border-border">
             <thead>
               <tr className="bg-muted/80 border-b border-border">
-                <th className="px-4 py-2.5 text-left font-semibold text-foreground w-[280px]">
+                <th className="px-4 py-2.5 text-left font-semibold text-foreground min-w-[200px]">
                   INDICATEUR
                 </th>
-                <th className="px-3 py-2.5 text-center font-semibold text-foreground border-l border-border">
+                <th className="px-3 py-2.5 text-center font-semibold text-foreground border-l border-border min-w-[128px] !text-center">
                   VALEUR
                 </th>
               </tr>
@@ -311,7 +313,7 @@ export default function ResumeCoutsHebdoTable({
                 <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
                   PRIX DE REVIENT/SUJET
                 </td>
-                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20 whitespace-nowrap">
                   {formatResumeAmount(
                     prixRevientParSujet != null
                       ? prixRevientParSujet
@@ -328,7 +330,7 @@ export default function ResumeCoutsHebdoTable({
                 <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
                   PRIX DE REVIENT/KG
                 </td>
-                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+                <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20 whitespace-nowrap">
                   {formatResumeAmount(
                     prixRevientParKg != null
                       ? prixRevientParKg

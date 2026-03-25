@@ -1,6 +1,7 @@
 /**
  * Page "Résumé des coûts hebdomadaires" — PRIX DE REVIENT table + PRIX DE REVIENT/SUJET, /KG.
  * All calculations done on backend via getResumeSummary — avoids client-side delay and refresh issues.
+ * Amounts use grouped thousands + two decimals (formatResumeAmount) in ResumeCoutsHebdoTable and exports.
  * URL: /suivi-technique-hebdomadaire/resume-couts?farmId=8&lot=1&semaine=S1&batiments=B1,B2,B3,B4
  */
 
@@ -198,11 +199,11 @@ export default function ResumeCoutsHebdoPage() {
               cumul: toOptionalNumber(r.cumul),
             })) ?? []
           }
-          poidsVifProduitKg={summary.poidsVifProduitKg != null ? Number(summary.poidsVifProduitKg) : null}
-          effectifRestantFinSemaine={summary.effectifRestantFinSemaine ?? null}
-          totalNbreProduction={summary.totalNbreProduction ?? null}
-          prixRevientParSujet={summary.prixRevientParSujet != null ? Number(summary.prixRevientParSujet) : null}
-          prixRevientParKg={summary.prixRevientParKg != null ? Number(summary.prixRevientParKg) : null}
+          poidsVifProduitKg={toOptionalNumber(summary.poidsVifProduitKg)}
+          effectifRestantFinSemaine={toOptionalNumber(summary.effectifRestantFinSemaine)}
+          totalNbreProduction={toOptionalNumber(summary.totalNbreProduction)}
+          prixRevientParSujet={toOptionalNumber(summary.prixRevientParSujet)}
+          prixRevientParKg={toOptionalNumber(summary.prixRevientParKg)}
           canCreate={canCreate}
           canUpdate={canUpdate}
           farmId={farmId}

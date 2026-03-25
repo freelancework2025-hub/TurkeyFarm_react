@@ -20,12 +20,13 @@ import EffectifMisEnPlace from "@/components/reporting/EffectifMisEnPlace";
 import DailyReportTable from "@/components/reporting/DailyReportTable";
 import SavedDaysOverview from "@/components/reporting/SavedDaysOverview";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse, type LotWithStatusResponse, getStoredSelectedFarm } from "@/lib/api";
+import { api, type FarmResponse, type LotWithStatusResponse } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/reportingJournalierExport";
 import { useToast } from "@/hooks/use-toast";
 
 /**
  * Reporting Journalier — effectif mis en place and rapport journalier per day.
+ * Number format and column spacing (aligned with Livraisons Aliment) are implemented in EffectifMisEnPlace and DailyReportTable.
  * Permissions: DailyReportTable and EffectifMisEnPlace use canCreate/canUpdate; RESPONSABLE_FERME: saved rows read-only.
  */
 export default function ReportingJournalier() {
@@ -36,7 +37,7 @@ export default function ReportingJournalier() {
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
   const hasLotInUrl = lotParam.trim() !== "";
 
-  const { isAdministrateur, isResponsableTechnique, isBackofficeEmployer, canAccessAllFarms, isReadOnly, selectedFarmId: authSelectedFarmId } = useAuth();
+  const { isAdministrateur, isResponsableTechnique, isBackofficeEmployer, canAccessAllFarms, isReadOnly, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
   // Admin, Responsable technique and Backoffice: see farm list first; on click, only that farm's data is shown.
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
 
@@ -115,7 +116,7 @@ export default function ReportingJournalier() {
   const exportFarmName =
     canAccessAllFarms && isValidFarmId
       ? (farms.find((f) => f.id === reportingFarmId)?.name ?? "Ferme")
-      : (getStoredSelectedFarm()?.name ?? "Ferme");
+      : (selectedFarmName ?? "Ferme");
 
   const handleExportExcel = async () => {
     if (!canShowExport) return;

@@ -33,6 +33,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusResponse, getStoredSelectedFarm } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/suiviTechniqueBatimentExport";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
@@ -83,6 +84,7 @@ const TAB_TO_API_SEX: Record<TabType, string> = { male: "Mâle", femelle: "Femel
  * - Batiment cannot be changed on the content screen; only "Retour au choix du bâtiment" clears batiment from URL and returns to step 3.
  * Permissions: per permission.mdc (all roles; create/update/delete by role).
  * RESPONSABLE_FERME: can add and save new data in child tables; saved rows/cells are read-only.
+ * Number display: grouped thousands (space) + dot decimal via formatGroupedNumber (same as Résumé coûts / production).
  */
 export default function SuiviTechniqueHebdomadaire() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -864,7 +866,7 @@ export default function SuiviTechniqueHebdomadaire() {
                         </div>
                         {maleSetupInfo ? (
                           <div className="text-xs text-muted-foreground space-y-1 border-t border-border pt-3">
-                            <p><strong>Effectif mis en place:</strong> {maleSetupInfo.effectifMisEnPlace.toLocaleString()}</p>
+                            <p><strong>Effectif mis en place:</strong> {formatGroupedNumber(maleSetupInfo.effectifMisEnPlace, 0)}</p>
                             <p><strong>Date mise en place:</strong> {maleSetupInfo.dateMiseEnPlace}</p>
                             <p><strong>Souche:</strong> {maleSetupInfo.souche}</p>
                             <p><strong>Fournisseur:</strong> {maleSetupInfo.origineFournisseur || "—"}</p>
@@ -898,7 +900,7 @@ export default function SuiviTechniqueHebdomadaire() {
                         </div>
                         {femelleSetupInfo ? (
                           <div className="text-xs text-muted-foreground space-y-1 border-t border-border pt-3">
-                            <p><strong>Effectif mis en place:</strong> {femelleSetupInfo.effectifMisEnPlace.toLocaleString()}</p>
+                            <p><strong>Effectif mis en place:</strong> {formatGroupedNumber(femelleSetupInfo.effectifMisEnPlace, 0)}</p>
                             <p><strong>Date mise en place:</strong> {femelleSetupInfo.dateMiseEnPlace}</p>
                             <p><strong>Souche:</strong> {femelleSetupInfo.souche}</p>
                             <p><strong>Fournisseur:</strong> {femelleSetupInfo.origineFournisseur || "—"}</p>

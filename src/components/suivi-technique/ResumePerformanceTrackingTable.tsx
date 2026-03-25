@@ -2,6 +2,9 @@
  * Read-only performance/consumption summary table for the Résumé hebdomadaire page.
  * CONSOMME ALIMENT and CUMUL ALIMENT CONSOMMÉ per sex = sum across B1+B2+B3+... (all active batiments).
  */
+
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+
 export interface ResumePerformanceTrackingTableProps {
   /** Semaine label (e.g. S1) for the header */
   semaine: string;
@@ -23,7 +26,7 @@ export interface ResumePerformanceTrackingTableProps {
 
 function formatVal(value: number | null | undefined, unit?: string): string {
   if (value == null || Number.isNaN(value)) return "—";
-  const s = Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
+  const s = Number.isInteger(value) ? formatGroupedNumber(value, 0) : formatGroupedNumber(value, 2);
   return unit ? `${s} ${unit}` : s;
 }
 

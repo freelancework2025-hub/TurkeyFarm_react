@@ -17,16 +17,12 @@ export interface GazRowExport {
   prixPerUnit: string;
   montant: string;
   numeroBR: string;
-  male: string;
-  femelle: string;
 }
 
 export interface GazExportTotals {
   qte: number;
   prix: number;
   montant: number;
-  male: number;
-  femelle: number;
 }
 
 /** Vide sanitaire: single row at top of table (per lot). */
@@ -52,7 +48,8 @@ export interface LivraisonGazExportParams {
   videSanitaire?: VideSanitaireGaz;
 }
 
-const COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "QTE", "PRIX", "MONTANT", "N° BL", "N° BR", "MALE", "FEMELLE"];
+/** Same order as Livraisons Aliment (sans SEX): N° BL, N° BR before QTE, PRIX, MONTANT. */
+const COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "N° BR", "QTE", "PRIX", "MONTANT"];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
@@ -65,13 +62,11 @@ function rowToArray(row: GazRowExport, age: string | number): (string | number)[
     safeStr(row.sem) || "—",
     safeStr(row.designation) || "—",
     safeStr(row.supplier) || "—",
+    safeStr(row.deliveryNoteNumber) || "—",
+    safeStr(row.numeroBR) || "—",
     safeStr(row.qte) || "—",
     safeStr(row.prixPerUnit) || "—",
     safeStr(row.montant) || "—",
-    safeStr(row.deliveryNoteNumber) || "—",
-    safeStr(row.numeroBR) || "—",
-    safeStr(row.male) || "—",
-    safeStr(row.femelle) || "—",
   ];
 }
 
@@ -79,25 +74,25 @@ function toConfig(params: LivraisonGazExportParams): ITableExportConfig {
   const { farmName, lot, semaine, rows, weekTotal, cumul, ageByRowId, videSanitaire } = params;
   const prefixRows: (string | number)[][] = [];
   if (videSanitaire) {
-    const qte = parseFloat(String(videSanitaire.qte).replace(",", "."));
-    const prix = parseFloat(String(videSanitaire.prixPerUnit).replace(",", "."));
+    const qte = parseFloat(String(videSanitaire.qte).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
+    const prix = parseFloat(String(videSanitaire.prixPerUnit).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
     const montant =
       (videSanitaire.montant ?? "").trim() !== ""
-        ? parseFloat(String(videSanitaire.montant).replace(",", "."))
-        : (!Number.isNaN(qte) && !Number.isNaN(prix) ? qte * prix : 0);
+        ? parseFloat(String(videSanitaire.montant).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."))
+        : !Number.isNaN(qte) && !Number.isNaN(prix)
+          ? qte * prix
+          : NaN;
     prefixRows.push([
       "—",
       safeStr(videSanitaire.date) || "—",
       "—",
       "Vide sanitaire",
       safeStr(videSanitaire.supplier) || "—",
+      safeStr(videSanitaire.deliveryNoteNumber) || "—",
+      safeStr(videSanitaire.numeroBR) || "—",
       Number.isNaN(qte) ? "—" : qte,
       Number.isNaN(prix) ? "—" : prix,
       Number.isNaN(montant) ? "—" : montant,
-      safeStr(videSanitaire.deliveryNoteNumber) || "—",
-      safeStr(videSanitaire.numeroBR) || "—",
-      "—",
-      "—",
     ]);
   }
   return {
@@ -109,11 +104,11 @@ function toConfig(params: LivraisonGazExportParams): ITableExportConfig {
     rows,
     rowToArray,
     prefixRows: prefixRows.length > 0 ? prefixRows : undefined,
-    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant, "", "", weekTotal.male, weekTotal.femelle],
-    cumulRow: ["CUMUL", "", "", "", "", cumul.qte, cumul.prix, cumul.montant, "", "", cumul.male, cumul.femelle],
+    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant],
+    cumulRow: ["CUMUL", "", "", "", "", "", "", cumul.qte, cumul.prix, cumul.montant],
     ageByRowId,
     fileNamePrefix: "Livraisons_Gaz",
-    numberFormatColumns: [5, 6, 7],
+    numberFormatColumns: [7, 8, 9],
   };
 }
 

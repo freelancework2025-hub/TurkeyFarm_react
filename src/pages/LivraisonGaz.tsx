@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Loader2, Plus, Save, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Check, Loader2, Plus, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -26,16 +26,15 @@ import {
   type LotWithStatusResponse,
 } from "@/lib/api";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
-import { getStoredSelectedFarm } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/livraisonGazExport";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS GAZ
  * Flow: Farm → Lot → Semaine → Table (like Suivi Technique Hebdomadaire / Livraisons Aliment).
  * Each semaine has its own table; TOTAL = current semaine, CUMUL = vide sanitaire + semaines up to current.
- * Vide sanitaire row at top (per lot). Same permission matrix: canCreate/canUpdate/canDelete.
- * RESPONSABLE_FERME: can add and save new rows; saved rows are read-only (no update/delete).
- * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → Enregistrer → locked; then day 2 → Enregistrer → locked. Only the first unsaved row is editable.
+ * Vide sanitaire row at top (per lot). canCreate / canUpdate / hasFullAccess (comme Livraisons Aliment).
+ * Enregistrement par ligne : ✓ sur chaque ligne ; vide sanitaire : ✓ sur sa ligne.
  * AGE / SEM: same workflow as Livraisons Aliment (computeAgeByRowId, displayAgeByRowId, persist numeric age; SEM = S1, S2…).
  * Columns: AGE, DATE, SEM, …
  */
@@ -72,13 +71,35 @@ interface VideSanitaireState {
 }
 
 function toNum(s: string): number {
-  const n = parseFloat(String(s).replace(",", "."));
+  const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
   return Number.isNaN(n) ? 0 : n;
 }
 
 function fromNum(n: number | null | undefined): string {
   return n != null ? String(n) : "";
 }
+
+function formatQtyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+function formatMoneyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+/** MONTANT: stored value or qte × prix when empty (Livraisons Aliment). */
+function formatMontantCell(row: Pick<GazRow, "qte" | "prixPerUnit" | "montant">): string {
+  const m = toOptionalNumber(row.montant);
+  if (m != null) return formatGroupedNumber(m, 2);
+  const q = toOptionalNumber(row.qte);
+  const p = toOptionalNumber(row.prixPerUnit);
+  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  return "—";
+}
+
+const VS_QTE_FOCUS_ID = "__vide_sanitaire_gaz__";
 
 function addOneDay(isoDate: string): string {
   const d = new Date(isoDate + "T12:00:00");
@@ -118,7 +139,7 @@ export default function LivraisonGaz() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, canDelete, selectedFarmId: authSelectedFarmId } = useAuth();
+  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -141,7 +162,10 @@ export default function LivraisonGaz() {
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const isSelectedLotClosed = Boolean(lotFilter.trim() && lotsWithStatus.find((l) => l.lot === lotFilter.trim())?.closed);
-  const [saving, setSaving] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  /** QTE: raw while focused, grouped when blurred (Livraisons Aliment). */
+  const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
+  const [savingVideSanitaire, setSavingVideSanitaire] = useState(false);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [previousLotLastDate, setPreviousLotLastDate] = useState<string | null>(null);
   const { toast } = useToast();
@@ -156,6 +180,19 @@ export default function LivraisonGaz() {
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
+
+  const lastExportFarmIdRef = React.useRef<number | null>(null);
+  useEffect(() => {
+    if (!canAccessAllFarms || !pageFarmId || showFarmSelector) return;
+    const hasSelectedFarm = farms.some((f) => f.id === pageFarmId);
+    if (hasSelectedFarm) return;
+    if (lastExportFarmIdRef.current === pageFarmId) return;
+    lastExportFarmIdRef.current = pageFarmId;
+    api.farms
+      .list()
+      .then((list) => setFarms(list))
+      .catch(() => { });
+  }, [canAccessAllFarms, pageFarmId, showFarmSelector, farms]);
 
   useEffect(() => {
     if (showFarmSelector || !pageFarmId) return;
@@ -251,7 +288,12 @@ export default function LivraisonGaz() {
           designation: r.designation ?? "",
           supplier: r.supplier ?? "",
           deliveryNoteNumber: r.deliveryNoteNumber ?? "",
-          qte: fromNum(r.qte),
+          qte: (() => {
+            const s = fromNum(r.qte);
+            if (!String(s).trim()) return "";
+            const n = toOptionalNumber(s);
+            return n != null ? n.toFixed(2) : "";
+          })(),
           prixPerUnit: fromNum(r.prixPerUnit),
           montant: fromNum(r.montant),
           numeroBR: r.numeroBR ?? "",
@@ -271,7 +313,12 @@ export default function LivraisonGaz() {
           supplier: vsRes.supplier ?? "",
           deliveryNoteNumber: vsRes.deliveryNoteNumber ?? "",
           numeroBR: vsRes.numeroBR ?? "",
-          qte: fromNum(vsRes.qte),
+          qte: (() => {
+            const s = fromNum(vsRes.qte);
+            if (!String(s).trim()) return "";
+            const n = toOptionalNumber(s);
+            return n != null ? n.toFixed(2) : "";
+          })(),
           prixPerUnit: fromNum(vsRes.prixPerUnit),
           montant: fromNum(vsRes.montant),
         });
@@ -389,7 +436,7 @@ export default function LivraisonGaz() {
     const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !canDelete) return;
+    if (row?.serverId != null && !hasFullAccess) return;
     if (row?.serverId != null) {
       api.livraisonsGaz
         .delete(row.serverId)
@@ -494,7 +541,7 @@ export default function LivraisonGaz() {
 
   const handleSaveVideSanitaireOnly = async () => {
     if (!hasVideSanitaireToSave || videSanitaireReadOnly) return;
-    setSaving(true);
+    setSavingVideSanitaire(true);
     try {
       await api.videSanitaireGaz.put(
         {
@@ -514,15 +561,18 @@ export default function LivraisonGaz() {
     } catch {
       /* API error — logged in backend only */
     } finally {
-      setSaving(false);
+      setSavingVideSanitaire(false);
     }
   };
 
-  const handleSave = async () => {
-    if (!canCreate) {
+  /** Save one livraison row: create or update (same pattern as LivraisonsAliment). */
+  const saveRow = async (row: GazRow) => {
+    const canSaveNew = row.serverId == null && canCreate;
+    const canSaveExisting = row.serverId != null && canUpdate;
+    if (!canSaveNew && !canSaveExisting) {
       toast({
         title: "Non autorisé",
-        description: "Vous ne pouvez pas enregistrer les données.",
+        description: "Vous ne pouvez pas enregistrer cette ligne.",
         variant: "destructive",
       });
       return;
@@ -530,64 +580,66 @@ export default function LivraisonGaz() {
     if (!lotFilter.trim() || !selectedSemaine) {
       toast({
         title: "Lot et semaine requis",
-        description: "Indiquez le lot et la semaine avant d'enregistrer.",
+        description: "Indiquez le lot et la semaine.",
         variant: "destructive",
       });
       return;
     }
-    const forSem = (r: GazRow) => getSemFromRow(r) === selectedSemaine;
-    const vsHasData = videSanitaire.qte.trim() !== "" || videSanitaire.prixPerUnit.trim() !== "";
-    const unsavedForSem = rows
-      .filter((r) => forSem(r) && r.serverId == null)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const firstUnsaved = unsavedForSem[0];
-
-    if (!firstUnsaved || firstUnsaved.date.trim() === "") {
-      if (!(vsHasData && !videSanitaireReadOnly)) {
-        toast({
-          title: "Aucune ligne à enregistrer",
-          description: "Remplissez la date du jour pour la prochaine ligne à enregistrer.",
-          variant: "destructive",
-        });
-        return;
-      }
+    if (!row.date?.trim()) {
+      toast({
+        title: "Date requise",
+        description: "Remplissez la date pour enregistrer la ligne.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const hasContent =
+      (row.designation?.trim() ?? "") !== "" ||
+      (row.supplier?.trim() ?? "") !== "" ||
+      (row.qte?.trim() ?? "") !== "" ||
+      (row.deliveryNoteNumber?.trim() ?? "") !== "";
+    if (!hasContent) {
+      toast({
+        title: "Ligne incomplète",
+        description: "Remplissez au moins un champ (désignation, fournisseur, quantité ou N° BL).",
+        variant: "destructive",
+      });
+      return;
     }
 
-    setSaving(true);
+    setSavingRowId(row.id);
     try {
-      if (vsHasData && !videSanitaireReadOnly) {
-        await api.videSanitaireGaz.put(
-          {
-            farmId: pageFarmId ?? undefined,
-            lot: lotFilter.trim() || null,
-            date: videSanitaire.date.trim() || null,
-            supplier: videSanitaire.supplier.trim() || null,
-            deliveryNoteNumber: videSanitaire.deliveryNoteNumber.trim() || null,
-            numeroBR: videSanitaire.numeroBR.trim() || null,
-            qte: toNum(videSanitaire.qte) || null,
-            prixPerUnit: toNum(videSanitaire.prixPerUnit) || null,
-          },
-          pageFarmId ?? undefined
+      const computedAge = ageByRowId.get(row.id) ?? undefined;
+      const req = rowToRequest(row, computedAge);
+      if (row.serverId != null) {
+        await api.livraisonsGaz.update(row.serverId, req);
+        toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
+        loadMovements();
+      } else {
+        const created = await api.livraisonsGaz.create(req);
+        toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
+        setRows((prev) =>
+          prev.map((r) =>
+            r.id === row.id
+              ? {
+                ...r,
+                serverId: created.id,
+                age: created.age != null ? String(created.age) : r.age,
+                sem: created.sem ?? r.sem,
+              }
+              : r
+          )
         );
+        return;
       }
-      if (firstUnsaved && firstUnsaved.date.trim() !== "") {
-        const computedAge = ageByRowId.get(firstUnsaved.id);
-        await api.livraisonsGaz.createBatch([rowToRequest(firstUnsaved, computedAge)], pageFarmId ?? undefined);
-      }
-      const parts: string[] = [];
-      if (vsHasData && !videSanitaireReadOnly) parts.push("Vide sanitaire enregistré");
-      if (firstUnsaved && firstUnsaved.date.trim() !== "") {
-        parts.push(`Le ${firstUnsaved.date} enregistré. Remplissez le jour suivant.`);
-      }
-      toast({
-        title: parts.length > 0 ? "Enregistrement effectué" : "Jour enregistré",
-        description: parts.join(". ") || "Vous pouvez maintenant remplir le jour suivant.",
-      });
-      loadMovements();
     } catch {
-      /* API error — logged in backend only */
+      toast({
+        title: "Erreur",
+        description: "Impossible d'enregistrer la ligne.",
+        variant: "destructive",
+      });
     } finally {
-      setSaving(false);
+      setSavingRowId(null);
     }
   };
 
@@ -601,25 +653,19 @@ export default function LivraisonGaz() {
         return (a.date || "").localeCompare(b.date || "");
       })
     : [];
-  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
   const videSanitaireReadOnly = isReadOnly || (hasExistingVideSanitaire && !canUpdate);
   const hasVideSanitaireToSave = (videSanitaire.qte.trim() !== "" || videSanitaire.prixPerUnit.trim() !== "") && !videSanitaireReadOnly;
-  const canClickSave = firstEditableRowIndex >= 0 || hasVideSanitaireToSave;
   const videSanitaireTotals = {
     qte: toNum(videSanitaire.qte),
     prix: toNum(videSanitaire.prixPerUnit),
     montant: toNum(videSanitaire.montant),
-    male: 0,
-    femelle: 0,
   };
   const weekTotal = (() => {
-    const t = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
+    const t = { qte: 0, prix: 0, montant: 0 };
     for (const r of currentRows) {
       t.qte += toNum(r.qte);
       t.prix += toNum(r.prixPerUnit);
       t.montant += toNum(r.montant);
-      t.male += toNum(r.male);
-      t.femelle += toNum(r.femelle);
     }
     return t;
   })();
@@ -635,20 +681,18 @@ export default function LivraisonGaz() {
         running.qte += toNum(r.qte);
         running.prix += toNum(r.prixPerUnit);
         running.montant += toNum(r.montant);
-        running.male += toNum(r.male);
-        running.femelle += toNum(r.femelle);
       }
     }
     return running;
   })();
 
-  const colCount = 13;
+  const colCount = 12;
 
   const canShowExport = hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && pageFarmId != null;
   const exportFarmName =
     canAccessAllFarms && isValidFarmId
       ? (farms.find((f) => f.id === pageFarmId)?.name ?? "Ferme")
-      : (getStoredSelectedFarm()?.name ?? "Ferme");
+      : (selectedFarmName ?? "Ferme");
 
   const handleExportExcel = async () => {
     if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
@@ -917,30 +961,20 @@ export default function LivraisonGaz() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
                   <h2 className="text-lg font-display font-bold text-foreground">Livraisons gaz</h2>
-                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                  {!isReadOnly && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                      Remplissez les lignes puis cliquez sur ✓ pour enregistrer chaque ligne (y compris le vide sanitaire).
                     </p>
                   )}
                 </div>
-                {(canCreate || canUpdate) && (
+                {canCreate && (
                   <div className="flex gap-2">
-                    {canCreate && (
-                      <button
-                        type="button"
-                        onClick={addRow}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                      >
-                        <Plus className="w-4 h-4" /> Ligne
-                      </button>
-                    )}
                     <button
                       type="button"
-                      onClick={handleSave}
-                      disabled={saving || loading || !canClickSave}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                      onClick={addRow}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                     >
-                      <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
+                      <Plus className="w-4 h-4" /> Ligne
                     </button>
                   </div>
                 )}
@@ -951,17 +985,18 @@ export default function LivraisonGaz() {
                   <thead>
                     <tr>
                       <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…) sur tout le lot">AGE</th>
-                      <th className="min-w-[100px]">Date</th>
+                      <th className="min-w-[100px]">DATE</th>
                       <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
-                      <th className="min-w-[180px]">designation</th>
-                      <th className="min-w-[120px]">fournisseur</th>
-                      <th className="min-w-[70px] text-center">QTE</th>
-                      <th className="min-w-[80px]">prix</th>
-                      <th className="min-w-[90px]">montant</th>
-                      <th className="min-w-[90px]">N°BL</th>
-                      <th className="min-w-[90px]">N°BR</th>
-                      <th className="min-w-[70px]">male</th>
-                      <th className="min-w-[80px]">femelle</th>
+                      <th className="min-w-[180px]">DÉSIGNATION</th>
+                      <th className="min-w-[120px]">FOURNISSEUR</th>
+                      <th className="min-w-[90px]">N° BL</th>
+                      <th className="min-w-[90px]">N° BR</th>
+                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
+                      <th className="min-w-[80px] !text-center">PRIX</th>
+                      <th className="min-w-[90px] !text-center">MONTANT</th>
+                      <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">
+                        ✓
+                      </th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
@@ -975,7 +1010,7 @@ export default function LivraisonGaz() {
                     ) : (
                       <>
                         <tr className="bg-red-500/15 text-foreground">
-                          <td>—</td>
+                          <td className="text-sm font-medium text-muted-foreground">—</td>
                           <td>
                             <input
                               type="date"
@@ -985,8 +1020,8 @@ export default function LivraisonGaz() {
                               className="bg-transparent border-0 outline-none text-sm w-full"
                             />
                           </td>
-                          <td>—</td>
-                          <td className="font-medium">Vide sanitaire</td>
+                          <td className="text-sm font-medium text-muted-foreground">—</td>
+                          <td className="font-medium text-sm">Vide sanitaire</td>
                           <td>
                             <input
                               type="text"
@@ -997,30 +1032,6 @@ export default function LivraisonGaz() {
                               className="min-w-[100px] bg-transparent border-0 outline-none text-sm w-full"
                             />
                           </td>
-                          <td className="text-center">
-                            <input
-                              type="number"
-                              value={videSanitaire.qte}
-                              onChange={(e) => updateVideSanitaire("qte", e.target.value)}
-                              placeholder="—"
-                              min={0}
-                              disabled={videSanitaireReadOnly}
-                              className="bg-transparent border-0 outline-none text-sm w-full text-center"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              value={videSanitaire.prixPerUnit}
-                              onChange={(e) => updateVideSanitaire("prixPerUnit", e.target.value)}
-                              placeholder="—"
-                              step="0.01"
-                              min={0}
-                              disabled={videSanitaireReadOnly}
-                              className="bg-transparent border-0 outline-none text-sm w-full"
-                            />
-                          </td>
-                          <td className="font-semibold text-sm">{videSanitaire.montant || "—"}</td>
                           <td>
                             <input
                               type="text"
@@ -1041,26 +1052,92 @@ export default function LivraisonGaz() {
                               className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                             />
                           </td>
-                          <td>—</td>
-                          <td>—</td>
-                          <td>
+                          <td className="min-w-[128px] text-center">
+                            {videSanitaireReadOnly ? (
+                              <span className="block text-center tabular-nums px-1 py-0.5">
+                                {formatQtyDisplay(videSanitaire.qte)}
+                              </span>
+                            ) : (
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={
+                                  qteFocusRowId === VS_QTE_FOCUS_ID
+                                    ? videSanitaire.qte
+                                    : toOptionalNumber(videSanitaire.qte) != null
+                                      ? formatGroupedNumber(toOptionalNumber(videSanitaire.qte)!, 2)
+                                      : ""
+                                }
+                                onFocus={() => setQteFocusRowId(VS_QTE_FOCUS_ID)}
+                                onBlur={(e) => {
+                                  setQteFocusRowId(null);
+                                  const raw = e.target.value;
+                                  if (raw.trim() === "") {
+                                    updateVideSanitaire("qte", "");
+                                    return;
+                                  }
+                                  const n = toOptionalNumber(raw);
+                                  if (n == null || n < 0) {
+                                    updateVideSanitaire("qte", "");
+                                  } else {
+                                    updateVideSanitaire("qte", n.toFixed(2));
+                                  }
+                                }}
+                                onChange={(e) => updateVideSanitaire("qte", e.target.value)}
+                                placeholder="—"
+                                className="w-full min-w-[7.5rem] tabular-nums text-center bg-transparent border-0 outline-none text-sm"
+                              />
+                            )}
+                          </td>
+                          <td className="text-center">
+                            {videSanitaireReadOnly ? (
+                              <span className="block text-center tabular-nums px-1 py-0.5">
+                                {formatMoneyDisplay(videSanitaire.prixPerUnit)}
+                              </span>
+                            ) : (
+                              <input
+                                type="number"
+                                value={videSanitaire.prixPerUnit}
+                                onChange={(e) => updateVideSanitaire("prixPerUnit", e.target.value)}
+                                placeholder="—"
+                                step="0.01"
+                                min={0}
+                                disabled={videSanitaireReadOnly}
+                                className="w-full min-w-[5.5rem] tabular-nums text-center bg-transparent border-0 outline-none text-sm"
+                              />
+                            )}
+                          </td>
+                          <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
+                            {formatMontantCell(videSanitaire)}
+                          </td>
+                          <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                             {hasVideSanitaireToSave && (
                               <button
                                 type="button"
                                 onClick={handleSaveVideSanitaireOnly}
-                                disabled={saving || loading}
-                                className="flex items-center gap-1.5 px-2 py-1 bg-primary text-primary-foreground rounded-md text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                                disabled={savingVideSanitaire || loading}
+                                className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
+                                title="Enregistrer le vide sanitaire"
                               >
-                                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                                Enregistrer
+                                {savingVideSanitaire ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Check className="w-4 h-4" />
+                                )}
                               </button>
                             )}
                           </td>
+                          <td />
                         </tr>
-                        {currentRows.map((row, rowIndex) => {
-                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                          const rowReadOnly = isReadOnly || row.serverId != null || !isFirstEditable;
-                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                        {currentRows.map((row) => {
+                          const rowReadOnly =
+                            isReadOnly ||
+                            (row.serverId == null && !canCreate) ||
+                            (row.serverId != null && !canUpdate);
+                          const canSaveRow =
+                            (row.serverId == null && canCreate) || (row.serverId != null && canUpdate);
+                          const showDelete = row.serverId != null ? hasFullAccess : canCreate;
+                          const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>
                               <td className="text-sm font-medium text-muted-foreground">
@@ -1072,6 +1149,7 @@ export default function LivraisonGaz() {
                                   value={row.date}
                                   onChange={(e) => updateRow(row.id, "date", e.target.value)}
                                   disabled={rowReadOnly}
+                                  className="bg-transparent border-0 outline-none text-sm w-full"
                                 />
                               </td>
                               <td className="text-sm font-medium text-muted-foreground">
@@ -1097,29 +1175,6 @@ export default function LivraisonGaz() {
                                   className="min-w-[100px] bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td className="text-center">
-                                <input
-                                  type="number"
-                                  value={row.qte}
-                                  onChange={(e) => updateRow(row.id, "qte", e.target.value)}
-                                  placeholder="—"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                  className="w-full text-center"
-                                />
-                              </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.prixPerUnit}
-                                  onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
-                                  placeholder="—"
-                                  step="0.01"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                />
-                              </td>
-                              <td className="font-semibold text-sm">{row.montant || "—"}</td>
                               <td>
                                 <input
                                   type="text"
@@ -1140,25 +1195,80 @@ export default function LivraisonGaz() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.male}
-                                  onChange={(e) => updateRow(row.id, "male", e.target.value)}
-                                  placeholder="0"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                />
+                              <td className="min-w-[128px] text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.qte)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      qteFocusRowId === row.id
+                                        ? row.qte
+                                        : toOptionalNumber(row.qte) != null
+                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
+                                          : ""
+                                    }
+                                    onFocus={() => setQteFocusRowId(row.id)}
+                                    onBlur={(e) => {
+                                      setQteFocusRowId(null);
+                                      const raw = e.target.value;
+                                      if (raw.trim() === "") {
+                                        updateRow(row.id, "qte", "");
+                                        return;
+                                      }
+                                      const n = toOptionalNumber(raw);
+                                      if (n == null || n < 0) {
+                                        updateRow(row.id, "qte", "");
+                                      } else {
+                                        updateRow(row.id, "qte", n.toFixed(2));
+                                      }
+                                    }}
+                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                    placeholder="—"
+                                    className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={row.femelle}
-                                  onChange={(e) => updateRow(row.id, "femelle", e.target.value)}
-                                  placeholder="0"
-                                  min={0}
-                                  disabled={rowReadOnly}
-                                />
+                              <td className="text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatMoneyDisplay(row.prixPerUnit)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.prixPerUnit}
+                                    onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                    placeholder="—"
+                                    step="0.01"
+                                    min={0}
+                                    disabled={rowReadOnly}
+                                    className="w-full min-w-[5.5rem] tabular-nums text-center"
+                                  />
+                                )}
+                              </td>
+                              <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
+                                {formatMontantCell(row)}
+                              </td>
+                              <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
+                                {canSaveRow && (
+                                  <button
+                                    type="button"
+                                    onClick={() => saveRow(row)}
+                                    disabled={isSaving || loading}
+                                    className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
+                                    title="Enregistrer la ligne"
+                                  >
+                                    {isSaving ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <Check className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                )}
                               </td>
                               <td>
                                 {showDelete && (
@@ -1181,27 +1291,37 @@ export default function LivraisonGaz() {
                               <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine}
                               </td>
-                              <td className="text-center tabular-nums">{weekTotal.qte}</td>
-                              <td>{weekTotal.prix.toFixed(2)}</td>
-                              <td>{weekTotal.montant.toFixed(2)}</td>
                               <td className="text-center" />
                               <td className="text-center" />
-                              <td>{weekTotal.male}</td>
-                              <td>{weekTotal.femelle}</td>
-                              <td></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(weekTotal.qte, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(weekTotal.prix, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(weekTotal.montant, 2)}
+                              </td>
+                              <td className="w-9 max-w-9 !px-1" />
+                              <td />
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                                 CUMUL
                               </td>
-                              <td className="text-center tabular-nums">{cumulForSelectedSemaine.qte}</td>
-                              <td>{cumulForSelectedSemaine.prix.toFixed(2)}</td>
-                              <td>{cumulForSelectedSemaine.montant.toFixed(2)}</td>
                               <td className="text-center" />
                               <td className="text-center" />
-                              <td>{cumulForSelectedSemaine.male}</td>
-                              <td>{cumulForSelectedSemaine.femelle}</td>
-                              <td></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(cumulForSelectedSemaine.qte, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(cumulForSelectedSemaine.prix, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
+                              </td>
+                              <td className="w-9 max-w-9 !px-1" />
+                              <td />
                             </tr>
                           </>
                         )}

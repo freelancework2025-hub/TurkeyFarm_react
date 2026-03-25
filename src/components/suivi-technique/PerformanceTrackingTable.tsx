@@ -8,6 +8,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 type MetricKey =
   | "poidsMoyen"
@@ -43,7 +44,7 @@ function toNum(v: number | null | undefined): number | null {
 
 function formatVal(value: number | null | undefined, unit?: string): string {
   if (value == null || Number.isNaN(value)) return "—";
-  const s = Number.isInteger(value) ? String(value) : value.toFixed(2).replace(".", ",");
+  const s = Number.isInteger(value) ? formatGroupedNumber(value, 0) : formatGroupedNumber(value, 2);
   return unit ? `${s} ${unit}` : s;
 }
 

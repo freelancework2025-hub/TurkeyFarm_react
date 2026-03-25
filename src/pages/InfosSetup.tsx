@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Save, Plus, Trash2, ChevronDown, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Check, Plus, Trash2, ChevronDown, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -17,8 +17,9 @@ import {
 } from "@/components/ui/tooltip";
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse, type LotWithStatusResponse, type SetupInfoRequest, type SetupInfoResponse, getStoredSelectedFarm } from "@/lib/api";
+import { api, type FarmResponse, type LotWithStatusResponse, type SetupInfoRequest, type SetupInfoResponse } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/infosSetupExport";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 import { useToast } from "@/hooks/use-toast";
 
 const BUILDINGS = ["B1", "B2", "B3", "B4"];
@@ -26,7 +27,11 @@ const SEXES = ["Mâle", "Femelle"];
 const ELEVAGE_TYPES = ["DINDE CHAIR"];
 const SOUCHES = ["PREMIUM", "Grade maker", "Optima", "Converter"];
 
-// Setup information row interface for the table
+/**
+ * Effectif mis en place: same display pattern as Livraisons d'aliment (QTE) —
+ * grouped thousands + dot decimal via formatGroupedNumber; read-only = static span;
+ * editable = text input, formatted when blurred, raw while focused.
+ */
 
 interface SetupRow {
   id: string;
@@ -78,6 +83,36 @@ function emptyRow(selectedLot?: string | null, availableBuildings?: string[]): S
 
 function isSavedRow(id: string): boolean {
   return /^\d+$/.test(id);
+}
+
+function isRowCompleteForSave(r: SetupRow): boolean {
+  return (
+    r.lot.trim() !== "" &&
+    Boolean(r.dateMiseEnPlace) &&
+    r.effectifMisEnPlace.trim() !== "" &&
+    r.origineFournisseur.trim() !== ""
+  );
+}
+
+function formatEffectifDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  if (n == null) return "—";
+  return formatGroupedNumber(Math.round(n), 0);
+}
+
+function setupRowToRequest(r: SetupRow): SetupInfoRequest {
+  return {
+    lot: r.lot.trim(),
+    dateMiseEnPlace: r.dateMiseEnPlace,
+    heureMiseEnPlace: r.heureMiseEnPlace,
+    building: r.building,
+    sex: r.sex,
+    effectifMisEnPlace: Math.max(0, Math.round(toOptionalNumber(r.effectifMisEnPlace) ?? 0)),
+    typeElevage: r.typeElevage,
+    origineFournisseur: r.origineFournisseur.trim(),
+    dateEclosion: r.dateEclosion,
+    souche: r.souche,
+  };
 }
 
 /** Returns the first (building, sex) combo not yet used by any row. Ensures new rows don't violate uq_setup_info_farm_lot_building_sex. */
@@ -279,14 +314,13 @@ export default function InfosSetup() {
     isAdministrateur, 
     isResponsableTechnique, 
     isBackofficeEmployer, 
-    canAccessAllFarms, 
-    isReadOnly, 
+    canAccessAllFarms,
     selectedFarmId: authSelectedFarmId,
     selectedFarmName,
     allFarmsMode,
     canCreate,
     canUpdate,
-    canDelete
+    hasFullAccess,
   } = useAuth();
 
   /** Only Responsable Technique and Administrateur can fill/edit setup info; others can only view. */
@@ -305,7 +339,8 @@ export default function InfosSetup() {
   const selectedLot = lotParam?.trim() || null;
   const [rows, setRows] = useState<SetupRow[]>([emptyRow(selectedLot, BUILDINGS)]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  const [effectifFocusRowId, setEffectifFocusRowId] = useState<string | null>(null);
   
   // Dynamic buildings list - starts with predefined buildings and grows with user input
   const [availableBuildings, setAvailableBuildings] = useState<string[]>(BUILDINGS);
@@ -495,28 +530,10 @@ export default function InfosSetup() {
     const rowToRemove = rows.find((r) => r.id === id);
     const isSaved = rowToRemove && isSavedRow(rowToRemove.id);
     setRows((prev) => prev.filter((r) => r.id !== id));
-    if (isSaved && rowToRemove && canDelete) {
+    if (isSaved && rowToRemove && hasFullAccess) {
       // Persist deletion: save remaining rows via replaceBatch (removes deleted row from backend)
       const remaining = rows.filter((r) => r.id !== id);
-      const toSend: SetupInfoRequest[] = remaining
-        .filter((r) =>
-          r.lot.trim() !== "" &&
-          r.dateMiseEnPlace &&
-          r.effectifMisEnPlace.trim() !== "" &&
-          r.origineFournisseur.trim() !== ""
-        )
-        .map((r) => ({
-          lot: r.lot.trim(),
-          dateMiseEnPlace: r.dateMiseEnPlace,
-          heureMiseEnPlace: r.heureMiseEnPlace,
-          building: r.building,
-          sex: r.sex,
-          effectifMisEnPlace: parseInt(r.effectifMisEnPlace, 10) || 0,
-          typeElevage: r.typeElevage,
-          origineFournisseur: r.origineFournisseur.trim(),
-          dateEclosion: r.dateEclosion,
-          souche: r.souche,
-        }));
+      const toSend: SetupInfoRequest[] = remaining.filter(isRowCompleteForSave).map(setupRowToRequest);
       api.setupInfo
         .replaceBatch(toSend, reportingFarmId ?? undefined, selectedLot)
         .then(() => {
@@ -569,7 +586,7 @@ export default function InfosSetup() {
             updated.effectifMisEnPlace = existingRow.effectifMisEnPlace;
             toast({
               title: "Effectif auto-rempli",
-              description: `Effectif de ${existingRow.effectifMisEnPlace} appliqué pour ${building} - ${sex}`,
+              description: `Effectif de ${formatEffectifDisplay(existingRow.effectifMisEnPlace)} appliqué pour ${building} - ${sex}`,
             });
           }
         }
@@ -579,31 +596,26 @@ export default function InfosSetup() {
     );
   };
 
-  const handleSave = async () => {
+  /** Enregistre via replaceBatch toutes les lignes complètes (API lot entier), déclenché par ✓ sur une ligne. */
+  const saveRow = async (row: SetupRow) => {
     if (!canFillSetupInfo) {
-      toast({ title: "Non autorisé", description: "Seuls le responsable technique et l'administrateur peuvent renseigner les données mises en place.", variant: "destructive" });
+      toast({
+        title: "Non autorisé",
+        description: "Seuls le responsable technique et l'administrateur peuvent renseigner les données mises en place.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!isRowCompleteForSave(row)) {
+      toast({
+        title: "Ligne incomplète",
+        description: "Renseignez le lot, la date, l'effectif et l'origine/fournisseur avant d'enregistrer.",
+        variant: "destructive",
+      });
       return;
     }
 
-    const toSend: SetupInfoRequest[] = rows
-      .filter((r) => 
-        r.lot.trim() !== "" && 
-        r.dateMiseEnPlace && 
-        r.effectifMisEnPlace.trim() !== "" &&
-        r.origineFournisseur.trim() !== ""
-      )
-      .map((r) => ({
-        lot: r.lot.trim(),
-        dateMiseEnPlace: r.dateMiseEnPlace,
-        heureMiseEnPlace: r.heureMiseEnPlace,
-        building: r.building,
-        sex: r.sex,
-        effectifMisEnPlace: parseInt(r.effectifMisEnPlace, 10) || 0,
-        typeElevage: r.typeElevage,
-        origineFournisseur: r.origineFournisseur.trim(),
-        dateEclosion: r.dateEclosion,
-        souche: r.souche,
-      }));
+    const toSend: SetupInfoRequest[] = rows.filter(isRowCompleteForSave).map(setupRowToRequest);
 
     const keys = toSend.map((r) => `${r.building}|${r.sex}`);
     const duplicateKeys = keys.filter((k, i) => keys.indexOf(k) !== i);
@@ -618,22 +630,20 @@ export default function InfosSetup() {
     }
 
     if (toSend.length === 0) {
-      toast({ 
-        title: "Aucune ligne à enregistrer", 
-        description: "Renseignez au moins lot, date, effectif et fournisseur.", 
-        variant: "destructive" 
+      toast({
+        title: "Aucune ligne à enregistrer",
+        description: "Renseignez au moins lot, date, effectif et fournisseur.",
+        variant: "destructive",
       });
       return;
     }
 
-    setSaving(true);
+    setSavingRowId(row.id);
     try {
-      // Try to save as setup info first
       try {
         await api.setupInfo.replaceBatch(toSend, reportingFarmId ?? undefined, selectedLot);
       } catch {
-        // If setup info API doesn't exist yet, fall back to saving as placements
-        const placementData = toSend.map(setup => ({
+        const placementData = toSend.map((setup) => ({
           lot: setup.lot,
           placementDate: setup.dateMiseEnPlace,
           building: setup.building,
@@ -648,12 +658,11 @@ export default function InfosSetup() {
         }
       }
 
-      toast({ 
-        title: "Données mises en place enregistrées", 
-        description: `${toSend.length} ligne(s) enregistrée(s).` 
+      toast({
+        title: "Données enregistrées",
+        description: `${toSend.length} ligne(s) complète(s) enregistrée(s) pour ce lot.`,
       });
       await load();
-      // Refresh the lots list so the new lot appears in the lot selector
       await refreshLots();
     } catch {
       toast({
@@ -662,16 +671,16 @@ export default function InfosSetup() {
         variant: "destructive",
       });
     } finally {
-      setSaving(false);
+      setSavingRowId(null);
     }
   };
 
   const totalMale = rows
     .filter((r) => r.sex === "Mâle")
-    .reduce((sum, r) => sum + (parseInt(r.effectifMisEnPlace) || 0), 0);
+    .reduce((sum, r) => sum + Math.max(0, Math.round(toOptionalNumber(r.effectifMisEnPlace) ?? 0)), 0);
   const totalFemale = rows
     .filter((r) => r.sex === "Femelle")
-    .reduce((sum, r) => sum + (parseInt(r.effectifMisEnPlace) || 0), 0);
+    .reduce((sum, r) => sum + Math.max(0, Math.round(toOptionalNumber(r.effectifMisEnPlace) ?? 0)), 0);
 
   if (loading && hasLotInUrl) {
     return (
@@ -688,7 +697,7 @@ export default function InfosSetup() {
   const exportFarmName =
     canAccessAllFarms && isValidFarmId && selectedFarmId != null
       ? (farms.find((f) => f.id === reportingFarmId)?.name ?? "Ferme")
-      : (selectedFarmName ?? getStoredSelectedFarm()?.name ?? "Ferme");
+      : (selectedFarmName ?? "Ferme");
 
   const handleExportExcel = async () => {
     if (!canShowExport || !selectedLot) return;
@@ -923,23 +932,19 @@ export default function InfosSetup() {
                         : selectedFarmName
                           ? `Ferme : ${selectedFarmName} — Configuration initiale de l'élevage`
                           : "Configuration initiale de l'élevage — informations réutilisables"}
+                      {canFillSetupInfo && (
+                        <span className="block mt-1">Cliquez sur ✓ sur une ligne pour enregistrer (toutes les lignes complètes du lot sont synchronisées).</span>
+                      )}
                     </p>
                   </div>
                   {canFillSetupInfo && (
                     <div className="flex gap-2">
                       <button
+                        type="button"
                         onClick={addRow}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                       >
                         <Plus className="w-4 h-4" /> Ajouter
-                      </button>
-                      <button
-                        onClick={handleSave}
-                        disabled={saving}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-                      >
-                        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        Enregistrer
                       </button>
                     </div>
                   )}
@@ -965,6 +970,8 @@ export default function InfosSetup() {
                       {rows.map((row) => {
                         const saved = isSavedRow(row.id);
                         const readOnly = !canFillSetupInfo || (saved && !canUpdate);
+                        const canSaveRow = canFillSetupInfo && (!saved || canUpdate);
+                        const showDelete = saved ? hasFullAccess : canFillSetupInfo;
                         return (
                           <tr key={row.id}>
                             <td>
@@ -1007,16 +1014,45 @@ export default function InfosSetup() {
                                 ))}
                               </select>
                             </td>
-                            <td>
-                              <input
-                                type="number"
-                                value={row.effectifMisEnPlace}
-                                onChange={(e) => updateRow(row.id, "effectifMisEnPlace", e.target.value)}
-                                placeholder="0"
-                                min="0"
-                                readOnly={readOnly}
-                                className={readOnly ? "bg-muted/50 cursor-not-allowed" : ""}
-                              />
+                            <td className="min-w-[7rem] text-center">
+                              {readOnly ? (
+                                <span className="block text-center tabular-nums px-1 py-0.5 whitespace-nowrap">
+                                  {formatEffectifDisplay(row.effectifMisEnPlace)}
+                                </span>
+                              ) : (
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={
+                                    effectifFocusRowId === row.id
+                                      ? row.effectifMisEnPlace
+                                      : toOptionalNumber(row.effectifMisEnPlace) != null
+                                        ? formatGroupedNumber(
+                                            Math.round(toOptionalNumber(row.effectifMisEnPlace)!),
+                                            0
+                                          )
+                                        : ""
+                                  }
+                                  onFocus={() => setEffectifFocusRowId(row.id)}
+                                  onBlur={(e) => {
+                                    setEffectifFocusRowId(null);
+                                    const raw = e.target.value;
+                                    if (raw.trim() === "") {
+                                      updateRow(row.id, "effectifMisEnPlace", "");
+                                      return;
+                                    }
+                                    const n = toOptionalNumber(raw);
+                                    if (n == null || n < 0) {
+                                      updateRow(row.id, "effectifMisEnPlace", "");
+                                    } else {
+                                      updateRow(row.id, "effectifMisEnPlace", String(Math.max(0, Math.round(n))));
+                                    }
+                                  }}
+                                  onChange={(e) => updateRow(row.id, "effectifMisEnPlace", e.target.value)}
+                                  placeholder="0"
+                                  className="w-full min-w-[6rem] tabular-nums text-center bg-transparent border-0 outline-none"
+                                />
+                              )}
                             </td>
                             <td>
                               <select
@@ -1062,16 +1098,38 @@ export default function InfosSetup() {
                               </select>
                             </td>
                             {canFillSetupInfo ? (
-                              <td>
-                                <button
-                                  onClick={() => removeRow(row.id)}
-                                  className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                  disabled={rows.length <= 1}
-                                  title="Supprimer la ligne"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </td>
+                              <>
+                                <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
+                                  {canSaveRow && (
+                                    <button
+                                      type="button"
+                                      onClick={() => saveRow(row)}
+                                      disabled={savingRowId != null}
+                                      className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
+                                      title="Enregistrer (synchronise toutes les lignes complètes)"
+                                    >
+                                      {savingRowId === row.id ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                      ) : (
+                                        <Check className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  )}
+                                </td>
+                                <td>
+                                  {showDelete && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                      disabled={rows.length <= 1}
+                                      title="Supprimer la ligne"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </td>
+                              </>
                             ) : null}
                           </tr>
                         );
@@ -1082,13 +1140,21 @@ export default function InfosSetup() {
                         <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
                           Total Mâle / Femelle :
                         </td>
-                        <td className="px-3 py-2 font-bold text-sm">
-                          {totalMale} / {totalFemale}
+                        <td className="px-3 py-2 font-bold text-sm whitespace-nowrap tabular-nums">
+                          {formatGroupedNumber(totalMale, 0)} / {formatGroupedNumber(totalFemale, 0)}
                         </td>
                         <td colSpan={4} className="text-right font-semibold text-sm px-3 py-2">
-                          Total Général : <span className="text-accent">{totalMale + totalFemale}</span>
+                          Total Général :{" "}
+                          <span className="text-accent tabular-nums">
+                            {formatGroupedNumber(totalMale + totalFemale, 0)}
+                          </span>
                         </td>
-                        {canFillSetupInfo ? <td></td> : null}
+                        {canFillSetupInfo ? (
+                          <>
+                            <td />
+                            <td />
+                          </>
+                        ) : null}
                       </tr>
                     </tfoot>
                   </table>

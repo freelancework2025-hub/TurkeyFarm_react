@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Loader2, Plus, Save, Tag, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Check, Loader2, Plus, Tag, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -18,17 +18,15 @@ import {
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, type FarmResponse, type SortieRequest, type SortieResponse, type LotWithStatusResponse, getStoredSelectedFarm } from "@/lib/api";
+import { api, type FarmResponse, type SortieRequest, type SortieResponse, type LotWithStatusResponse } from "@/lib/api";
+import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/sortiesFermeExport";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
- * Permission matrix (same as Reporting Journalier):
- * - ADMINISTRATEUR / RESPONSABLE_TECHNIQUE: Ligne + Enregistrer visible; can edit/delete any row.
- * - BACKOFFICE_EMPLOYER: No Ligne, no Enregistrer; all rows read-only; no delete (isReadOnly, !canCreate, !canUpdate, !canDelete).
- * - RESPONSABLE_FERME: Ligne + Enregistrer visible; saved rows read-only; no delete on saved rows (canCreate, !canUpdate, !canDelete).
- * DAY-BY-DAY FLOW: Each row = one day. User fills day 1 → Enregistrer → locked; then day 2 → Enregistrer → locked.
- * Only the first unsaved row is editable (for RESPONSABLE_FERME). ADMINISTRATEUR and RESPONSABLE_TECHNIQUE can edit saved rows and update them.
- * Buttons: Ligne & Enregistrer only when canCreate. Delete on row: when saved → canDelete; when new → canCreate.
+ * Permissions alignées sur Livraisons Aliment : canCreate / canUpdate / hasFullAccess.
+ * Enregistrement par ligne : ✓ sur chaque ligne (création ou mise à jour). Barre : + Ligne si canCreate.
+ * Ligne persistée : suppression réservée à hasFullAccess (Admin/RT) ; brouillon : canCreate.
  */
 
 const TYPES = [
@@ -63,25 +61,74 @@ function typeDisablesNbreDinde(type: string): boolean {
   return TYPES_WITHOUT_NBRE_DINDE.includes(type);
 }
 
-/** Convert string to number, handling commas and empty values */
+/** Convert string to number (spaces, thin space, comma decimals). */
 function toNum(s: string): number {
-  const n = parseFloat(String(s).replace(",", "."));
+  const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
   return Number.isNaN(n) ? 0 : n;
 }
 
-/** Semaine selector options (S1..S24), like LivraisonGaz */
-const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
+function formatNbreDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 0) : "—";
+}
+
+function formatQtyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+function formatMoneyDisplay(s: string): string {
+  const n = toOptionalNumber(s);
+  return n != null ? formatGroupedNumber(n, 2) : "—";
+}
+
+/** Montant: stored value or qté × prix (Livraisons Aliment). */
+function formatMontantCell(row: Pick<SortieRow, "qte_brute_kg" | "prix_kg" | "montant_ttc">): string {
+  const m = toOptionalNumber(row.montant_ttc);
+  if (m != null) return formatGroupedNumber(m, 2);
+  const q = toOptionalNumber(row.qte_brute_kg);
+  const p = toOptionalNumber(row.prix_kg);
+  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  return "—";
+}
+
+/** Vide sanitaire (API `semaine` = 0) ; puis S1–S36 comme Livraisons Aliment. */
+const VS_SEMAINE = "VS";
+const SEMAINES_NUMEROTEES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
+/** Grille : VS en premier, puis S1… */
+const SEMAINES = [VS_SEMAINE, ...SEMAINES_NUMEROTEES];
 
 /** Minimum table rows to display (7 default rows for sequential save workflow) */
 const MIN_TABLE_ROWS = 7;
 
-/** Parse "S1" or "1" to number for API */
-function parseSemaineToNum(s: string): number | null {
+/** Libellé semaine (VS, S1…) → entier API : VS = 0, S1 = 1, … */
+function semaineLabelToApi(s: string): number | null {
   if (s == null || s.trim() === "") return null;
-  const m = s.trim().match(/^S?(\d+)$/i);
+  const t = s.trim();
+  if (t.toUpperCase() === VS_SEMAINE) return 0;
+  const m = t.match(/^S?(\d+)$/i);
   if (m) return parseInt(m[1], 10);
-  const n = parseInt(s.trim(), 10);
+  const n = parseInt(t, 10);
   return Number.isNaN(n) ? null : n;
+}
+
+/** Clé de filtre / comparaison (VS insensible à la casse). */
+function normalizeSemaineKey(s: string): string {
+  const t = (s || "").trim();
+  return t.toUpperCase() === "VS" ? VS_SEMAINE : t;
+}
+
+/** Semaine affichée / filtre depuis la ligne. */
+function getSemFromRow(r: SortieRow): string {
+  return normalizeSemaineKey(r.semaine ?? "");
+}
+
+/** Ordre cumul : VS d’abord, puis Sn via sortSemaines. */
+function sortSemainesSortiesOrder(labels: string[]): string[] {
+  const trimmed = labels.map((x) => x.trim()).filter(Boolean);
+  const vs = trimmed.find((x) => x.toUpperCase() === "VS");
+  const rest = sortSemaines(trimmed.filter((x) => x.toUpperCase() !== "VS"));
+  return vs != null ? [VS_SEMAINE, ...rest] : rest;
 }
 
 /** Add one day to a YYYY-MM-DD date string. */
@@ -94,6 +141,7 @@ function addOneDay(isoDate: string): string {
 /** Compare two rows for equality (saved fields only). */
 function rowDataEqual(a: SortieRow, b: SortieRow): boolean {
   return (
+    normalizeSemaineKey(a.semaine) === normalizeSemaineKey(b.semaine) &&
     a.date === b.date &&
     a.lot === b.lot &&
     a.client === b.client &&
@@ -136,15 +184,13 @@ export default function SortiesFerme() {
   const selectedSemaine = trimmedSemaine;
 
   const {
-    isAdministrateur,
-    isResponsableTechnique,
-    isBackofficeEmployer,
     canAccessAllFarms,
     isReadOnly,
     canCreate,
     canUpdate,
-    canDelete,
+    hasFullAccess,
     selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
   } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
@@ -157,7 +203,9 @@ export default function SortiesFerme() {
   const [rows, setRows] = useState<SortieRow[]>([]);
   const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  /** Qté brute: raw while focused, grouped when blurred (Livraisons Aliment). */
+  const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const originalSavedRowsRef = useRef<Map<number, SortieRow>>(new Map());
   const { toast } = useToast();
@@ -172,6 +220,19 @@ export default function SortiesFerme() {
       .catch(() => setFarms([]))
       .finally(() => setFarmsLoading(false));
   }, [showFarmSelector]);
+
+  const lastExportFarmIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!canAccessAllFarms || !pageFarmId || showFarmSelector) return;
+    const hasSelectedFarm = farms.some((f) => f.id === pageFarmId);
+    if (hasSelectedFarm) return;
+    if (lastExportFarmIdRef.current === pageFarmId) return;
+    lastExportFarmIdRef.current = pageFarmId;
+    api.farms
+      .list()
+      .then((list) => setFarms(list))
+      .catch(() => { });
+  }, [canAccessAllFarms, pageFarmId, showFarmSelector, farms]);
 
   useEffect(() => {
     if (showFarmSelector || !pageFarmId) return;
@@ -236,9 +297,17 @@ export default function SortiesFerme() {
       });
       const normalizedSemaine = (v: number | string | null | undefined): string => {
         if (v == null) return "";
-        if (typeof v === "number") return `S${v}`;
+        if (typeof v === "number") {
+          if (v === 0) return VS_SEMAINE;
+          return `S${v}`;
+        }
         const s = String(v).trim();
-        return s === "" ? "" : /^\d+$/.test(s) ? `S${s}` : s;
+        if (s === "") return "";
+        if (/^\d+$/.test(s)) {
+          const n = parseInt(s, 10);
+          return n === 0 ? VS_SEMAINE : `S${s}`;
+        }
+        return s.toUpperCase() === "VS" ? VS_SEMAINE : s;
       };
       const mapped: SortieRow[] = list.map((r: SortieResponse) => ({
         id: crypto.randomUUID(),
@@ -251,11 +320,23 @@ export default function SortiesFerme() {
         type: r.type ?? TYPES[0],
         designation: r.designation ?? "",
         nbre_dinde: r.nbre_dinde != null ? String(r.nbre_dinde) : "",
-        qte_brute_kg: r.qte_brute_kg != null ? String(r.qte_brute_kg) : "",
-        prix_kg: r.prix_kg != null ? String(r.prix_kg) : "",
-        montant_ttc: r.montant_ttc != null ? String(r.montant_ttc) : "",
+        qte_brute_kg: (() => {
+          if (r.qte_brute_kg == null) return "";
+          const n = typeof r.qte_brute_kg === "number" ? r.qte_brute_kg : toOptionalNumber(String(r.qte_brute_kg));
+          return n != null ? n.toFixed(2) : String(r.qte_brute_kg);
+        })(),
+        prix_kg: (() => {
+          if (r.prix_kg == null) return "";
+          const n = typeof r.prix_kg === "number" ? r.prix_kg : toOptionalNumber(String(r.prix_kg));
+          return n != null ? n.toFixed(2) : String(r.prix_kg);
+        })(),
+        montant_ttc: (() => {
+          if (r.montant_ttc == null) return "";
+          const n = typeof r.montant_ttc === "number" ? r.montant_ttc : toOptionalNumber(String(r.montant_ttc));
+          return n != null ? n.toFixed(2) : String(r.montant_ttc);
+        })(),
       }));
-      const forSem = mapped.filter((r) => (r.semaine || "").trim() === selectedSemaine);
+      const forSem = mapped.filter((r) => getSemFromRow(r) === normalizeSemaineKey(selectedSemaine));
       originalSavedRowsRef.current = new Map(
         mapped.filter((r): r is SortieRow & { serverId: number } => r.serverId != null).map((r) => [r.serverId, { ...r }])
       );
@@ -278,7 +359,7 @@ export default function SortiesFerme() {
         const newRows: SortieRow[] = [];
         let nextDate = startDate;
         for (let i = 0; i < toAdd; i++) {
-          newRows.push(emptyRow(lotParam.trim(), selectedSemaine, nextDate));
+          newRows.push(emptyRow(lotParam.trim(), normalizeSemaineKey(selectedSemaine), nextDate));
           nextDate = addOneDay(nextDate);
         }
         const finalRows = [...mapped, ...newRows];
@@ -293,7 +374,7 @@ export default function SortiesFerme() {
         const newRows: SortieRow[] = [];
         let nextDate = today;
         for (let i = 0; i < MIN_TABLE_ROWS; i++) {
-          newRows.push(emptyRow(lotParam.trim(), selectedSemaine, nextDate));
+          newRows.push(emptyRow(lotParam.trim(), normalizeSemaineKey(selectedSemaine), nextDate));
           nextDate = addOneDay(nextDate);
         }
         setRows(newRows);
@@ -303,7 +384,7 @@ export default function SortiesFerme() {
     } finally {
       setLoading(false);
     }
-  }, [showFarmSelector, pageFarmId, hasLotInUrl, hasSemaineInUrl, lotParam, selectedSemaine, isReadOnly, canCreate, toast, isSelectedLotClosed]);
+  }, [showFarmSelector, pageFarmId, hasLotInUrl, hasSemaineInUrl, lotParam, selectedSemaine, isReadOnly, canCreate, isSelectedLotClosed]);
 
   useEffect(() => {
     loadSorties();
@@ -313,24 +394,25 @@ export default function SortiesFerme() {
     if (!canCreate || !selectedSemaine) return;
     
     // Get the rows as they appear in the display (filtered and sorted by date)
+    const sk = normalizeSemaineKey(selectedSemaine);
     const currentRows = rows
-      .filter((r) => (r.semaine || "").trim() === selectedSemaine)
+      .filter((r) => getSemFromRow(r) === sk)
       .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     
     // Find the last row in the display order (the one with the latest date)
     const lastDisplayRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
     const nextDate = lastDisplayRow?.date?.trim() ? addOneDay(lastDisplayRow.date) : today;
-    const newRow = { ...emptyRow(lotParam.trim(), selectedSemaine), date: nextDate };
+    const newRow = { ...emptyRow(lotParam.trim(), sk), date: nextDate };
     
     // Simply append to the array - the display sorting will put it in the right place
     setRows((prev) => [...prev, newRow]);
   };
 
   const removeRow = (id: string) => {
-    const currentRows = rows.filter((r) => (r.semaine || "").trim() === selectedSemaine);
+    const currentRows = rows.filter((r) => getSemFromRow(r) === normalizeSemaineKey(selectedSemaine));
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !canDelete) return;
+    if (row?.serverId != null && !hasFullAccess) return;
     if (row?.serverId != null) {
       api.sorties
         .delete(row.serverId)
@@ -346,9 +428,15 @@ export default function SortiesFerme() {
       prev.map((r) => {
         if (r.id !== id) return r;
         const updated = { ...r, [field]: value };
-        const qty = parseFloat(updated.qte_brute_kg) || 0;
-        const price = parseFloat(updated.prix_kg) || 0;
-        updated.montant_ttc = (qty * price).toFixed(2);
+        const qStr = updated.qte_brute_kg.trim();
+        const pStr = updated.prix_kg.trim();
+        if (qStr === "" && pStr === "") {
+          updated.montant_ttc = "";
+        } else {
+          const qty = toNum(updated.qte_brute_kg);
+          const price = toNum(updated.prix_kg);
+          updated.montant_ttc = (qty * price).toFixed(2);
+        }
         return updated;
       })
     );
@@ -356,86 +444,133 @@ export default function SortiesFerme() {
 
   const rowToRequest = (r: SortieRow): SortieRequest => ({
     date: r.date || null,
-    semaine: parseSemaineToNum(r.semaine),
+    semaine: semaineLabelToApi(r.semaine),
     lot: r.lot || null,
     client: r.client || null,
     num_bl: r.num_bl || null,
     type: r.type || null,
     designation: r.designation || null,
-    nbre_dinde: r.nbre_dinde.trim() !== "" ? parseInt(r.nbre_dinde, 10) : null,
-    qte_brute_kg: r.qte_brute_kg.trim() !== "" ? parseFloat(r.qte_brute_kg) : null,
-    prix_kg: r.prix_kg.trim() !== "" ? parseFloat(r.prix_kg) : null,
-    montant_ttc: r.montant_ttc.trim() !== "" ? parseFloat(r.montant_ttc) : null,
+    nbre_dinde: r.nbre_dinde.trim() !== "" ? Math.round(toNum(r.nbre_dinde)) : null,
+    qte_brute_kg: r.qte_brute_kg.trim() !== "" ? toNum(r.qte_brute_kg) : null,
+    prix_kg: r.prix_kg.trim() !== "" ? toNum(r.prix_kg) : null,
+    montant_ttc: r.montant_ttc.trim() !== "" ? toNum(r.montant_ttc) : null,
   });
 
-  const handleSave = async () => {
-    if (!canCreate && !canUpdate) {
-      toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer les données.", variant: "destructive" });
+  /** Save one row: create (batch d’un élément) ou update — même logique que LivraisonsAliment. */
+  const saveRow = async (row: SortieRow) => {
+    const canSaveNew = row.serverId == null && canCreate;
+    const canSaveExisting = row.serverId != null && canUpdate;
+    if (!canSaveNew && !canSaveExisting) {
+      toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer cette ligne.", variant: "destructive" });
       return;
     }
     if (!selectedSemaine) {
-      toast({ title: "Semaine requise", description: "Choisissez une semaine avant d'enregistrer.", variant: "destructive" });
+      toast({ title: "Semaine requise", description: "Choisissez une semaine.", variant: "destructive" });
       return;
     }
-    const forSem = (r: SortieRow) => (r.semaine || "").trim() === selectedSemaine;
-    const unsavedForSem = rows
-      .filter((r) => forSem(r) && r.serverId == null)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const firstUnsaved = unsavedForSem[0];
-    const savedRowsToUpdate = rows
-      .filter((r) => forSem(r) && r.serverId != null && canUpdate)
-      .filter((r) => {
-        const orig = originalSavedRowsRef.current.get(r.serverId!);
-        return orig && !rowDataEqual(r, orig);
-      });
-
-    const hasNewToCreate = canCreate && firstUnsaved && firstUnsaved.date.trim() !== "";
-    const hasUpdates = savedRowsToUpdate.length > 0;
-
-    if (!hasNewToCreate && !hasUpdates) {
+    const sk = normalizeSemaineKey(selectedSemaine);
+    if (getSemFromRow(row) !== sk) {
       toast({
-        title: "Aucune modification à enregistrer",
-        description: "Remplissez la date du jour pour une nouvelle ligne, ou modifiez une ligne existante.",
+        title: "Semaine incohérente",
+        description: "La colonne SEM de la ligne doit correspondre à la semaine affichée.",
         variant: "destructive",
       });
       return;
     }
-    setSaving(true);
+    if (!row.date?.trim()) {
+      toast({ title: "Date requise", description: "Remplissez la date pour enregistrer la ligne.", variant: "destructive" });
+      return;
+    }
+    const hasContent =
+      (row.client?.trim() ?? "") !== "" ||
+      (row.num_bl?.trim() ?? "") !== "" ||
+      (row.nbre_dinde?.trim() ?? "") !== "" ||
+      (row.qte_brute_kg?.trim() ?? "") !== "";
+
+    if (row.serverId == null) {
+      if (!hasContent) {
+        toast({
+          title: "Ligne incomplète",
+          description: "Remplissez au moins un champ (client, N° BL, nombre de dindes ou quantité).",
+          variant: "destructive",
+        });
+        return;
+      }
+    } else {
+      const orig = originalSavedRowsRef.current.get(row.serverId);
+      if (orig != null && rowDataEqual(row, orig)) {
+        toast({
+          title: "Rien à enregistrer",
+          description: "Aucune modification sur cette ligne.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    setSavingRowId(row.id);
     try {
-      if (hasNewToCreate) {
-        await api.sorties.createBatch([rowToRequest(firstUnsaved!)], pageFarmId ?? undefined);
+      if (row.serverId == null) {
+        const createdList = await api.sorties.createBatch([rowToRequest(row)], pageFarmId ?? undefined);
+        const created = createdList[0];
+        if (!created) {
+          toast({ title: "Erreur", description: "Réponse serveur inattendue.", variant: "destructive" });
+          return;
+        }
+        toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
+        setRows((prev) =>
+          prev.map((r) =>
+            r.id === row.id ? { ...r, serverId: created.id } : r
+          )
+        );
+        const merged: SortieRow = { ...row, serverId: created.id };
+        originalSavedRowsRef.current.set(created.id, { ...merged });
+        return;
       }
-      for (const row of savedRowsToUpdate) {
-        await api.sorties.update(row.serverId!, rowToRequest(row), undefined);
-        originalSavedRowsRef.current.set(row.serverId!, { ...row });
-      }
-      if (hasNewToCreate && hasUpdates) {
-        toast({ title: "Enregistré", description: "Nouvelle ligne et modifications enregistrées." });
-      } else if (hasNewToCreate) {
-        toast({ title: "Jour enregistré", description: `Le ${firstUnsaved!.date} a été enregistré.` });
-      } else if (hasUpdates) {
-        toast({ title: "Modifications enregistrées", description: `${savedRowsToUpdate.length} ligne(s) mise(s) à jour.` });
-      }
+
+      await api.sorties.update(row.serverId, rowToRequest(row), undefined);
+      originalSavedRowsRef.current.set(row.serverId, { ...row });
+      toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
       loadSorties();
     } catch {
-      /* API error — logged in backend only */
+      toast({ title: "Erreur", description: "Impossible d'enregistrer la ligne.", variant: "destructive" });
     } finally {
-      setSaving(false);
+      setSavingRowId(null);
     }
   };
 
-  const currentRows = selectedSemaine
-    ? [...rows.filter((r) => (r.semaine || "").trim() === selectedSemaine)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))
-    : [];
-  const firstEditableRowIndex = currentRows.findIndex((r) => r.serverId == null);
-  const firstUnsaved = currentRows.find((r) => r.serverId == null);
-  const hasModifiedSavedRows = canUpdate && currentRows.some((r) => {
-    if (r.serverId == null) return false;
-    const orig = originalSavedRowsRef.current.get(r.serverId);
-    return orig != null && !rowDataEqual(r, orig);
-  });
-  const hasSomethingToSave = (canCreate && firstUnsaved && firstUnsaved.date.trim() !== "") || hasModifiedSavedRows;
+  const selectedSemKey = normalizeSemaineKey(selectedSemaine || "");
 
+  /** Âge séquentiel : uniquement S1, S2… (comme Livraisons Aliment). VS n’a pas d’âge ; la chaîne repart à S1. */
+  const ageByRowId = useMemo(() => {
+    const rowsForAge = rows.filter((r) => getSemFromRow(r) !== VS_SEMAINE);
+    return computeAgeByRowId(rowsForAge, (r) => getSemFromRow(r), (r) => r.date);
+  }, [rows]);
+
+  const displayAgeByRowId = useMemo(() => {
+    const m = new Map<string, number | string>();
+    if (loading) return m;
+    for (const r of rows) {
+      if (getSemFromRow(r) === VS_SEMAINE) {
+        m.set(r.id, "—");
+        continue;
+      }
+      m.set(r.id, ageByRowId.get(r.id) ?? "—");
+    }
+    return m;
+  }, [rows, ageByRowId, loading]);
+
+  /** Comme LivraisonsAliment : tri par AGE (nombre), puis date ; VS = pas d’âge → tri effectif par date. */
+  const currentRows = selectedSemaine
+    ? [...rows.filter((r) => getSemFromRow(r) === selectedSemKey)].sort((a, b) => {
+        const ageA = displayAgeByRowId.get(a.id);
+        const ageB = displayAgeByRowId.get(b.id);
+        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+        if (numA !== numB) return numA - numB;
+        return (a.date || "").localeCompare(b.date || "");
+      })
+    : [];
   // Calculate totals for the current week
   const weekTotal = (() => {
     const t = { nbre_dinde: 0, qte_brute_kg: 0, prix_kg: 0, montant_ttc: 0 };
@@ -455,20 +590,14 @@ export default function SortiesFerme() {
   const cumulForSelectedSemaine = (() => {
     const t = { nbre_dinde: 0, qte_brute_kg: 0, prix_kg: 0, montant_ttc: 0 };
     
-    // Get all semaines and sort them
-    const sems = new Set(rows.map((r) => (r.semaine || "").trim()).filter(Boolean));
-    const semOrder = Array.from(sems).sort((a, b) => {
-      const numA = parseInt(a.replace(/^S?(\d+)$/i, "$1"), 10);
-      const numB = parseInt(b.replace(/^S?(\d+)$/i, "$1"), 10);
-      if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-      return a.localeCompare(b);
-    });
-    
-    const idx = semOrder.indexOf(selectedSemaine);
-    const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
-    
+    const sems = new Set(rows.map((r) => getSemFromRow(r)).filter(Boolean));
+    const semOrder = sortSemainesSortiesOrder([...sems]);
+
+    const idx = semOrder.indexOf(selectedSemKey);
+    const semsUpTo = idx < 0 ? (selectedSemKey ? [selectedSemKey] : []) : semOrder.slice(0, idx + 1);
+
     for (const sem of semsUpTo) {
-      const weekRows = rows.filter((r) => (r.semaine || "").trim() === sem);
+      const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
         t.nbre_dinde += toNum(r.nbre_dinde);
         // Only include qte_brute_kg, prix_kg, and montant_ttc for rows that have nbre_dinde
@@ -486,7 +615,7 @@ export default function SortiesFerme() {
   const exportFarmName =
     canAccessAllFarms && isValidFarmId
       ? (farms.find((f) => f.id === pageFarmId)?.name ?? "Ferme")
-      : (getStoredSelectedFarm()?.name ?? "Ferme");
+      : (selectedFarmName ?? "Ferme");
 
   const handleExportExcel = async () => {
     if (!canShowExport || !lotParam.trim() || !selectedSemaine) return;
@@ -495,10 +624,23 @@ export default function SortiesFerme() {
         farmName: exportFarmName,
         lot: lotParam.trim(),
         semaine: selectedSemaine,
-        rows: currentRows,
+        rows: currentRows.map((r) => ({
+          id: r.id,
+          semaine: r.semaine,
+          date: r.date,
+          lot: r.lot,
+          client: r.client,
+          num_bl: r.num_bl,
+          type: r.type,
+          designation: r.designation,
+          nbre_dinde: r.nbre_dinde,
+          qte_brute_kg: r.qte_brute_kg,
+          prix_kg: r.prix_kg,
+          montant_ttc: r.montant_ttc,
+        })),
         weekTotal,
         cumul: cumulForSelectedSemaine,
-        ageByRowId: new Map(),
+        ageByRowId: displayAgeByRowId,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
     } catch {
@@ -512,10 +654,23 @@ export default function SortiesFerme() {
       farmName: exportFarmName,
       lot: lotParam.trim(),
       semaine: selectedSemaine,
-      rows: currentRows,
+      rows: currentRows.map((r) => ({
+        id: r.id,
+        semaine: r.semaine,
+        date: r.date,
+        lot: r.lot,
+        client: r.client,
+        num_bl: r.num_bl,
+        type: r.type,
+        designation: r.designation,
+        nbre_dinde: r.nbre_dinde,
+        qte_brute_kg: r.qte_brute_kg,
+        prix_kg: r.prix_kg,
+        montant_ttc: r.montant_ttc,
+      })),
       weekTotal,
       cumul: cumulForSelectedSemaine,
-      ageByRowId: new Map(),
+      ageByRowId: displayAgeByRowId,
     });
     toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
   };
@@ -687,8 +842,11 @@ export default function SortiesFerme() {
                   <button
                     key={s}
                     type="button"
+                    title={s === VS_SEMAINE ? "Vide sanitaire (avant S1)" : undefined}
                     onClick={() => selectSemaine(s)}
-                    className="flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-border bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group"
+                    className={`flex items-center justify-center gap-2 p-4 rounded-xl border-2 bg-card hover:border-primary hover:bg-muted/50 transition-colors text-left group ${
+                      s === VS_SEMAINE ? "border-primary/50 bg-muted/30" : "border-border"
+                    }`}
                   >
                     <Calendar className="w-5 h-5 shrink-0 text-muted-foreground group-hover:text-primary" />
                     <span className="font-semibold text-foreground">{s}</span>
@@ -702,7 +860,7 @@ export default function SortiesFerme() {
                     type="text"
                     value={newSemaineInput}
                     onChange={(e) => setNewSemaineInput(e.target.value)}
-                    placeholder="ex. S25, S26..."
+                    placeholder="ex. S37, S38…"
                     className="rounded-md border border-input bg-background px-3 py-2 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <button
@@ -755,30 +913,20 @@ export default function SortiesFerme() {
                   <h2 className="text-lg font-display font-bold text-foreground">
                     Tableau des Sorties
                   </h2>
-                  {!isReadOnly && firstEditableRowIndex >= 0 && (
+                  {!isReadOnly && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Remplissez le jour affiché, cliquez Enregistrer, puis remplissez le suivant. Les jours enregistrés ne sont plus modifiables.
+                      Remplissez les lignes puis cliquez sur ✓ pour enregistrer chaque ligne.
                     </p>
                   )}
                 </div>
-                {(canCreate || canUpdate) && (
+                {canCreate && (
                   <div className="flex gap-2">
-                    {canCreate && (
-                      <button
-                        type="button"
-                        onClick={addRow}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-                      >
-                        <Plus className="w-4 h-4" /> Ligne
-                      </button>
-                    )}
                     <button
                       type="button"
-                      onClick={handleSave}
-                      disabled={saving || loading || !selectedSemaine || !hasSomethingToSave}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                      onClick={addRow}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                     >
-                      <Save className="w-4 h-4" /> {saving ? "Enregistrement…" : "Enregistrer"}
+                      <Plus className="w-4 h-4" /> Ligne
                     </button>
                   </div>
                 )}
@@ -788,44 +936,101 @@ export default function SortiesFerme() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th>Date</th>
-                      <th>Client</th>
-                      <th>N° BL</th>
-                      <th>Type</th>
-                      <th>Désignation</th>
-                      <th>Nbre Dinde</th>
-                      <th>Qté Brute (kg)</th>
-                      <th>Prix/kg</th>
-                      <th>Montant TTC</th>
+                      <th
+                        className="min-w-[70px]"
+                        title={
+                          selectedSemKey === VS_SEMAINE
+                            ? "Pas d’âge en vide sanitaire"
+                            : "Âge séquentiel depuis S1 (jours), comme Livraisons aliment"
+                        }
+                      >
+                        AGE
+                      </th>
+                      <th className="min-w-[100px]">DATE</th>
+                      <th className="min-w-[60px]" title="Semaine (VS, S1…)">SEM</th>
+                      <th className="min-w-[120px]">CLIENT</th>
+                      <th className="min-w-[90px]">N° BL</th>
+                      <th className="min-w-[140px]">TYPE</th>
+                      <th className="min-w-[120px]">DÉSIGNATION</th>
+                      <th className="min-w-[96px] !text-center">NBRE DINDE</th>
+                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTÉ BRUTE (KG)</th>
+                      <th className="min-w-[80px] !text-center">PRIX/KG</th>
+                      <th className="min-w-[90px] !text-center">MONTANT TTC</th>
+                      <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">
+                        ✓
+                      </th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={10} className="p-8 text-center text-muted-foreground">
+                        <td colSpan={13} className="p-8 text-center text-muted-foreground">
                           Chargement…
                         </td>
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row, rowIndex) => {
-                          const isFirstEditable = firstEditableRowIndex >= 0 && rowIndex === firstEditableRowIndex;
-                          const rowReadOnly = isReadOnly || (row.serverId != null ? !canUpdate : !isFirstEditable);
-                          const showDelete = row.serverId != null ? canDelete : canCreate;
+                        {currentRows.map((row) => {
+                          const rowReadOnly =
+                            isReadOnly ||
+                            (row.serverId == null && !canCreate) ||
+                            (row.serverId != null && !canUpdate);
+                          const canSaveRow =
+                            (row.serverId == null && canCreate) || (row.serverId != null && canUpdate);
+                          const showDelete = row.serverId != null ? hasFullAccess : canCreate;
+                          const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>
-                              <td>
-                                <input type="date" value={row.date} onChange={(e) => updateRow(row.id, "date", e.target.value)} disabled={rowReadOnly} />
+                              <td className="text-sm font-medium text-muted-foreground">
+                                {displayAgeByRowId.get(row.id) ?? "—"}
                               </td>
                               <td>
-                                <input type="text" value={row.client} onChange={(e) => updateRow(row.id, "client", e.target.value)} placeholder="—" className="min-w-[100px]" disabled={rowReadOnly} />
+                                <input
+                                  type="date"
+                                  value={row.date}
+                                  onChange={(e) => updateRow(row.id, "date", e.target.value)}
+                                  disabled={rowReadOnly}
+                                  className="bg-transparent border-0 outline-none text-sm w-full"
+                                />
                               </td>
                               <td>
-                                <input type="text" value={row.num_bl} onChange={(e) => updateRow(row.id, "num_bl", e.target.value)} placeholder="—" disabled={rowReadOnly} />
+                                <input
+                                  type="text"
+                                  value={row.semaine}
+                                  onChange={(e) => updateRow(row.id, "semaine", e.target.value)}
+                                  placeholder={selectedSemaine}
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
                               </td>
                               <td>
-                                <select value={row.type} onChange={(e) => updateRow(row.id, "type", e.target.value)} className="w-full min-w-[140px] bg-transparent border-0 outline-none text-sm" disabled={rowReadOnly}>
+                                <input
+                                  type="text"
+                                  value={row.client}
+                                  onChange={(e) => updateRow(row.id, "client", e.target.value)}
+                                  placeholder="—"
+                                  className="min-w-[100px] bg-transparent border-0 outline-none text-sm w-full"
+                                  disabled={rowReadOnly}
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.num_bl}
+                                  onChange={(e) => updateRow(row.id, "num_bl", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td>
+                                <select
+                                  value={row.type}
+                                  onChange={(e) => updateRow(row.id, "type", e.target.value)}
+                                  className="w-full min-w-[140px] bg-transparent border-0 outline-none text-sm rounded px-1 py-0.5"
+                                  disabled={rowReadOnly}
+                                >
                                   {TYPES.map((t) => (
                                     <option key={t} value={t}>{t}</option>
                                   ))}
@@ -836,7 +1041,7 @@ export default function SortiesFerme() {
                                   <select
                                     value={row.designation}
                                     onChange={(e) => updateRow(row.id, "designation", e.target.value)}
-                                    className="w-full bg-transparent border-0 outline-none text-sm"
+                                    className="w-full bg-transparent border-0 outline-none text-sm rounded px-1 py-0.5"
                                     disabled={rowReadOnly}
                                   >
                                     <option value="">—</option>
@@ -851,22 +1056,110 @@ export default function SortiesFerme() {
                                     onChange={(e) => updateRow(row.id, "designation", e.target.value)}
                                     placeholder="—"
                                     disabled={rowReadOnly}
+                                    className="w-full bg-transparent border-0 outline-none text-sm"
                                   />
                                 )}
                               </td>
-                              <td>
-                                <input type="number" value={row.nbre_dinde} onChange={(e) => updateRow(row.id, "nbre_dinde", e.target.value)} placeholder="—" disabled={rowReadOnly || typeDisablesNbreDinde(row.type)} />
+                              <td className="text-center">
+                                {rowReadOnly || typeDisablesNbreDinde(row.type) ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {typeDisablesNbreDinde(row.type) ? "—" : formatNbreDisplay(row.nbre_dinde)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.nbre_dinde}
+                                    onChange={(e) => updateRow(row.id, "nbre_dinde", e.target.value)}
+                                    placeholder="—"
+                                    min={0}
+                                    step={1}
+                                    className="w-full min-w-[5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td>
-                                <input type="number" value={row.qte_brute_kg} onChange={(e) => updateRow(row.id, "qte_brute_kg", e.target.value)} placeholder="—" step="0.1" disabled={rowReadOnly} />
+                              <td className="min-w-[128px] text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatQtyDisplay(row.qte_brute_kg)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      qteFocusRowId === row.id
+                                        ? row.qte_brute_kg
+                                        : toOptionalNumber(row.qte_brute_kg) != null
+                                          ? formatGroupedNumber(toOptionalNumber(row.qte_brute_kg)!, 2)
+                                          : ""
+                                    }
+                                    onFocus={() => setQteFocusRowId(row.id)}
+                                    onBlur={(e) => {
+                                      setQteFocusRowId(null);
+                                      const raw = e.target.value;
+                                      if (raw.trim() === "") {
+                                        updateRow(row.id, "qte_brute_kg", "");
+                                        return;
+                                      }
+                                      const n = toOptionalNumber(raw);
+                                      if (n == null || n < 0) {
+                                        updateRow(row.id, "qte_brute_kg", "");
+                                      } else {
+                                        updateRow(row.id, "qte_brute_kg", n.toFixed(2));
+                                      }
+                                    }}
+                                    onChange={(e) => updateRow(row.id, "qte_brute_kg", e.target.value)}
+                                    placeholder="—"
+                                    className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td>
-                                <input type="number" value={row.prix_kg} onChange={(e) => updateRow(row.id, "prix_kg", e.target.value)} placeholder="—" step="0.01" disabled={rowReadOnly} />
+                              <td className="text-center">
+                                {rowReadOnly ? (
+                                  <span className="block text-center tabular-nums px-1 py-0.5">
+                                    {formatMoneyDisplay(row.prix_kg)}
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    value={row.prix_kg}
+                                    onChange={(e) => updateRow(row.id, "prix_kg", e.target.value)}
+                                    placeholder="—"
+                                    step="0.01"
+                                    min={0}
+                                    className="w-full min-w-[5.5rem] tabular-nums text-center"
+                                  />
+                                )}
                               </td>
-                              <td className="font-semibold text-sm">{row.montant_ttc || "0.00"}</td>
+                              <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
+                                {formatMontantCell(row)}
+                              </td>
+                              <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
+                                {canSaveRow && (
+                                  <button
+                                    type="button"
+                                    onClick={() => saveRow(row)}
+                                    disabled={isSaving || loading}
+                                    className="text-muted-foreground hover:text-primary transition-colors p-0.5 inline-flex justify-center"
+                                    title="Enregistrer la ligne"
+                                  >
+                                    {isSaving ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <Check className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                )}
+                              </td>
                               <td>
                                 {showDelete && (
-                                  <button onClick={() => removeRow(row.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1" disabled={currentRows.length <= MIN_TABLE_ROWS}>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeRow(row.id)}
+                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
+                                    title="Supprimer"
+                                  >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
                                 )}
@@ -877,24 +1170,42 @@ export default function SortiesFerme() {
                         {currentRows.length > 0 && (
                           <>
                             <tr className="bg-muted/60">
-                              <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                              <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine}
                               </td>
-                              <td className="font-semibold text-sm">{weekTotal.nbre_dinde}</td>
-                              <td className="font-semibold text-sm">{weekTotal.qte_brute_kg.toFixed(1)}</td>
-                              <td className="font-semibold text-sm">{weekTotal.prix_kg.toFixed(2)}</td>
-                              <td className="font-semibold text-sm">{weekTotal.montant_ttc.toFixed(2)}</td>
-                              <td></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(weekTotal.nbre_dinde, 0)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(weekTotal.qte_brute_kg, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(weekTotal.prix_kg, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(weekTotal.montant_ttc, 2)}
+                              </td>
+                              <td />
+                              <td />
                             </tr>
                             <tr className="bg-muted/50">
-                              <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                              <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                                 CUMUL
                               </td>
-                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.nbre_dinde}</td>
-                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.qte_brute_kg.toFixed(1)}</td>
-                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.prix_kg.toFixed(2)}</td>
-                              <td className="font-semibold text-sm">{cumulForSelectedSemaine.montant_ttc.toFixed(2)}</td>
-                              <td></td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(cumulForSelectedSemaine.nbre_dinde, 0)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(cumulForSelectedSemaine.qte_brute_kg, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap">
+                                {formatGroupedNumber(cumulForSelectedSemaine.prix_kg, 2)}
+                              </td>
+                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                {formatGroupedNumber(cumulForSelectedSemaine.montant_ttc, 2)}
+                              </td>
+                              <td />
+                              <td />
                             </tr>
                           </>
                         )}

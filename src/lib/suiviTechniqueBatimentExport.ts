@@ -8,6 +8,7 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { api } from "@/lib/api";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 export interface SuiviTechniqueBatimentExportParams {
   farmName: string;
@@ -27,8 +28,12 @@ const BORDERS_ALL = { top: BORDER_THIN, left: BORDER_THIN, bottom: BORDER_THIN, 
 
 function formatVal(v: number | null | undefined, unit?: string): string {
   if (v == null || Number.isNaN(v)) return "—";
-  const s = Number.isInteger(v) ? String(v) : v.toFixed(2).replace(".", ",");
+  const s = Number.isInteger(v) ? formatGroupedNumber(v, 0) : formatGroupedNumber(v, 2);
   return unit ? `${s} ${unit}` : s;
+}
+
+function formatPctExport(p: number): string {
+  return `${formatGroupedNumber(p, 2)} %`;
 }
 
 function safeStr(v: string | null | undefined): string {
@@ -129,7 +134,10 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
     addInfoRow("Heure de mise en place", setup.heureMiseEnPlace ?? "—");
     addInfoRow("Date de mise en place", setup.dateMiseEnPlace ?? "—");
     addInfoRow("Souche", setup.souche ?? "—");
-    addInfoRow("Effectif mis en place", setup.effectifMisEnPlace ?? "—");
+    addInfoRow(
+      "Effectif mis en place",
+      setup.effectifMisEnPlace != null ? formatGroupedNumber(setup.effectifMisEnPlace, 0) : "—"
+    );
     addInfoRow("Fournisseur", setup.origineFournisseur ?? "—");
   } else {
     addInfoRow("—", "Aucune donnée");
@@ -137,7 +145,10 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   row++;
 
   addTitle(`2. Effectif départ de ${semaine}`);
-  addInfoRow(`Effectif départ de ${semaine}`, effectifDepart ?? "—");
+  addInfoRow(
+    `Effectif départ de ${semaine}`,
+    effectifDepart != null ? formatGroupedNumber(effectifDepart, 0) : "—"
+  );
   row++;
 
   addTitle(`3. Suivi hebdomadaire — ${sex} — ${semaine}`);
@@ -159,19 +170,19 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   const sortedHebdo = (hebdoList ?? []).filter((r) => r.recordDate).sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
   for (let i = 0; i < sortedHebdo.length; i++) {
     const r = sortedHebdo[i]!;
-    const mortalitePct = r.mortalitePct != null ? `${r.mortalitePct.toFixed(2).replace(".", ",")} %` : "—";
-    const mortaliteCumulPct = r.mortaliteCumulPct != null ? `${r.mortaliteCumulPct.toFixed(2).replace(".", ",")} %` : "—";
+    const mortalitePct = r.mortalitePct != null ? formatPctExport(r.mortalitePct) : "—";
+    const mortaliteCumulPct = r.mortaliteCumulPct != null ? formatPctExport(r.mortaliteCumulPct) : "—";
     addDataRow(
       [
         r.recordDate ?? "—",
-        r.ageJour ?? "—",
-        r.mortaliteNbre ?? "—",
+        r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—",
+        r.mortaliteNbre != null ? formatGroupedNumber(r.mortaliteNbre, 0) : "—",
         mortalitePct,
-        r.mortaliteCumul ?? "—",
+        r.mortaliteCumul != null ? formatGroupedNumber(r.mortaliteCumul, 0) : "—",
         mortaliteCumulPct,
-        r.consoEauL ?? "—",
-        r.tempMin ?? "—",
-        r.tempMax ?? "—",
+        r.consoEauL != null ? formatGroupedNumber(r.consoEauL, 2) : "—",
+        r.tempMin != null ? formatGroupedNumber(r.tempMin, 2) : "—",
+        r.tempMax != null ? formatGroupedNumber(r.tempMax, 2) : "—",
         safeStr(r.vaccination),
         safeStr(r.traitement),
         safeStr(r.observation),
@@ -188,8 +199,8 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
     ws.getCell(row, 1).value = `TOTAL ${semaine}`;
     ws.getCell(row, 1).font = { bold: true };
     ws.getCell(row, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
-    ws.getCell(row, 3).value = totalMort;
-    ws.getCell(row, 7).value = totalEau;
+    ws.getCell(row, 3).value = formatGroupedNumber(totalMort, 0);
+    ws.getCell(row, 7).value = formatGroupedNumber(totalEau, 2);
     for (let c = 1; c <= hebdoHeaders.length; c++) {
       ws.getCell(row, c).border = BORDERS_ALL;
       if (c !== 1) ws.getCell(row, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
@@ -200,12 +211,32 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
 
   addTitle("4. Suivi de la livraison — Production");
   addTableHeader(["INDICATEUR", "NB", "POIDS (kg)"]);
-  const prodRows: [string, number | string, number | string][] = [
-    ["REPORT", production?.reportNbre ?? "—", production?.reportPoids ?? "—"],
-    ["VENTE", production?.venteNbre ?? "—", production?.ventePoids ?? "—"],
-    ["CONSOMMATION employeur", production?.consoNbre ?? "—", production?.consoPoids ?? "—"],
-    ["AUTRE gratuit", production?.autreNbre ?? "—", production?.autrePoids ?? "—"],
-    ["TOTAL", production?.totalNbre ?? "—", production?.totalPoids ?? "—"],
+  const prodRows: [string, string, string][] = [
+    [
+      "REPORT",
+      production?.reportNbre != null ? formatGroupedNumber(production.reportNbre, 0) : "—",
+      production?.reportPoids != null ? formatGroupedNumber(Number(production.reportPoids), 2) : "—",
+    ],
+    [
+      "VENTE",
+      production?.venteNbre != null ? formatGroupedNumber(production.venteNbre, 0) : "—",
+      production?.ventePoids != null ? formatGroupedNumber(Number(production.ventePoids), 2) : "—",
+    ],
+    [
+      "CONSOMMATION employeur",
+      production?.consoNbre != null ? formatGroupedNumber(production.consoNbre, 0) : "—",
+      production?.consoPoids != null ? formatGroupedNumber(Number(production.consoPoids), 2) : "—",
+    ],
+    [
+      "AUTRE gratuit",
+      production?.autreNbre != null ? formatGroupedNumber(production.autreNbre, 0) : "—",
+      production?.autrePoids != null ? formatGroupedNumber(Number(production.autrePoids), 2) : "—",
+    ],
+    [
+      "TOTAL",
+      production?.totalNbre != null ? formatGroupedNumber(production.totalNbre, 0) : "—",
+      production?.totalPoids != null ? formatGroupedNumber(Number(production.totalPoids), 2) : "—",
+    ],
   ];
   prodRows.forEach(([label, nb, poids], i) => {
     addDataRow([label, nb, poids], i % 2 === 1);
@@ -311,7 +342,7 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
         ["Heure de mise en place", setup.heureMiseEnPlace ?? "—"],
         ["Date de mise en place", setup.dateMiseEnPlace ?? "—"],
         ["Souche", setup.souche ?? "—"],
-        ["Effectif mis en place", String(setup.effectifMisEnPlace ?? "—")],
+        ["Effectif mis en place", formatGroupedNumber(setup.effectifMisEnPlace, 0)],
         ["Fournisseur", setup.origineFournisseur ?? "—"],
       ]
     : [["—", "Aucune donnée"]];
@@ -328,7 +359,11 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   y = lastY() + 8;
 
   doc.setFont("helvetica", "bold");
-  doc.text(`2. Effectif départ de ${semaine}: ${effectifDepart ?? "—"}`, margin, y);
+  doc.text(
+    `2. Effectif départ de ${semaine}: ${effectifDepart != null ? formatGroupedNumber(effectifDepart, 0) : "—"}`,
+    margin,
+    y
+  );
   y += 8;
 
   const sortedHebdo = (hebdoList ?? []).filter((r) => r.recordDate).sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
@@ -351,18 +386,18 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
       "OBSERVATION",
     ];
     const hebdoBody = sortedHebdo.map((r) => {
-      const mortalitePct = r.mortalitePct != null ? `${r.mortalitePct.toFixed(2).replace(".", ",")} %` : "—";
-      const mortaliteCumulPct = r.mortaliteCumulPct != null ? `${r.mortaliteCumulPct.toFixed(2).replace(".", ",")} %` : "—";
+      const mortalitePct = r.mortalitePct != null ? formatPctExport(r.mortalitePct) : "—";
+      const mortaliteCumulPct = r.mortaliteCumulPct != null ? formatPctExport(r.mortaliteCumulPct) : "—";
       return [
         r.recordDate ?? "—",
-        r.ageJour ?? "—",
-        r.mortaliteNbre ?? "—",
+        r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—",
+        r.mortaliteNbre != null ? formatGroupedNumber(r.mortaliteNbre, 0) : "—",
         mortalitePct,
-        r.mortaliteCumul ?? "—",
+        r.mortaliteCumul != null ? formatGroupedNumber(r.mortaliteCumul, 0) : "—",
         mortaliteCumulPct,
-        r.consoEauL != null ? r.consoEauL.toFixed(1) : "—",
-        r.tempMin ?? "—",
-        r.tempMax ?? "—",
+        r.consoEauL != null ? formatGroupedNumber(r.consoEauL, 2) : "—",
+        r.tempMin != null ? formatGroupedNumber(r.tempMin, 2) : "—",
+        r.tempMax != null ? formatGroupedNumber(r.tempMax, 2) : "—",
         safeStr(r.vaccination),
         safeStr(r.traitement),
         safeStr(r.observation),
@@ -373,11 +408,11 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
     hebdoBody.push([
       `TOTAL ${semaine}`,
       "—",
-      String(totalMort),
+      formatGroupedNumber(totalMort, 0),
       "—",
       "—",
       "—",
-      totalEau.toFixed(1),
+      formatGroupedNumber(totalEau, 2),
       "—",
       "—",
       "—",
@@ -420,11 +455,31 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   y += 6;
   const prodBody: [string, string, string][] = production
     ? [
-        ["REPORT", String(production.reportNbre ?? "—"), String(production.reportPoids ?? "—")],
-        ["VENTE", String(production.venteNbre ?? "—"), String(production.ventePoids ?? "—")],
-        ["CONSOMMATION employeur", String(production.consoNbre ?? "—"), String(production.consoPoids ?? "—")],
-        ["AUTRE gratuit", String(production.autreNbre ?? "—"), String(production.autrePoids ?? "—")],
-        ["TOTAL", String(production.totalNbre ?? "—"), String(production.totalPoids ?? "—")],
+        [
+          "REPORT",
+          production.reportNbre != null ? formatGroupedNumber(production.reportNbre, 0) : "—",
+          production.reportPoids != null ? formatGroupedNumber(Number(production.reportPoids), 2) : "—",
+        ],
+        [
+          "VENTE",
+          production.venteNbre != null ? formatGroupedNumber(production.venteNbre, 0) : "—",
+          production.ventePoids != null ? formatGroupedNumber(Number(production.ventePoids), 2) : "—",
+        ],
+        [
+          "CONSOMMATION employeur",
+          production.consoNbre != null ? formatGroupedNumber(production.consoNbre, 0) : "—",
+          production.consoPoids != null ? formatGroupedNumber(Number(production.consoPoids), 2) : "—",
+        ],
+        [
+          "AUTRE gratuit",
+          production.autreNbre != null ? formatGroupedNumber(production.autreNbre, 0) : "—",
+          production.autrePoids != null ? formatGroupedNumber(Number(production.autrePoids), 2) : "—",
+        ],
+        [
+          "TOTAL",
+          production.totalNbre != null ? formatGroupedNumber(production.totalNbre, 0) : "—",
+          production.totalPoids != null ? formatGroupedNumber(Number(production.totalPoids), 2) : "—",
+        ],
       ]
     : [["—", "Aucune donnée", "—"]];
   autoTable(doc, {

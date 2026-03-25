@@ -38,23 +38,47 @@ export interface SortiesFermeExportParams {
   ageByRowId: Map<string, string | number>;
 }
 
-const COLS = ["DATE", "CLIENT", "N° BL", "TYPE", "DÉSIGNATION", "NBRE DINDE", "QTÉ BRUTE (KG)", "PRIX/KG", "MONTANT TTC"];
+const COLS = [
+  "AGE",
+  "DATE",
+  "SEM",
+  "CLIENT",
+  "N° BL",
+  "TYPE",
+  "DÉSIGNATION",
+  "NBRE DINDE",
+  "QTÉ BRUTE (KG)",
+  "PRIX/KG",
+  "MONTANT TTC",
+];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
-function rowToArray(row: SortieRowExport, _age: string | number): (string | number)[] {
+function parseExportNum(raw: string | undefined | null): number | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const n = parseFloat(String(raw).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
+  return Number.isNaN(n) ? null : n;
+}
+
+function rowToArray(row: SortieRowExport, age: string | number): (string | number)[] {
+  const nbre = parseExportNum(row.nbre_dinde);
+  const qte = parseExportNum(row.qte_brute_kg);
+  const prix = parseExportNum(row.prix_kg);
+  const montant = parseExportNum(row.montant_ttc);
   return [
+    age ?? "—",
     safeStr(row.date) || "—",
+    safeStr(row.semaine) || "—",
     safeStr(row.client) || "—",
     safeStr(row.num_bl) || "—",
     safeStr(row.type) || "—",
     safeStr(row.designation) || "—",
-    safeStr(row.nbre_dinde) || "—",
-    safeStr(row.qte_brute_kg) || "—",
-    safeStr(row.prix_kg) || "—",
-    safeStr(row.montant_ttc) || "—",
+    nbre ?? "—",
+    qte ?? "—",
+    prix ?? "—",
+    montant ?? "—",
   ];
 }
 
@@ -68,11 +92,35 @@ function toConfig(params: SortiesFermeExportParams): ITableExportConfig {
     semaine,
     rows,
     rowToArray,
-    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", weekTotal.nbre_dinde, weekTotal.qte_brute_kg, weekTotal.prix_kg, weekTotal.montant_ttc],
-    cumulRow: ["CUMUL", "", "", "", "", cumul.nbre_dinde, cumul.qte_brute_kg, cumul.prix_kg, cumul.montant_ttc],
+    weekTotalRow: [
+      `TOTAL ${semaine}`,
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      weekTotal.nbre_dinde,
+      weekTotal.qte_brute_kg,
+      weekTotal.prix_kg,
+      weekTotal.montant_ttc,
+    ],
+    cumulRow: [
+      "CUMUL",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      cumul.nbre_dinde,
+      cumul.qte_brute_kg,
+      cumul.prix_kg,
+      cumul.montant_ttc,
+    ],
     ageByRowId,
     fileNamePrefix: "Sorties_Ferme",
-    numberFormatColumns: [5, 6, 7, 8],
+    numberFormatColumns: [7, 8, 9, 10],
   };
 }
 

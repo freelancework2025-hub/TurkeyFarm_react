@@ -18,6 +18,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 import WeeklyProductionSummaryContent from "@/components/suivi-technique/WeeklyProductionSummaryContent";
 import { api, type FarmResponse, getStoredSelectedFarm } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/resumeProductionHebdoExport";
+import { toOptionalNumber } from "@/lib/formatResumeAmount";
 import { useToast } from "@/hooks/use-toast";
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
@@ -27,6 +28,7 @@ const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
  * URL: /suivi-technique-hebdomadaire/resume-production?farmId=8&lot=1&semaine=S1&batiments=B1,B2,B3,B4
  * batiments is optional; defaults to B1,B2,B3,B4.
  * effectifRestantFinSemaine and totalNbreProduction come from getResumeSummary (same source as Prix de revient).
+ * Number display uses grouped thousands in WeeklyProductionSummaryContent and exports (formatGroupedNumber).
  * Permissions: child components (WeeklyProductionSummaryContent, etc.) apply the same role matrix; RESPONSABLE_FERME: saved rows read-only.
  */
 export default function ResumeProductionHebdoPage() {
@@ -85,8 +87,8 @@ export default function ResumeProductionHebdoPage() {
     });
   }, [farmId, lot, semaine, allBatiments]);
 
-  const effectifRestantFinSemaine = coutSummary?.effectifRestantFinSemaine ?? null;
-  const totalNbreProduction = coutSummary?.totalNbreProduction ?? null;
+  const effectifRestantFinSemaine = toOptionalNumber(coutSummary?.effectifRestantFinSemaine);
+  const totalNbreProduction = toOptionalNumber(coutSummary?.totalNbreProduction);
 
   const backUrl = farmId != null && lot && semaine
     ? `/suivi-technique-hebdomadaire?farmId=${farmId}&lot=${encodeURIComponent(lot)}&semaine=${encodeURIComponent(semaine)}`

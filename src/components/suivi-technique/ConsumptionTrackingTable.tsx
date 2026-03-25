@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import { api, type SuiviConsommationHebdoResponse } from "@/lib/api";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { useToast } from "@/hooks/use-toast";
 
 type RowKey = "consommation_aliment" | "cumul_aliment" | "indice_eau_aliment" | "conso_kg_j";
@@ -80,7 +81,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
   // Display backend value as-is: 0 and any positive number are valid (conso computed from stock ± livraisons).
   const formatValue = (val: number | null | undefined, unit?: string): string => {
     if (val == null || Number.isNaN(val)) return "—";
-    const s = Number.isInteger(val) ? String(val) : val.toFixed(2).replace(".", ",");
+    const s = Number.isInteger(val) ? formatGroupedNumber(val, 0) : formatGroupedNumber(val, 2);
     return unit ? `${s} ${unit}` : s;
   };
 

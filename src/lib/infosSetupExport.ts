@@ -6,6 +6,7 @@
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface SetupRowExport {
   id: string;
@@ -35,13 +36,19 @@ function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
+function formatEffectifCell(raw: string): string {
+  const n = toOptionalNumber(safeStr(raw) || null);
+  if (n == null) return "—";
+  return formatGroupedNumber(Math.round(n), 0);
+}
+
 function rowToArray(row: SetupRowExport, _age: string | number): (string | number)[] {
   return [
     safeStr(row.dateMiseEnPlace) || "—",
     safeStr(row.heureMiseEnPlace) || "—",
     safeStr(row.building) || "—",
     safeStr(row.sex) || "—",
-    safeStr(row.effectifMisEnPlace) || "—",
+    formatEffectifCell(row.effectifMisEnPlace),
     safeStr(row.typeElevage) || "—",
     safeStr(row.origineFournisseur) || "—",
     safeStr(row.dateEclosion) || "—",
@@ -53,8 +60,18 @@ function toConfig(params: InfosSetupExportParams): ITableExportConfig {
   const { farmName, lot, rows, totalMale, totalFemale } = params;
   const totalGeneral = totalMale + totalFemale;
   const suffixRows: (string | number)[][] = [
-    ["", "", "", "Total Mâle / Femelle :", `${totalMale} / ${totalFemale}`, "", "", "", ""],
-    ["", "", "", "Total Général :", totalGeneral, "", "", "", ""],
+    [
+      "",
+      "",
+      "",
+      "Total Mâle / Femelle :",
+      `${formatGroupedNumber(totalMale, 0)} / ${formatGroupedNumber(totalFemale, 0)}`,
+      "",
+      "",
+      "",
+      "",
+    ],
+    ["", "", "", "Total Général :", formatGroupedNumber(totalGeneral, 0), "", "", "", ""],
   ];
   return {
     title: "INFOS SETUP",
