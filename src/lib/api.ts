@@ -1,10 +1,10 @@
 /**
- * API base URL. In dev: backend often runs on 8081 while Vite runs on 8080.
- * Set VITE_API_URL in .env (e.g. VITE_API_URL=http://localhost:8081)
+ * API base URL. In dev: backend often runs on 7070 while Vite runs on 8080.
+ * Set VITE_API_URL in .env (e.g. VITE_API_URL=http://localhost:7070)
  */
 const API_BASE =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
-  "http://localhost:8081";
+  "http://localhost:7070";
 
 const TOKEN_STORAGE_KEY = "elevagepro_token";
 const SELECTED_FARM_KEY = "elevagepro_selected_farm";

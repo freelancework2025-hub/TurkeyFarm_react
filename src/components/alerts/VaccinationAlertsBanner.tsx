@@ -71,7 +71,8 @@ export default function VaccinationAlertsBanner() {
     setRescheduleTime(`${h.padStart(2, "0")}:${m.padStart(2, "0")}`);
 
   const canConfirmOrReschedule = isResponsableFerme || canCreate;
-  const count = loading ? 0 : alerts.length;
+  /** Keep badge/count during refetch (e.g. after reschedule) so the banner does not flash to zero while the list is still valid. */
+  const count = alerts.length;
   const rescheduledAlerts = alerts.filter((a) => a.rescheduled === true);
   const regularAlerts = alerts.filter((a) => a.rescheduled !== true);
   const hasNewAlerts = regularAlerts.length > 0;

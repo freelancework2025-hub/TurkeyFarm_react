@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Plus, Save, Trash2, Loader2, Check } from "lucide-react";
-import { api, type SuiviTechniqueHebdoResponse, type SuiviTechniqueHebdoRequest } from "@/lib/api";
+import { api, type SuiviTechniqueHebdoResponse, type SuiviTechniqueHebdoRequest, type DailyReportResponse } from "@/lib/api";
+import { mergeHebdoRowsWithDailyReports, resolveAnchorRecordDateForEffectif } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -21,25 +22,6 @@ interface WeeklyRow {
   observation: string;
   /** From API: true when age/mortalite/conso all null — placeholder rows stay editable */
   isPlaceholder?: boolean;
-}
-
-function toRow(r: SuiviTechniqueHebdoResponse): WeeklyRow {
-  return {
-    id: String(r.id),
-    recordDate: r.recordDate,
-    ageJour: r.ageJour != null ? String(r.ageJour) : "",
-    mortaliteNbre: r.mortaliteNbre != null ? String(r.mortaliteNbre) : "",
-    mortalitePct: r.mortalitePct != null ? r.mortalitePct.toFixed(2) : "",
-    mortaliteCumul: r.mortaliteCumul != null ? String(r.mortaliteCumul) : "",
-    mortaliteCumulPct: r.mortaliteCumulPct != null ? r.mortaliteCumulPct.toFixed(2) : "",
-    consoEauL: r.consoEauL != null ? String(r.consoEauL) : "",
-    tempMin: r.tempMin != null ? String(r.tempMin) : "",
-    tempMax: r.tempMax != null ? String(r.tempMax) : "",
-    vaccination: r.vaccination ?? "",
-    traitement: r.traitement ?? "",
-    observation: r.observation ?? "",
-    isPlaceholder: r.isPlaceholder ?? (r.ageJour == null && r.mortaliteNbre == null && r.consoEauL == null),
-  };
 }
 
 function emptyRow(date: string): WeeklyRow {
@@ -143,71 +125,46 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   /** Row id (string) while that row's daily data is being saved */
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [savingEffectif, setSavingEffectif] = useState(false);
+  const loadGenRef = useRef(0);
 
   const load = useCallback(async () => {
+    const gen = ++loadGenRef.current;
     setLoading(true);
+    const prevSem = previousSemaine(semaine);
     try {
-      const list = await api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine });
-      const mapped = list.map(toRow);
+      const [list, dailyList, stockPrev] = await Promise.all([
+        api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine }),
+        api.dailyReports.list(farmId, lot).catch((): DailyReportResponse[] => []),
+        prevSem != null
+          ? api.suiviStock
+              .get({ farmId, lot, semaine: prevSem, sex, batiment: batiment ?? undefined })
+              .catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      if (gen !== loadGenRef.current) return;
+
+      const mapped: WeeklyRow[] = mergeHebdoRowsWithDailyReports(list, dailyList, {
+        lot,
+        batiment,
+        sex,
+        semaine,
+      }) as WeeklyRow[];
       const savedEffectif = list.length > 0 && list.some((r) => r.effectifDepart != null);
       setHasSavedEffectif(!!savedEffectif);
       // When no data (e.g. after "delete sex data"), ensure table is fully editable
       if (list.length === 0) {
         setHasSavedEffectif(false);
       }
+
+      let shouldAutoSaveEffectif = false;
       if (list.length > 0 && list[0].effectifDepart != null) {
         setEffectifDepart(String(list[0].effectifDepart));
-      } else {
-        // Week 2+: prefill effectif départ from previous week's effectif restant fin de semaine (stock chain)
-        // Use batiment-specific stock when batiment is provided
-        const prev = previousSemaine(semaine);
-        if (prev != null) {
-          try {
-            const stock = await api.suiviStock.get({ farmId, lot, semaine: prev, sex, batiment: batiment ?? undefined });
-            if (stock?.effectifRestantFinSemaine != null) {
-              const calculatedEffectif = String(stock.effectifRestantFinSemaine);
-              setEffectifDepart(calculatedEffectif);
-              
-              // For weeks 2+: automatically save the calculated effectif départ
-              if (!isFirstWeek && (canCreate || canUpdate)) {
-                try {
-                  // Create a minimal record with just the calculated effectif départ
-                  const autoSaveData: SuiviTechniqueHebdoRequest[] = [{
-                    lot,
-                    sex,
-                    batiment,
-                    semaine,
-                    effectifDepart: stock.effectifRestantFinSemaine,
-                    recordDate: today,
-                    ageJour: null,
-                    mortaliteNbre: null,
-                    consoEauL: null,
-                    tempMin: null,
-                    tempMax: null,
-                    vaccination: null,
-                    traitement: null,
-                    observation: null,
-                  }];
-                  
-                  await api.suiviTechniqueHebdo.saveBatch(autoSaveData, farmId);
-                  setHasSavedEffectif(true);
-                  toast({ 
-                    title: "Effectif départ calculé", 
-                    description: `Effectif départ de ${semaine} automatiquement calculé et enregistré: ${calculatedEffectif}`,
-                    duration: 3000
-                  });
-                  onSaveSuccess?.();
-                } catch (error) {
-                  console.warn("Auto-save of calculated effectif failed:", error);
-                  // Don't show error to user - they can still manually save if needed
-                }
-              }
-            }
-          } catch {
-            // ignore: keep empty or effectifInitial placeholder
-          }
-        }
+      } else if (prevSem != null && stockPrev?.effectifRestantFinSemaine != null) {
+        setEffectifDepart(String(stockPrev.effectifRestantFinSemaine));
+        shouldAutoSaveEffectif = !isFirstWeek && (canCreate || canUpdate);
       }
+
+      if (gen !== loadGenRef.current) return;
 
       // Display exactly 7 rows by default (one per day). User can add more via "+ Ligne".
       if (isReadOnly) {
@@ -231,12 +188,57 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       } else {
         setRows(emptyWeekRows(today));
       }
+
+      if (shouldAutoSaveEffectif && stockPrev?.effectifRestantFinSemaine != null) {
+        try {
+          const anchorDate = resolveAnchorRecordDateForEffectif(
+            list,
+            dailyList,
+            { lot, batiment, sex, semaine },
+            today
+          );
+          await api.suiviTechniqueHebdo.saveBatch(
+            [
+              {
+                lot,
+                sex,
+                batiment,
+                semaine,
+                effectifDepart: stockPrev.effectifRestantFinSemaine,
+                recordDate: anchorDate,
+                ageJour: null,
+                mortaliteNbre: null,
+                consoEauL: null,
+                tempMin: null,
+                tempMax: null,
+                vaccination: null,
+                traitement: null,
+                observation: null,
+              },
+            ],
+            farmId
+          );
+          if (gen === loadGenRef.current) {
+            setHasSavedEffectif(true);
+            toast({
+              title: "Effectif départ calculé",
+              description: `Effectif départ de ${semaine} automatiquement calculé et enregistré: ${stockPrev.effectifRestantFinSemaine}`,
+              duration: 3000,
+            });
+            onSaveSuccess?.();
+          }
+        } catch (error) {
+          console.warn("Auto-save of calculated effectif failed:", error);
+        }
+      }
     } catch {
       /* API error — logged in backend only */
-      setRows(emptyWeekRows(today));
-      setHasSavedEffectif(false);
+      if (gen === loadGenRef.current) {
+        setRows(emptyWeekRows(today));
+        setHasSavedEffectif(false);
+      }
     } finally {
-      setLoading(false);
+      if (gen === loadGenRef.current) setLoading(false);
     }
   }, [farmId, lot, sex, batiment, semaine, isReadOnly, toast, today, canCreate, canUpdate, isFirstWeek, onSaveSuccess]);
 
@@ -440,14 +442,30 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   }, [rows]);
 
   /**
+   * S1 often has no `effectifDepart` in state until the user clicks « Enregistrer effectif », while S2+
+   * already get a positive effectif from stock. Use the setup effectif (placeholder) as fallback so
+   * % mortalité and cumuls match the behaviour of other semaines for display.
+   */
+  const effectifPourCalculMortalite = useMemo(() => {
+    const trimmed = effectifDepart?.trim() ?? "";
+    if (trimmed !== "") {
+      const n = parseInt(trimmed, 10);
+      if (!Number.isNaN(n) && n > 0) return n;
+      return null;
+    }
+    if (effectifInitial != null && effectifInitial > 0) return effectifInitial;
+    return null;
+  }, [effectifDepart, effectifInitial]);
+
+  /**
    * Computed mortality stats (aligned with backend SuiviTechniqueHebdoService):
    * - Mortalité % (Journée) = (Mortalité NBRE du jour / Effectif départ de la semaine) × 100
    * - Mortalité CUMUL = CUMUL veille + NBRE du jour (by recordDate order)
    * - Mortalité % CUMUL = (Mortalité CUMUL / Effectif départ de la semaine) × 100
    */
   const mortalityComputedByRowId = useMemo(() => {
-    const effectif = parseInt(effectifDepart, 10);
-    if (!effectifDepart?.trim() || Number.isNaN(effectif) || effectif <= 0)
+    const effectif = effectifPourCalculMortalite;
+    if (effectif == null)
       return new Map<string, { mortalitePct: string; mortaliteCumul: string; mortaliteCumulPct: string }>();
 
     const withDate = rows.filter((r) => r.recordDate && r.recordDate.trim() !== "");
@@ -467,7 +485,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       });
     }
     return map;
-  }, [rows, effectifDepart]);
+  }, [rows, effectifPourCalculMortalite]);
 
   if (loading) {
     return (
@@ -780,11 +798,9 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                   {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
                 </td>
                 <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
-                  {rows.length && effectifDepart?.trim() ? (() => {
-                    const effectif = parseInt(effectifDepart, 10);
-                    if (Number.isNaN(effectif) || effectif <= 0) return "—";
-                    return `${formatGroupedNumber((weeklyTotals.totalMortality / effectif) * 100, 2)} %`;
-                  })() : "—"}
+                  {rows.length && effectifPourCalculMortalite != null
+                    ? `${formatGroupedNumber((weeklyTotals.totalMortality / effectifPourCalculMortalite) * 100, 2)} %`
+                    : "—"}
                 </td>
                 <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border"></td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground whitespace-nowrap">
