@@ -89,9 +89,119 @@ function emptyRow(today: string): DailyRow {
   };
 }
 
+/** Draft rows for given effectif configs (same order as Effectif Mis en Place subset). */
+function createRowsForConfigs(
+  configs: BuildingSexConfig[],
+  forDate: string,
+  placement: string | null | undefined
+): DailyRow[] {
+  if (configs.length === 0) return [];
+  return configs.map((config) => {
+    let row: DailyRow = {
+      id: crypto.randomUUID(),
+      report_date: forDate,
+      age_jour: "",
+      semaine: "",
+      building: config.building,
+      designation: config.sex,
+      nbr: "",
+      water_l: "",
+      temp_min: "",
+      temp_max: "",
+      traitement: "",
+      verified: false,
+    };
+    if (placement) {
+      const { age, semaine } = computeAgeAndSemaine(row.report_date, placement);
+      row = { ...row, age_jour: String(age), semaine: String(semaine) };
+    }
+    return row;
+  });
+}
+
 /** Row id from API is numeric; new rows use UUID. */
 function isSavedRow(id: string): boolean {
   return /^\d+$/.test(id);
+}
+
+/** Match Reporting Journalier row order to Effectif Mis en Place (same setup list order). */
+function effectifConfigIndex(configs: BuildingSexConfig[], building: string, designation: string): number {
+  const i = configs.findIndex((c) => c.building === building && c.sex === designation);
+  return i === -1 ? 10_000 : i;
+}
+
+function sortRowsByEffectifOrder(rows: DailyRow[], configs: BuildingSexConfig[]): DailyRow[] {
+  if (configs.length === 0) return rows;
+  return [...rows].sort((a, b) => {
+    const byDate = a.report_date.localeCompare(b.report_date);
+    if (byDate !== 0) return byDate;
+    const ia = effectifConfigIndex(configs, a.building, a.designation);
+    const ib = effectifConfigIndex(configs, b.building, b.designation);
+    if (ia !== ib) return ia - ib;
+    const sa = isSavedRow(a.id);
+    const sb = isSavedRow(b.id);
+    if (sa !== sb) return sa ? -1 : 1;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+/**
+ * Per report date: keep saved lines and add empty draft lines for missing bâtiment/sexe (same as Effectif).
+ * When `padDateIfEmpty` is set and there are no rows yet, show a full effectif template for that date.
+ */
+function mergeEffectifDraftsForDates(
+  mapped: DailyRow[],
+  setupConfigs: BuildingSexConfig[],
+  effectivePlacement: string | null | undefined,
+  padDateIfEmpty?: string | null
+): DailyRow[] {
+  if (setupConfigs.length === 0) return mapped;
+  const byDate = new Map<string, DailyRow[]>();
+  for (const r of mapped) {
+    const d = r.report_date;
+    if (!d) continue;
+    if (!byDate.has(d)) byDate.set(d, []);
+    byDate.get(d)!.push(r);
+  }
+  if (byDate.size === 0 && padDateIfEmpty) {
+    return sortRowsByEffectifOrder(
+      createRowsForConfigs(setupConfigs, padDateIfEmpty, effectivePlacement),
+      setupConfigs
+    );
+  }
+  if (byDate.size === 0) return mapped;
+  const out: DailyRow[] = [];
+  for (const d of Array.from(byDate.keys()).sort()) {
+    const saved = byDate.get(d)!;
+    const have = new Set(saved.map((r) => `${r.building}|${r.designation}`));
+    const missing = setupConfigs.filter((c) => !have.has(`${c.building}|${c.sex}`));
+    out.push(...saved, ...createRowsForConfigs(missing, d, effectivePlacement));
+  }
+  return sortRowsByEffectifOrder(out, setupConfigs);
+}
+
+/** Min date mise en place from setup rows, or placements API for the lot (so age/semaine are ready before first daily load). */
+async function resolvePlacementDateForLot(
+  setupList: SetupInfoResponse[],
+  farmId: number | null | undefined,
+  lotTrimmed: string
+): Promise<string | null> {
+  const datesWithPlacement = setupList.filter((s) => s.dateMiseEnPlace);
+  if (datesWithPlacement.length > 0) {
+    return datesWithPlacement.reduce(
+      (min, s) => (s.dateMiseEnPlace! < min ? s.dateMiseEnPlace! : min),
+      datesWithPlacement[0]!.dateMiseEnPlace!
+    );
+  }
+  if (farmId == null) return null;
+  try {
+    const placements = await api.placements.list(farmId);
+    const forLot = placements.filter((p) => p.lot === lotTrimmed);
+    if (forLot.length === 0) return null;
+    return forLot.reduce((min, p) => (p.placementDate < min ? p.placementDate : min), forLot[0].placementDate);
+  } catch {
+    return null;
+  }
 }
 
 /** Add n days to ISO date string (YYYY-MM-DD), return YYYY-MM-DD. */
@@ -223,12 +333,14 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
   const { selectedFarmName, allFarmsMode, canCreate, canUpdate, canDelete, isReadOnly, isResponsableFerme } = useAuth();
   /** Only Admin/RT (canUpdate) can edit age/semaine on saved rows. RESPONSABLE_FERME cannot modify after save. */
   const { toast } = useToast();
-  const [rows, setRows] = useState<DailyRow[]>([emptyRow(initialDate ?? today)]);
+  const [rows, setRows] = useState<DailyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** NBR / eau / températures : brut au focus, groupé au blur (Livraisons Aliment). */
   const [numericFocusKey, setNumericFocusKey] = useState<string | null>(null);
   const [placementDateForLot, setPlacementDateForLot] = useState<string | null>(null);
+  /** Min(earliest report, placement) when reports exist — same as load() for âge/semaine on new lines. */
+  const effectivePlacementRef = useRef<string | null>(null);
   /** When true, next load() shows all reports (no initialDate filter). Used after saving a batch with multiple dates. */
   const showAllOnNextLoadRef = useRef(false);
   /** When isNewReport: date for the new report (last saved date + 1 day). Used for subtitle and addRow. */
@@ -249,7 +361,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
     ? [...new Set(setupConfigs.map(c => c.sex))]
     : DESIGNATIONS_FALLBACK;
 
-  /** Load setup info to get building+sex configurations */
+  /** Load setup info + resolve placement (setup dates or placements API) before clearing setupLoading so first load() has placement. */
   useEffect(() => {
     if (!lot || lot.trim() === "") {
       setSetupConfigs([]);
@@ -257,91 +369,48 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       setSetupLoading(false);
       return;
     }
+    let cancelled = false;
+    const lotTrimmed = lot.trim();
     setSetupLoading(true);
-    api.setupInfo.list(farmId ?? undefined, lot.trim())
-      .then((list: SetupInfoResponse[]) => {
-        const configs: BuildingSexConfig[] = list.map(s => ({
+    api.setupInfo
+      .list(farmId ?? undefined, lotTrimmed)
+      .then(async (list: SetupInfoResponse[]) => {
+        if (cancelled) return;
+        const configs: BuildingSexConfig[] = list.map((s) => ({
           building: s.building,
           sex: s.sex,
         }));
         setSetupConfigs(configs);
-        
-        // Also get placement date from setup info (min of all dateMiseEnPlace for this lot)
-        const datesWithPlacement = list.filter((s) => s.dateMiseEnPlace);
-        if (datesWithPlacement.length > 0) {
-          const minDate = datesWithPlacement.reduce((min, s) => 
-            (s.dateMiseEnPlace! < min ? s.dateMiseEnPlace! : min), 
-            datesWithPlacement[0]!.dateMiseEnPlace!
-          );
-          setPlacementDateForLot(minDate);
-        } else {
-          setPlacementDateForLot(null);
-        }
+        const placement = await resolvePlacementDateForLot(list, farmId ?? null, lotTrimmed);
+        if (cancelled) return;
+        setPlacementDateForLot(placement);
       })
       .catch(() => {
+        if (cancelled) return;
         setSetupConfigs([]);
         setPlacementDateForLot(null);
       })
-      .finally(() => setSetupLoading(false));
+      .finally(() => {
+        if (!cancelled) setSetupLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [farmId, lot]);
-
-  /** Fallback: if no setup info, try to get placement date from placements API */
-  useEffect(() => {
-    if (setupConfigs.length > 0 || !farmId || !lot || lot.trim() === "") {
-      return;
-    }
-    api.placements.list(farmId).then((list) => {
-      const forLot = list.filter((p) => p.lot === lot.trim());
-      if (forLot.length === 0) {
-        setPlacementDateForLot(null);
-        return;
-      }
-      const minDate = forLot.reduce((min, p) => (p.placementDate < min ? p.placementDate : min), forLot[0].placementDate);
-      setPlacementDateForLot(minDate);
-    }).catch(() => setPlacementDateForLot(null));
-  }, [farmId, lot, setupConfigs.length]);
 
   /** Create empty rows for all building+sex configurations from setup info.
    * Uses effectivePlacement when provided (min of placement and minReportDate) so first day = age 1. */
-  const createEmptyRowsFromSetup = useCallback((forDate: string, effectivePlacement?: string | null): DailyRow[] => {
-    const placement = effectivePlacement ?? placementDateForLot;
-    console.log("📝 createEmptyRowsFromSetup:", { forDate, placement, effectivePlacement, placementDateForLot, setupConfigsCount: setupConfigs.length });
-    
+  const createEmptyRowsFromSetup = useCallback((forDate: string, effectivePlacementArg?: string | null): DailyRow[] => {
+    const placement = effectivePlacementArg ?? placementDateForLot;
     if (setupConfigs.length === 0) {
       let empty = emptyRow(forDate);
       if (placement) {
         const { age, semaine } = computeAgeAndSemaine(empty.report_date, placement);
-        console.log("✅ Calculated age for single row:", { age, semaine, reportDate: empty.report_date, placement });
         empty = { ...empty, age_jour: String(age), semaine: String(semaine) };
-      } else {
-        console.warn("⚠️ No placement date available, age will be empty");
       }
       return [empty];
     }
-    return setupConfigs.map(config => {
-      let row: DailyRow = {
-        id: crypto.randomUUID(),
-        report_date: forDate,
-        age_jour: "",
-        semaine: "",
-        building: config.building,
-        designation: config.sex,
-        nbr: "",
-        water_l: "",
-        temp_min: "",
-        temp_max: "",
-        traitement: "",
-        verified: false,
-      };
-      if (placement) {
-        const { age, semaine } = computeAgeAndSemaine(row.report_date, placement);
-        console.log("✅ Calculated age for config row:", { age, semaine, reportDate: row.report_date, placement, building: config.building, sex: config.sex });
-        row = { ...row, age_jour: String(age), semaine: String(semaine) };
-      } else {
-        console.warn("⚠️ No placement date available for config row, age will be empty:", { building: config.building, sex: config.sex });
-      }
-      return row;
-    });
+    return createRowsForConfigs(setupConfigs, forDate, placement);
   }, [setupConfigs, placementDateForLot]);
 
   const load = useCallback(async () => {
@@ -382,12 +451,12 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         : list;
       console.log("📋 DailyReportTable - Filtered reports:", { count: filtered.length, filtered });
       let mapped = filtered.map(toRow);
-      const effectivePlacement = (placementDateForLot && list.length > 0)
-        ? (() => {
-            const minReportDate = list.reduce((min, r) => (r.reportDate < min ? r.reportDate : min), list[0].reportDate);
-            return minReportDate < placementDateForLot ? minReportDate : placementDateForLot;
-          })()
-        : placementDateForLot;
+      let effectivePlacement: string | null = placementDateForLot;
+      if (placementDateForLot && list.length > 0) {
+        const minReportDate = list.reduce((min, r) => (r.reportDate < min ? r.reportDate : min), list[0].reportDate);
+        effectivePlacement = minReportDate < placementDateForLot ? minReportDate : placementDateForLot;
+      }
+      effectivePlacementRef.current = effectivePlacement;
       if (effectivePlacement) {
         mapped = mapped.map((r) => {
           const { age, semaine } = computeAgeAndSemaine(r.report_date, effectivePlacement);
@@ -395,29 +464,36 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         });
       }
 
-      // When "Nouveau rapport" (and not refreshing after multi-date save): create rows from setup configs
+      // When "Nouveau rapport" (and not refreshing after multi-date save): full effectif template for that day
       if (isNewReport && !skipDateFilter) {
         const emptyRows = createEmptyRowsFromSetup(forDate, effectivePlacement);
         setRows(emptyRows);
       } else {
         if (isReadOnly) {
-          setRows(mapped);
+          setRows(sortRowsByEffectifOrder(mapped, setupConfigs));
+        } else if (setupConfigs.length > 0) {
+          const padDateIfEmpty =
+            initialDate && !isNewReport && !skipDateFilter ? initialDate : null;
+          setRows(
+            mergeEffectifDraftsForDates(mapped, setupConfigs, effectivePlacement, padDateIfEmpty)
+          );
         } else if (mapped.length > 0) {
-          const emptyRows = createEmptyRowsFromSetup(forDate, effectivePlacement);
-          setRows([...mapped, ...emptyRows]);
+          setRows(mapped);
         } else {
-          const emptyRows = createEmptyRowsFromSetup(forDate, effectivePlacement);
-          setRows(emptyRows);
+          setRows([]);
         }
       }
     } catch (error) {
       console.error("❌ DailyReportTable - Error loading daily reports:", error);
-      const emptyRows = createEmptyRowsFromSetup(forDate);
-      setRows(emptyRows);
+      if (isNewReport) {
+        setRows(createEmptyRowsFromSetup(forDate, placementDateForLot));
+      } else {
+        setRows([]);
+      }
     } finally {
       setLoading(false);
     }
-  }, [initialDate, farmId, lot, isReadOnly, placementDateForLot, isNewReport, createEmptyRowsFromSetup, setupLoading]);
+  }, [initialDate, farmId, lot, isReadOnly, placementDateForLot, isNewReport, createEmptyRowsFromSetup, setupLoading, setupConfigs]);
 
   useEffect(() => {
     // Only load when setup info is ready
@@ -427,73 +503,46 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
   }, [load, setupLoading]);
 
   const addRow = () => {
+    const placement = effectivePlacementRef.current ?? placementDateForLot;
     const last = rows[rows.length - 1];
-    let reportDate = last?.report_date || dateContext;
-    
-    // Check if all building+sex combinations are already present for the current date
-    // If yes, increment to next day to avoid age duplication
-    if (setupConfigs.length > 0 && last?.report_date) {
-      const rowsForCurrentDate = rows.filter(r => r.report_date === last.report_date);
-      const existingCombos = new Set(
-        rowsForCurrentDate.map(r => `${r.building}|${r.designation}`)
-      );
-      const allCombos = setupConfigs.map(c => `${c.building}|${c.sex}`);
-      const allCombosExist = allCombos.every(combo => existingCombos.has(combo));
-      
-      // If all combinations exist for current date, move to next day
-      if (allCombosExist) {
+    let reportDate = last?.report_date ?? dateContext;
+
+    if (setupConfigs.length > 0) {
+      const combosForDate = (d: string) =>
+        new Set(rows.filter((r) => r.report_date === d).map((r) => `${r.building}|${r.designation}`));
+      const allCombosFilledForDate = (d: string) => {
+        const ex = combosForDate(d);
+        return setupConfigs.every((c) => ex.has(`${c.building}|${c.sex}`));
+      };
+      if (last && allCombosFilledForDate(last.report_date)) {
         reportDate = addDays(last.report_date, 1);
       }
-    }
-    
-    // If we have setup configs, add rows for all building+sex combinations
-    if (setupConfigs.length > 0) {
-      const newRows: DailyRow[] = setupConfigs.map(config => {
-        let newRow: DailyRow = {
-          id: crypto.randomUUID(),
-          report_date: reportDate,
-          age_jour: "",
-          semaine: "",
-          building: config.building,
-          designation: config.sex,
-          nbr: "",
-          water_l: "",
-          temp_min: "",
-          temp_max: "",
-          traitement: "",
-          verified: false,
-        };
-        if (placementDateForLot && newRow.report_date) {
-          const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placementDateForLot);
-          newRow.age_jour = String(age);
-          newRow.semaine = String(semaine);
-        }
-        return newRow;
-      });
-      setRows((prev) => [...prev, ...newRows]);
+      const existing = combosForDate(reportDate);
+      const missingConfigs = setupConfigs.filter((c) => !existing.has(`${c.building}|${c.sex}`));
+      const configsToAdd = missingConfigs.length > 0 ? missingConfigs : setupConfigs;
+      const newRows = createRowsForConfigs(configsToAdd, reportDate, placement);
+      setRows((prev) => sortRowsByEffectifOrder([...prev, ...newRows], setupConfigs));
     } else {
-      // Fallback: add single row with next day if last row exists
       if (last?.report_date) {
         reportDate = addDays(last.report_date, 1);
       }
-      const newRow: DailyRow = {
+      let newRow: DailyRow = {
         ...emptyRow(dateContext),
         id: crypto.randomUUID(),
         report_date: reportDate,
         age_jour: "",
         semaine: "",
       };
-      if (placementDateForLot && newRow.report_date) {
-        const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placementDateForLot);
-        newRow.age_jour = String(age);
-        newRow.semaine = String(semaine);
+      if (placement && newRow.report_date) {
+        const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placement);
+        newRow = { ...newRow, age_jour: String(age), semaine: String(semaine) };
       }
       setRows((prev) => [...prev, newRow]);
     }
   };
 
   const removeRow = async (id: string) => {
-    if (rows.length <= 1) return;
+    if (rows.length === 0) return;
     if (isSavedRow(id) && canDelete) {
       try {
         await api.dailyReports.delete(parseInt(id, 10));
@@ -664,9 +713,6 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                 : selectedFarmName
                   ? `Ferme : ${selectedFarmName} — Suivi quotidien`
                   : "Suivi quotidien : mortalité, consommation d'eau, température, traitements"}
-            {showSaveCol && (
-              <span className="block mt-1">Enregistrez chaque ligne avec ✓ (responsable ferme : toutes les lignes valides du même jour sont envoyées ensemble).</span>
-            )}
           </p>
         </div>
         {!isReadOnly && canCreate && (
@@ -942,7 +988,6 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                           type="button"
                           onClick={() => removeRow(row.id)}
                           className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                          disabled={rows.length <= 1}
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
