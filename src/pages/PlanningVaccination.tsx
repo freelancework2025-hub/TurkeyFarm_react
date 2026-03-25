@@ -3,9 +3,10 @@
  * Table: Age, Date, Motif, Vaccin / Traitement, Quantité, Administration, Remarques.
  * Date defaults from Date Mise en Place (InfosSetup) for the selected lot.
  */
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, Building2, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Trash2 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -43,6 +44,7 @@ import {
   type VaccinationPlanningRequest,
   type VaccinationPlanningResponse,
   type VaccinationPlanningNoteRequest,
+  type VaccinationPlanningNoteResponse,
 } from "@/lib/api";
 import { dispatchVaccinationAlertsRefresh } from "@/lib/vaccinationAlertsEvents";
 import { exportToExcel, exportToPdf } from "@/lib/planningVaccinationExport";
@@ -138,18 +140,175 @@ interface PlanningNote {
   selected: boolean;
 }
 
+function mapResponsesToPlanningNotes(list: VaccinationPlanningNoteResponse[]): PlanningNote[] {
+  if (list.length === 0) {
+    return [{ id: crypto.randomUUID(), label: "Note 1", content: "", selected: false }];
+  }
+  return [...list]
+    .sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0))
+    .map((r, i) => ({
+      id: String(r.id),
+      label: r.label || `Note ${i + 1}`,
+      content: r.content ?? "",
+      selected: Boolean(r.selected),
+    }));
+}
+
+function mergeNoteContentOptionsFromSaved(
+  saved: VaccinationPlanningNoteResponse[],
+  setNoteContentOptions: React.Dispatch<React.SetStateAction<string[]>>
+) {
+  const customContents = saved
+    .map((r) => (r.content ?? "").trim())
+    .filter((c) => c && !DEFAULT_NOTE_CONTENT_OPTIONS.includes(c));
+  setNoteContentOptions((prev) => {
+    const combined = new Set([...DEFAULT_NOTE_CONTENT_OPTIONS, ...customContents, ...prev]);
+    return [...combined];
+  });
+}
+
 function addDays(isoDate: string, days: number): string {
   const d = new Date(isoDate + "T12:00:00");
   d.setDate(d.getDate() + days);
   return d.toISOString().split("T")[0];
 }
 
-/** Parse "X J" or "X Jours" to days; Couvoir = 0; else 0. */
+/** Parse "X J" or "X Jours" to days; Couvoir = 0; else null si non reconnu. */
 function ageToDays(age: string): number | null {
   const t = (age || "").trim();
-  if (!t || t === "Couvoir") return 0;
-  const m = t.match(/^(\d+)\s*J/);
+  if (!t) return null;
+  if (t.toLowerCase() === "couvoir") return 0;
+  const m = t.match(/^(\d+)\s*J/i);
   return m ? parseInt(m[1], 10) : null;
+}
+
+function isCouvoirAge(age: string): boolean {
+  return (age || "").trim().toLowerCase() === "couvoir";
+}
+
+/** Partie numérique pour la saisie (âge stocké en « N J »). */
+function ageDaysNumberString(age: string): string {
+  const t = (age || "").trim();
+  if (!t || isCouvoirAge(t)) return "";
+  const m = t.match(/^(\d+)\s*J/i);
+  return m ? String(parseInt(m[1], 10)) : "";
+}
+
+/** Une seule ligne « Couvoir » : la première conservée, les autres vidées. */
+function dedupeCouvoirRows(rows: VaccinationRow[]): VaccinationRow[] {
+  let seen = false;
+  return rows.map((r) => {
+    if (!isCouvoirAge(r.age)) return r;
+    if (!seen) {
+      seen = true;
+      return { ...r, age: "Couvoir" };
+    }
+    return { ...r, age: "" };
+  });
+}
+
+/** Ordre croissant par âge (jours) ; même âge : serverId croissant puis id stable. Couvoir avant les autres « 0 j ». */
+function sortPlanningRowsByAge(rows: VaccinationRow[]): VaccinationRow[] {
+  return [...rows].sort((a, b) => {
+    const da = ageToDays(a.age);
+    const db = ageToDays(b.age);
+    const na = da === null ? Number.MAX_SAFE_INTEGER : da;
+    const nb = db === null ? Number.MAX_SAFE_INTEGER : db;
+    if (na !== nb) return na - nb;
+    if (na === 0 && nb === 0) {
+      const ac = isCouvoirAge(a.age);
+      const bc = isCouvoirAge(b.age);
+      if (ac && !bc) return -1;
+      if (!ac && bc) return 1;
+    }
+    const sa = a.serverId;
+    const sb = b.serverId;
+    if (sa != null && sb != null && sa !== sb) return sa - sb;
+    if (sa != null && sb == null) return -1;
+    if (sa == null && sb != null) return 1;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function sortAndNormalizePlanningRows(rows: VaccinationRow[]): VaccinationRow[] {
+  return dedupeCouvoirRows(sortPlanningRowsByAge(rows));
+}
+
+interface PlanningAgeCellProps {
+  rowId: string;
+  age: string;
+  isCouvoir: boolean;
+  disabled?: boolean;
+  onAgeChange: (value: string) => void;
+}
+
+/** Saisie : nombre seul ; stockage « N J ». Ligne Couvoir : libellé fixe en tête. */
+function PlanningAgeCell({
+  rowId,
+  age,
+  isCouvoir,
+  disabled = false,
+  onAgeChange,
+}: PlanningAgeCellProps) {
+  const [numDraft, setNumDraft] = useState(() => ageDaysNumberString(age));
+
+  useEffect(() => {
+    setNumDraft(ageDaysNumberString(age));
+  }, [rowId, age]);
+
+  if (isCouvoir) {
+    return (
+      <span className="inline-flex min-w-[3rem] items-center px-2 py-1 text-sm font-medium text-foreground">
+        Couvoir
+      </span>
+    );
+  }
+
+  const commitNumber = (digits: string) => {
+    const t = digits.trim();
+    if (!t) {
+      onAgeChange("");
+      return;
+    }
+    const n = parseInt(t, 10);
+    if (Number.isNaN(n) || n <= 0) {
+      setNumDraft("");
+      onAgeChange("");
+      return;
+    }
+    onAgeChange(`${n} J`);
+  };
+
+  return (
+    <div className="flex min-w-[5rem] max-w-[9rem] items-center gap-1">
+      <input
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        disabled={disabled}
+        value={numDraft}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/\D/g, "");
+          setNumDraft(raw);
+          if (raw === "") {
+            onAgeChange("");
+            return;
+          }
+          const n = parseInt(raw, 10);
+          if (!Number.isNaN(n) && n > 0) {
+            onAgeChange(`${n} J`);
+          }
+        }}
+        onBlur={() => commitNumber(numDraft)}
+        className="w-full min-w-[3rem] max-w-[5rem] border rounded px-2 py-1 text-sm bg-background"
+        placeholder="Âge"
+        aria-label="Âge en jours"
+      />
+      <span className="shrink-0 text-sm text-muted-foreground" aria-hidden>
+        J
+      </span>
+    </div>
+  );
 }
 
 interface SelectOrAddProps {
@@ -173,28 +332,83 @@ function SelectOrAdd({
 }: SelectOrAddProps) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState(value);
-  const ref = useRef<HTMLDivElement>(null);
+  const [panelBox, setPanelBox] = useState({ top: 0, left: 0, width: 0, maxHeight: 192 });
+
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setInput(value);
-  }, [value]);
-
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-        setInput(value);
-      }
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
   }, [value]);
 
   const filtered = options.filter((o) =>
     o.toLowerCase().includes((input || "").toLowerCase())
   );
   const exact = options.find((o) => o.toLowerCase() === (input || "").toLowerCase());
-  const canAdd = input.trim() && !exact && !options.includes(input.trim());
+  const canAdd = Boolean(input.trim() && !exact && !options.includes(input.trim()));
+
+  const closeAndSync = useCallback(() => {
+    setOpen(false);
+    setInput(value);
+  }, [value]);
+
+  const updatePanelPosition = useCallback(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const gap = 6;
+    const maxDrop = 192;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = rect.width;
+    const left = Math.max(8, Math.min(rect.left, vw - width - 8));
+
+    const spaceBelow = vh - rect.bottom - gap - 8;
+    const spaceAbove = rect.top - gap - 8;
+    const preferBelow = spaceBelow >= 100 || spaceBelow >= spaceAbove;
+
+    if (preferBelow) {
+      const maxH = Math.max(72, Math.min(maxDrop, spaceBelow));
+      setPanelBox({
+        left,
+        width,
+        top: rect.bottom + gap,
+        maxHeight: maxH,
+      });
+    } else {
+      const maxH = Math.max(72, Math.min(maxDrop, spaceAbove));
+      setPanelBox({
+        left,
+        width,
+        top: Math.max(8, rect.top - gap - maxH),
+        maxHeight: maxH,
+      });
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || disabled) return;
+    updatePanelPosition();
+    const onReposition = () => updatePanelPosition();
+    window.addEventListener("scroll", onReposition, true);
+    window.addEventListener("resize", onReposition);
+    return () => {
+      window.removeEventListener("scroll", onReposition, true);
+      window.removeEventListener("resize", onReposition);
+    };
+  }, [open, disabled, updatePanelPosition, filtered.length, canAdd]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (wrapperRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t)) return;
+      closeAndSync();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open, closeAndSync]);
 
   const select = (v: string) => {
     setInput(v);
@@ -211,8 +425,49 @@ function SelectOrAdd({
     setOpen(false);
   };
 
+  const dropdown =
+    open &&
+    !disabled &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <div
+        ref={panelRef}
+        role="listbox"
+        className="fixed z-[200] rounded-md border bg-popover text-popover-foreground shadow-md overflow-y-auto overflow-x-hidden"
+        style={{
+          top: panelBox.top,
+          left: panelBox.left,
+          width: panelBox.width,
+          maxHeight: panelBox.maxHeight,
+        }}
+      >
+        {filtered.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            role="option"
+            className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+            onClick={() => select(opt)}
+          >
+            {opt}
+          </button>
+        ))}
+        {canAdd && (
+          <button
+            type="button"
+            className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-accent flex items-center gap-1"
+            onClick={addNew}
+          >
+            <Plus className="w-3 h-3 shrink-0" />
+            Ajouter &quot;{input.trim()}&quot;
+          </button>
+        )}
+      </div>,
+      document.body
+    );
+
   return (
-    <div className={`relative ${className}`} ref={ref}>
+    <div className={`relative min-w-0 ${className}`} ref={wrapperRef}>
       <input
         type="text"
         value={input}
@@ -222,35 +477,12 @@ function SelectOrAdd({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
         disabled={disabled}
         className="w-full min-w-[120px] border rounded px-2 py-1 text-sm bg-background"
         placeholder={placeholder}
+        autoComplete="off"
       />
-      {open && !disabled && (
-        <div className="absolute z-10 top-full left-0 right-0 mt-0.5 bg-popover border rounded-md shadow-md max-h-48 overflow-y-auto">
-          {filtered.map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
-              onClick={() => select(opt)}
-            >
-              {opt}
-            </button>
-          ))}
-          {canAdd && (
-            <button
-              type="button"
-              className="w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-accent flex items-center gap-1"
-              onClick={addNew}
-            >
-              <Plus className="w-3 h-3" />
-              Ajouter &quot;{input.trim()}&quot;
-            </button>
-          )}
-        </div>
-      )}
+      {dropdown}
     </div>
   );
 }
@@ -386,10 +618,10 @@ export default function PlanningVaccination() {
   const [rows, setRows] = useState<VaccinationRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
-  const [savingNotes, setSavingNotes] = useState(false);
+  /** While a note row ✓ or delete persist is in flight */
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
   const [dateMiseEnPlace, setDateMiseEnPlace] = useState<string | null>(null);
 
-  const [ages, setAges] = useState<string[]>(DEFAULT_AGES);
   const [motifs, setMotifs] = useState<string[]>(DEFAULT_MOTIFS);
   const [vaccins, setVaccins] = useState<string[]>(DEFAULT_VACCINS);
   const [administrations, setAdministrations] = useState<string[]>(DEFAULT_ADMINISTRATION);
@@ -495,7 +727,7 @@ export default function PlanningVaccination() {
           const date =
             days != null && days > 0
               ? addDays(baseDate, days)
-              : age === "Couvoir"
+              : isCouvoirAge(age)
                 ? ""
                 : addDays(baseDate, days ?? 0);
           return {
@@ -534,21 +766,9 @@ export default function PlanningVaccination() {
             }
           }
           result.push(...saved);
-          setRows(result);
-          setAges((prev) => {
-            const fromRows = new Set(result.map((row) => row.age).filter(Boolean));
-            const next = new Set([...prev, ...fromRows]);
-            return [...next].sort((a, b) => {
-              const na = ageToDays(a);
-              const nb = ageToDays(b);
-              if (na != null && nb != null) return na - nb;
-              if (na != null) return -1;
-              if (nb != null) return 1;
-              return a.localeCompare(b);
-            });
-          });
+          setRows(sortAndNormalizePlanningRows(result));
         } else {
-          setRows(DEFAULT_AGES.map((age) => emptyRowForAge(age)));
+          setRows(sortAndNormalizePlanningRows(DEFAULT_AGES.map((age) => emptyRowForAge(age))));
         }
       } catch {
         setRows([]);
@@ -571,22 +791,8 @@ export default function PlanningVaccination() {
         lot: selectedLot,
       });
       if (list.length) {
-        const loaded = list
-          .sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0))
-          .map((r, i) => ({
-            id: String(r.id),
-            label: r.label || `Note ${i + 1}`,
-            content: r.content ?? "",
-            selected: Boolean(r.selected),
-          }));
-        setNotes(loaded);
-        const customContents = list
-          .map((r) => (r.content ?? "").trim())
-          .filter((c) => c && !DEFAULT_NOTE_CONTENT_OPTIONS.includes(c));
-        setNoteContentOptions((prev) => {
-          const combined = new Set([...DEFAULT_NOTE_CONTENT_OPTIONS, ...customContents]);
-          return [...combined];
-        });
+        setNotes(mapResponsesToPlanningNotes(list));
+        mergeNoteContentOptionsFromSaved(list, setNoteContentOptions);
       } else {
         setNotes([{ id: "note-1", label: "Note 1", content: "", selected: false }]);
         setNoteContentOptions(DEFAULT_NOTE_CONTENT_OPTIONS);
@@ -635,8 +841,15 @@ export default function PlanningVaccination() {
     if (!dateMiseEnPlace) return "";
     const days = ageToDays(age);
     if (days == null) return "";
-    if (days === 0) return age === "Couvoir" ? "" : dateMiseEnPlace;
+    if (days === 0) return isCouvoirAge(age) ? "" : dateMiseEnPlace;
     return addDays(dateMiseEnPlace, days);
+  };
+
+  /** Si la date est vide à l’enregistrement : même calcul que l’aperçu (date mise en place du lot = InfosSetup). */
+  const rowWithAutoDateFromMiseEnPlace = (r: VaccinationRow): VaccinationRow => {
+    if ((r.date ?? "").trim() !== "") return r;
+    const d = defaultDateForAge(r.age);
+    return d ? { ...r, date: d } : r;
   };
 
   const addRow = () => {
@@ -645,7 +858,7 @@ export default function PlanningVaccination() {
       {
         id: crypto.randomUUID(),
         age: "",
-        date: dateMiseEnPlace || new Date().toISOString().split("T")[0],
+        date: "",
         motif: "",
         vaccinTraitement: "",
         quantite: "",
@@ -692,10 +905,29 @@ export default function PlanningVaccination() {
     const ordre = rows.findIndex((r) => r.id === row.id);
     if (ordre < 0) return;
 
+    const rowToSave = rowWithAutoDateFromMiseEnPlace(row);
+    const planDateTrimmed = (rowToSave.date ?? "").trim();
+    if (!planDateTrimmed) {
+      const days = ageToDays(rowToSave.age);
+      const needsMiseEnPlaceDate =
+        days != null &&
+        (days > 0 || (days === 0 && !isCouvoirAge(rowToSave.age)));
+      if (needsMiseEnPlaceDate) {
+        setSavingRowId(null);
+        toast({
+          title: "Date de mise en place manquante",
+          description:
+            "Renseignez la date de mise en place du lot dans Données mises en place (Infos setup), ou saisissez la date du planning manuellement.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     setSavingRowId(row.id);
     try {
-      const is1J = (row.age ?? "").trim() === "1 J";
-      const couvoirRow = rows.find((r) => (r.age ?? "").trim() === "Couvoir");
+      const is1J = (rowToSave.age ?? "").trim() === "1 J";
+      const couvoirRow = rows.find((r) => isCouvoirAge(r.age));
       const couvoirSaved = couvoirRow?.serverId != null;
 
       if (is1J && !couvoirSaved && couvoirRow) {
@@ -714,21 +946,32 @@ export default function PlanningVaccination() {
         };
         const createdCouvoir = await api.vaccinationPlanning.create(couvoirReq);
         setRows((prev) =>
-          prev.map((r) => (r.id === couvoirRow.id ? { ...r, serverId: createdCouvoir.id } : r))
+          sortAndNormalizePlanningRows(
+            prev.map((r) => (r.id === couvoirRow.id ? { ...r, serverId: createdCouvoir.id } : r))
+          )
         );
         dispatchVaccinationAlertsRefresh();
       }
 
-      const req = rowToRequest(row, ordre);
+      const req = rowToRequest(rowToSave, ordre);
       if (row.serverId != null) {
         await api.vaccinationPlanning.update(row.serverId, req);
         toast({ title: "Ligne mise à jour", description: "La ligne a été mise à jour." });
+        setRows((prev) =>
+          sortAndNormalizePlanningRows(
+            prev.map((r) => (r.id === row.id ? { ...r, ...rowToSave, serverId: r.serverId } : r))
+          )
+        );
         dispatchVaccinationAlertsRefresh();
       } else {
         const created = await api.vaccinationPlanning.create(req);
         toast({ title: "Ligne enregistrée", description: "La ligne a été enregistrée." });
         setRows((prev) =>
-          prev.map((r) => (r.id === row.id ? { ...r, serverId: created.id } : r))
+          sortAndNormalizePlanningRows(
+            prev.map((r) =>
+              r.id === row.id ? { ...r, ...rowToSave, serverId: created.id } : r
+            )
+          )
         );
         dispatchVaccinationAlertsRefresh();
         return;
@@ -746,6 +989,14 @@ export default function PlanningVaccination() {
 
   const removeRow = (id: string) => {
     const row = rows.find((r) => r.id === id);
+    if (row && isCouvoirAge(row.age)) {
+      toast({
+        title: "Suppression impossible",
+        description: "La ligne Couvoir est unique et ne peut pas être supprimée.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (row?.serverId != null && canEditPlanning) {
       api.vaccinationPlanning
         .delete(row.serverId)
@@ -794,31 +1045,42 @@ export default function PlanningVaccination() {
     });
   };
 
-  const removeNote = (id: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== id));
-  };
+  const notesToReplaceBody = useCallback(
+    (list: PlanningNote[]): VaccinationPlanningNoteRequest[] =>
+      list.map((n, i) => ({
+        farmId: pageFarmId ?? null,
+        lot: selectedLot!,
+        ordre: i,
+        label: n.label || `Note ${i + 1}`,
+        content: n.content || null,
+        selected: n.selected,
+      })),
+    [pageFarmId, selectedLot]
+  );
 
-  const saveNotes = async () => {
+  /**
+   * Backend only supports replace-all for the lot. Each ✓ sends the full current list so nothing is lost;
+   * response rehydrates server ids (new lines get real ids).
+   */
+  const saveNoteRow = async (noteId: string) => {
     if (!canEditPlanning) return;
     if (!selectedLot || !pageFarmId) {
       toast({ title: "Sélectionnez un lot", variant: "destructive" });
       return;
     }
-    setSavingNotes(true);
+    setSavingNoteId(noteId);
     try {
-      const body: VaccinationPlanningNoteRequest[] = notes.map((n, i) => ({
-        farmId: pageFarmId ?? null,
-        lot: selectedLot,
-        ordre: i,
-        label: n.label || `Note ${i + 1}`,
-        content: n.content || null,
-        selected: n.selected,
-      }));
-      await api.vaccinationPlanningNotes.replace(
+      const body = notesToReplaceBody(notes);
+      const saved = await api.vaccinationPlanningNotes.replace(
         { lot: selectedLot, farmId: pageFarmId ?? undefined },
         body
       );
-      toast({ title: "Notes enregistrées", description: "Les notes ont été enregistrées avec succès." });
+      setNotes(mapResponsesToPlanningNotes(saved));
+      mergeNoteContentOptionsFromSaved(saved, setNoteContentOptions);
+      toast({
+        title: "Notes synchronisées",
+        description: "Toutes les notes du lot ont été enregistrées (remplacement côté serveur).",
+      });
       dispatchVaccinationAlertsRefresh();
     } catch {
       toast({
@@ -827,7 +1089,35 @@ export default function PlanningVaccination() {
         variant: "destructive",
       });
     } finally {
-      setSavingNotes(false);
+      setSavingNoteId(null);
+    }
+  };
+
+  const removeNote = async (id: string) => {
+    if (!canEditPlanning) return;
+    const next = notes.filter((n) => n.id !== id);
+    if (!selectedLot || !pageFarmId) {
+      setNotes(next.length ? next : mapResponsesToPlanningNotes([]));
+      return;
+    }
+    setSavingNoteId(id);
+    try {
+      const body = notesToReplaceBody(next);
+      const saved = await api.vaccinationPlanningNotes.replace(
+        { lot: selectedLot, farmId: pageFarmId ?? undefined },
+        body
+      );
+      setNotes(mapResponsesToPlanningNotes(saved));
+      mergeNoteContentOptionsFromSaved(saved, setNoteContentOptions);
+      dispatchVaccinationAlertsRefresh();
+    } catch {
+      toast({
+        title: "Erreur",
+        description: "Impossible de supprimer la note.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingNoteId(null);
     }
   };
 
@@ -1013,25 +1303,12 @@ export default function PlanningVaccination() {
                     {canEditPlanning ? (
                       <>
                         <td className="p-1">
-                          <SelectOrAdd
-                            value={row.age}
-                            onChange={(v) => updateRow(row.id, "age", v)}
-                            options={ages}
-                            onAddOption={(v) => {
-                              const t = v.trim();
-                              if (!t) return;
-                              setAges((prev) =>
-                                [...prev, t].sort((a, b) => {
-                                  const na = ageToDays(a);
-                                  const nb = ageToDays(b);
-                                  if (na != null && nb != null) return na - nb;
-                                  if (na != null) return -1;
-                                  if (nb != null) return 1;
-                                  return a.localeCompare(b);
-                                })
-                              );
-                            }}
-                            placeholder="Age"
+                          <PlanningAgeCell
+                            rowId={row.id}
+                            age={row.age}
+                            isCouvoir={isCouvoirAge(row.age)}
+                            disabled={loading}
+                            onAgeChange={(v) => updateRow(row.id, "age", v)}
                           />
                         </td>
                         <td className="p-1">
@@ -1040,7 +1317,12 @@ export default function PlanningVaccination() {
                             value={row.date}
                             onChange={(e) => updateRow(row.id, "date", e.target.value)}
                             className="w-full min-w-[130px] border rounded px-2 py-1 text-sm bg-background"
-                            placeholder={defaultDateForAge(row.age) || "JJ/MM/AAAA"}
+                            placeholder="YYYY-MM-DD"
+                            title={
+                              (row.date ?? "").trim()
+                                ? undefined
+                                : "Laisser vide : la date sera calculée à l’enregistrement (date de mise en place + âge), ou saisir une date au format AAAA-MM-JJ."
+                            }
                           />
                         </td>
                         <td className="p-1">
@@ -1095,6 +1377,7 @@ export default function PlanningVaccination() {
                             disabled={
                               savingRowId === row.id ||
                               loading ||
+                              savingNoteId !== null ||
                               (row.serverId == null && !hasRowContent(row))
                             }
                             className="p-1 text-muted-foreground hover:text-primary transition-colors"
@@ -1137,27 +1420,23 @@ export default function PlanningVaccination() {
 
           {/* Table des notes — éditable par RT/Admin uniquement ; Backoffice/Responsable Ferme en lecture seule */}
           <div className="mt-6 space-y-2">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold">Notes</h2>
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-base font-semibold">Notes</h2>
+                {canEditPlanning && (
+                  <p className="text-xs text-muted-foreground mt-1 max-w-xl">
+                    Chaque ✓ enregistre toutes les lignes du tableau (l&apos;API remplace la liste des notes du
+                    lot). La coche « Sélection » est incluse lors de l&apos;enregistrement.
+                  </p>
+                )}
+              </div>
               {canEditPlanning ? (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={saveNotes}
-                    disabled={savingNotes || !selectedLot}
-                    className="inline-flex items-center gap-1 rounded-md border border-primary bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                  >
-                    {savingNotes ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Save className="w-4 h-4" />
-                    )}
-                    Enregistrer les notes
-                  </button>
+                <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={addNote}
-                    className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
+                    disabled={savingNoteId !== null || savingRowId !== null}
+                    className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
                   >
                     <Plus className="w-4 h-4" />
                     Ajouter une note
@@ -1174,7 +1453,14 @@ export default function PlanningVaccination() {
                     <th className="text-left p-2 font-medium w-12">Sélection</th>
                     <th className="text-left p-2 font-medium min-w-[80px]">Note</th>
                     <th className="text-left p-2 font-medium">Contenu</th>
-                    {canEditPlanning && <th className="w-10 p-2" />}
+                    {canEditPlanning && (
+                      <>
+                        <th className="w-10 p-2 text-center text-xs font-medium" title="Enregistrer (synchronise toutes les notes)">
+                          ✓
+                        </th>
+                        <th className="w-10 p-2" />
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -1209,16 +1495,35 @@ export default function PlanningVaccination() {
                         )}
                       </td>
                       {canEditPlanning && (
-                        <td className="p-2 align-top">
-                          <button
-                            type="button"
-                            onClick={() => removeNote(note.id)}
-                            className="p-1 text-muted-foreground hover:text-destructive"
-                            title="Supprimer la note"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
+                        <>
+                          <td className="p-2 align-top text-center">
+                            <button
+                              type="button"
+                              onClick={() => saveNoteRow(note.id)}
+                              disabled={savingNoteId !== null || savingRowId !== null}
+                              className="inline-flex p-1 text-muted-foreground hover:text-primary disabled:opacity-40 disabled:pointer-events-none"
+                              title="Enregistrer les notes du lot (toutes les lignes)"
+                              aria-label="Enregistrer les notes du lot"
+                            >
+                              {savingNoteId === note.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                              ) : (
+                                <Check className="w-4 h-4 shrink-0" />
+                              )}
+                            </button>
+                          </td>
+                          <td className="p-2 align-top">
+                            <button
+                              type="button"
+                              onClick={() => removeNote(note.id)}
+                              disabled={savingNoteId !== null || savingRowId !== null}
+                              className="p-1 text-muted-foreground hover:text-destructive disabled:opacity-40 disabled:pointer-events-none"
+                              title="Supprimer la note"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </>
                       )}
                     </tr>
                   ))}

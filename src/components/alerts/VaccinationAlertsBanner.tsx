@@ -132,7 +132,12 @@ export default function VaccinationAlertsBanner() {
     });
   }, []);
 
-  // Every 5 min: play reminder only if server reports pending unconfirmed alerts (same rules as banner / vaccination_alert_confirmation)
+  /**
+   * Reminder sound every 5 minutes while the server still has pending alerts:
+   * same rules as the bell list (computed from planning + lot age + reports / mise en place;
+   * confirmed alerts drop out; rescheduled to a future date disappear until that date).
+   * Runs once immediately when the farm context is ready, then on the interval (after audio unlock via user gesture).
+   */
   useEffect(() => {
     const FIVE_MIN_MS = 5 * 60 * 1000;
     const checkAndPlay = () => {
@@ -145,8 +150,9 @@ export default function VaccinationAlertsBanner() {
         })
         .catch(() => {});
     };
-    const id = setInterval(checkAndPlay, FIVE_MIN_MS);
-    return () => clearInterval(id);
+    checkAndPlay();
+    const id = window.setInterval(checkAndPlay, FIVE_MIN_MS);
+    return () => window.clearInterval(id);
   }, [selectedFarmId, canAccessAllFarms]);
 
   // Deep-link from email: ?openVaccinationAlerts=1 opens the dialog
@@ -164,7 +170,7 @@ export default function VaccinationAlertsBanner() {
     try {
       await api.vaccinationAlerts.confirm({ farmId: a.farmId, lot: a.lot, planningId: a.planningId });
       toast({ title: "Alert confirmée", description: "L'alerte a été marquée comme traitée." });
-      setAlerts((prev) => prev.filter((x) => x.planningId !== a.planningId || x.lot !== a.lot));
+      fetchAlerts();
     } catch {
       toast({ title: "Erreur", description: "Impossible de confirmer.", variant: "destructive" });
     }
