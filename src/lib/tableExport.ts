@@ -42,6 +42,15 @@ export interface ITableExportConfig {
   hideLotAndSemaine?: boolean;
   /** When true, omit only Semaine from the info block (e.g. InfosSetup). */
   hideSemaine?: boolean;
+  /**
+   * Optional: map a data row to PDF cell strings (grouped numbers, etc.).
+   * When set, used for PDF body rows instead of rowToArray(...).map(String).
+   */
+  pdfRowMapper?: (cells: (string | number)[]) => string[];
+  /** Optional: PDF TOTAL row strings; when set, used instead of weekTotalRow.map(String). */
+  weekTotalPdfRow?: string[];
+  /** Optional: PDF CUMUL row strings; when set, used instead of cumulRow.map(String). */
+  cumulPdfRow?: string[];
 }
 
 // Shared styling (ElevagePro: primary #3D2E1A, cream #F7F6F3, muted #E1E0DB)
@@ -272,7 +281,27 @@ export async function exportTableToExcel(config: ITableExportConfig): Promise<vo
  * Export table data to PDF using ITableExportConfig.
  */
 export function exportTableToPdf(config: ITableExportConfig): void {
-  const { title, columns, farmName, lot, semaine, rows, rowToArray, weekTotalRow = [], cumulRow = [], ageByRowId, fileNamePrefix, includeTotals = true, prefixRows = [], suffixRows = [], hideLotAndSemaine = false, hideSemaine = false } = config;
+  const {
+    title,
+    columns,
+    farmName,
+    lot,
+    semaine,
+    rows,
+    rowToArray,
+    weekTotalRow = [],
+    cumulRow = [],
+    ageByRowId,
+    fileNamePrefix,
+    includeTotals = true,
+    prefixRows = [],
+    suffixRows = [],
+    hideLotAndSemaine = false,
+    hideSemaine = false,
+    pdfRowMapper,
+    weekTotalPdfRow,
+    cumulPdfRow,
+  } = config;
 
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   const margin = 12;
@@ -303,13 +332,18 @@ export function exportTableToPdf(config: ITableExportConfig): void {
   }
   for (const row of rows) {
     const age = ageByRowId.get(row.id) ?? "—";
-    tableData.push(rowToArray(row, age).map(String));
+    const cells = rowToArray(row, age);
+    tableData.push(pdfRowMapper ? pdfRowMapper(cells) : cells.map(String));
   }
   for (const sr of suffixRows) {
     tableData.push(sr.map(String));
   }
-  if (includeTotals && weekTotalRow.length > 0) tableData.push(weekTotalRow.map(String));
-  if (includeTotals && cumulRow.length > 0) tableData.push(cumulRow.map(String));
+  if (includeTotals && weekTotalRow.length > 0) {
+    tableData.push(weekTotalPdfRow ?? weekTotalRow.map(String));
+  }
+  if (includeTotals && cumulRow.length > 0) {
+    tableData.push(cumulPdfRow ?? cumulRow.map(String));
+  }
 
   doc.setTextColor(0, 0, 0);
 

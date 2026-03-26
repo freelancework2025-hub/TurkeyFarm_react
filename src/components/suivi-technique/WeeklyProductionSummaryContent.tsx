@@ -8,11 +8,17 @@ import {
   type SuiviStockResponse,
   type SuiviConsommationHebdoResponse,
   type ConsoResumeSummary,
+  type DailyReportResponse,
 } from "@/lib/api";
 import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumePerformanceTrackingTable";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import { mergeHebdoRowsWithDailyReports } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
 
 const SEXES = ["Mâle", "Femelle"] as const;
+
+function isSemaineS1(semaine: string): boolean {
+  return /^S1$/i.test(semaine.trim());
+}
 
 export interface WeeklyProductionSummaryContentProps {
   farmId: number;
@@ -37,11 +43,6 @@ interface AggregatedRow {
   mortaliteCumul: number;
   mortaliteCumulPct: number;
   consoEauL: number;
-  tempMin: number | null;
-  tempMax: number | null;
-  vaccination: string | null;
-  traitement: string | null;
-  observation: string | null;
 }
 
 export default function WeeklyProductionSummaryContent({
@@ -57,13 +58,34 @@ export default function WeeklyProductionSummaryContent({
   const [loading, setLoading] = useState(true);
   const [setups, setSetups] = useState<Map<string, SuiviTechniqueSetupResponse | null>>(new Map());
   const [hebdoLists, setHebdoLists] = useState<Map<string, SuiviTechniqueHebdoResponse[]>>(new Map());
+  /** Données semaine S1 par bâtiment×sexe — pour mortalité transport (somme NBRE S1) en S2+. */
+  const [hebdoS1Lists, setHebdoS1Lists] = useState<Map<string, SuiviTechniqueHebdoResponse[]>>(new Map());
   const [productionByKey, setProductionByKey] = useState<Map<string, SuiviProductionHebdoResponse | null>>(new Map());
   const [stockByKey, setStockByKey] = useState<Map<string, SuiviStockResponse | null>>(new Map());
   const [consumptionByKey, setConsumptionByKey] = useState<Map<string, SuiviConsommationHebdoResponse | null>>(new Map());
   const [resumeConsoSummary, setResumeConsoSummary] = useState<ConsoResumeSummary | null>(null);
   const [livraisonsAlimentList, setLivraisonsAlimentList] = useState<Awaited<ReturnType<typeof api.livraisonsAliment.list>>>([]);
+  const [dailyReportsForLot, setDailyReportsForLot] = useState<DailyReportResponse[]>([]);
 
   const key = (batiment: string, sex: string) => `${batiment}|${sex}`;
+
+  function parseIntLoose(s: string | undefined): number {
+    if (s == null || !String(s).trim()) return 0;
+    const n = parseInt(String(s).replace(/[\s\u00A0\u202F]/g, ""), 10);
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  function parseAgeJour(s: string | undefined): number | null {
+    if (s == null || !String(s).trim()) return null;
+    const n = parseInt(String(s).replace(/[\s\u00A0\u202F]/g, ""), 10);
+    return Number.isNaN(n) ? null : n;
+  }
+
+  function parseFloatLoose(s: string | undefined): number | null {
+    if (s == null || !String(s).trim()) return null;
+    const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
+    return Number.isFinite(n) ? n : null;
+  }
 
   useEffect(() => {
     if (!farmId || !lot || !semaine || allBatiments.length === 0) {
@@ -74,6 +96,7 @@ export default function WeeklyProductionSummaryContent({
     setLoading(true);
     const setupPromises: Promise<void>[] = [];
     const hebdoPromises: Promise<void>[] = [];
+    const hebdoS1Promises: Promise<void>[] = [];
     const productionPromises: Promise<void>[] = [];
     const stockPromises: Promise<void>[] = [];
     const consumptionPromises: Promise<void>[] = [];
@@ -91,6 +114,12 @@ export default function WeeklyProductionSummaryContent({
             .list({ farmId, lot, sex, batiment, semaine })
             .then((list) => setHebdoLists((prev) => new Map(prev).set(key(batiment, sex), list ?? [])))
             .catch(() => setHebdoLists((prev) => new Map(prev).set(key(batiment, sex), [])))
+        );
+        hebdoS1Promises.push(
+          api.suiviTechniqueHebdo
+            .list({ farmId, lot, sex, batiment, semaine: "S1" })
+            .then((list) => setHebdoS1Lists((prev) => new Map(prev).set(key(batiment, sex), list ?? [])))
+            .catch(() => setHebdoS1Lists((prev) => new Map(prev).set(key(batiment, sex), [])))
         );
         productionPromises.push(
           api.suiviProductionHebdo
@@ -123,11 +152,23 @@ export default function WeeklyProductionSummaryContent({
       .then((r) => setResumeConsoSummary(r ?? null))
       .catch(() => setResumeConsoSummary(null));
 
-    Promise.all([...setupPromises, ...hebdoPromises, ...productionPromises, ...stockPromises, ...consumptionPromises, livraisonsPromise, resumeSummaryPromise]).finally(() =>
-      setLoading(false)
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [farmId, lot, semaine, allBatiments.length]);
+    const dailyPromise = api.dailyReports
+      .list(farmId, lot)
+      .then((list) => setDailyReportsForLot(list ?? []))
+      .catch(() => setDailyReportsForLot([]));
+
+    Promise.all([
+      ...setupPromises,
+      ...hebdoPromises,
+      ...hebdoS1Promises,
+      ...productionPromises,
+      ...stockPromises,
+      ...consumptionPromises,
+      livraisonsPromise,
+      resumeSummaryPromise,
+      dailyPromise,
+    ]).finally(() => setLoading(false));
+  }, [farmId, lot, semaine, allBatiments.join(",")]);
 
   const aggregatedSetup = useMemo(() => {
     let totalEffectif = 0;
@@ -168,6 +209,25 @@ export default function WeeklyProductionSummaryContent({
     return sum;
   }, [hebdoLists, allBatiments]);
 
+  /** Somme des NBRE mortalité S1 sur tous les bâtiments × (Mâle + Femelle) — cumul « MORTALITE DU TRANSPORT » (0 si semaine affichée = S1). */
+  const totalMortaliteTransportAllBatiments = useMemo(() => {
+    if (isSemaineS1(semaine)) return 0;
+    let sum = 0;
+    for (const batiment of allBatiments) {
+      for (const sex of SEXES) {
+        const list = hebdoS1Lists.get(key(batiment, sex)) ?? [];
+        sum += list.reduce((s, r) => s + (Number(r.mortaliteNbre) || 0), 0);
+      }
+    }
+    return sum;
+  }, [semaine, allBatiments, hebdoS1Lists]);
+
+  const mortaliteTransportRowPct = useMemo(() => {
+    const em = aggregatedSetup.effectifMisEnPlace;
+    if (em <= 0) return Number.NaN;
+    return (totalMortaliteTransportAllBatiments / em) * 100;
+  }, [totalMortaliteTransportAllBatiments, aggregatedSetup.effectifMisEnPlace]);
+
   const aggregatedRows = useMemo((): AggregatedRow[] => {
     const byDate = new Map<
       string,
@@ -175,53 +235,51 @@ export default function WeeklyProductionSummaryContent({
         mortaliteNbre: number;
         consoEauL: number;
         ageJour: number | null;
-        tempMin: number | null;
-        tempMax: number | null;
-        vaccination: string[];
-        traitement: string[];
-        observation: string[];
       }
     >();
 
     for (const batiment of allBatiments) {
       for (const sex of SEXES) {
-        const list = hebdoLists.get(key(batiment, sex)) ?? [];
-        for (const r of list) {
+        const raw = hebdoLists.get(key(batiment, sex)) ?? [];
+        const merged = mergeHebdoRowsWithDailyReports(raw, dailyReportsForLot, {
+          lot,
+          batiment,
+          sex,
+          semaine,
+        });
+        for (const r of merged) {
           if (!r.recordDate) continue;
+          const nbre = parseIntLoose(r.mortaliteNbre);
+          const conso = parseFloatLoose(r.consoEauL) ?? 0;
+          const age = parseAgeJour(r.ageJour);
           const existing = byDate.get(r.recordDate) ?? {
             mortaliteNbre: 0,
             consoEauL: 0,
             ageJour: null as number | null,
-            tempMin: null as number | null,
-            tempMax: null as number | null,
-            vaccination: [] as string[],
-            traitement: [] as string[],
-            observation: [] as string[],
           };
-          existing.mortaliteNbre += r.mortaliteNbre ?? 0;
-          existing.consoEauL += r.consoEauL ?? 0;
-          if (r.ageJour != null) existing.ageJour = existing.ageJour != null ? Math.min(existing.ageJour, r.ageJour) : r.ageJour;
-          if (r.tempMin != null) existing.tempMin = existing.tempMin != null ? Math.min(existing.tempMin, r.tempMin) : r.tempMin;
-          if (r.tempMax != null) existing.tempMax = existing.tempMax != null ? Math.max(existing.tempMax, r.tempMax) : r.tempMax;
-          if (r.vaccination?.trim()) existing.vaccination.push(r.vaccination.trim());
-          if (r.traitement?.trim()) existing.traitement.push(r.traitement.trim());
-          if (r.observation?.trim()) existing.observation.push(r.observation.trim());
+          existing.mortaliteNbre += nbre;
+          existing.consoEauL += conso;
+          if (age != null) existing.ageJour = existing.ageJour != null ? Math.min(existing.ageJour, age) : age;
           byDate.set(r.recordDate, existing);
         }
       }
     }
 
     const sortedDates = Array.from(byDate.keys()).sort();
-    const effectif = totalEffectifDepart > 0 ? totalEffectifDepart : 1;
-    let runningCumul = 0;
-
-    const joinUnique = (arr: string[]) => [...new Set(arr)].filter(Boolean).join(" | ") || null;
+    /** % journée : même logique que le suivi hebdo — effectif départ de la semaine (somme bâtiments × sexes). */
+    const effectifDepartSemaine = totalEffectifDepart;
+    /** % cumul : cumul mortalité ÷ effectif mis en place total (somme des setups Mâle+Femelle × bâtiments pour la semaine). */
+    const effectifMisEnPlaceSemaine = aggregatedSetup.effectifMisEnPlace;
+    /** Cumul journalier inclut la somme des mortalités transport (S1) sur tous les bâtiments. */
+    let runningCumul = totalMortaliteTransportAllBatiments;
 
     return sortedDates.map((recordDate) => {
       const row = byDate.get(recordDate)!;
       runningCumul += row.mortaliteNbre;
-      const mortalitePct = (row.mortaliteNbre / effectif) * 100;
-      const mortaliteCumulPct = (runningCumul / effectif) * 100;
+      const mortalitePct =
+        effectifDepartSemaine > 0 ? (row.mortaliteNbre / effectifDepartSemaine) * 100 : Number.NaN;
+      const mortaliteCumulPct =
+        effectifMisEnPlaceSemaine > 0 ? (runningCumul / effectifMisEnPlaceSemaine) * 100 : Number.NaN;
       return {
         recordDate,
         ageJour: row.ageJour,
@@ -230,20 +288,38 @@ export default function WeeklyProductionSummaryContent({
         mortaliteCumul: runningCumul,
         mortaliteCumulPct,
         consoEauL: row.consoEauL,
-        tempMin: row.tempMin,
-        tempMax: row.tempMax,
-        vaccination: joinUnique(row.vaccination),
-        traitement: joinUnique(row.traitement),
-        observation: joinUnique(row.observation),
       };
     });
-  }, [hebdoLists, allBatiments, totalEffectifDepart]);
+  }, [
+    hebdoLists,
+    dailyReportsForLot,
+    allBatiments,
+    lot,
+    semaine,
+    totalEffectifDepart,
+    aggregatedSetup.effectifMisEnPlace,
+    totalMortaliteTransportAllBatiments,
+  ]);
 
   const weeklyTotals = useMemo(() => {
     const totalMortality = aggregatedRows.reduce((s, r) => s + r.mortaliteNbre, 0);
     const totalWater = aggregatedRows.reduce((s, r) => s + r.consoEauL, 0);
     return { totalMortality, totalWater };
   }, [aggregatedRows]);
+
+  /** Cumul mortalité en fin de semaine affichée (transport S1 + somme journalière) — pour ligne TOTAL et exports. */
+  const totalMortaliteCumulFinSemaine = useMemo(() => {
+    if (aggregatedRows.length > 0) {
+      return aggregatedRows[aggregatedRows.length - 1].mortaliteCumul;
+    }
+    return totalMortaliteTransportAllBatiments;
+  }, [aggregatedRows, totalMortaliteTransportAllBatiments]);
+
+  const totalMortaliteCumulFinSemainePct = useMemo(() => {
+    const em = aggregatedSetup.effectifMisEnPlace;
+    if (em <= 0) return Number.NaN;
+    return (totalMortaliteCumulFinSemaine / em) * 100;
+  }, [totalMortaliteCumulFinSemaine, aggregatedSetup.effectifMisEnPlace]);
 
   /** Last value of cumul mortalité % (last day of week) for VIABILITE = 100% − this */
   const lastMortaliteCumulPct = useMemo((): number | null => {
@@ -306,10 +382,11 @@ export default function WeeklyProductionSummaryContent({
     };
   }, [resumeConsoSummary, consumptionByKey, stockByKey, allBatiments]);
 
-  // INDICE EAU/ALIMENT = sum CONSOMME ALIMENT / total eau semaine (from the weekly tracking table on this page)
+  // INDICE EAU/ALIMENT = TOTAL semaine CONSO. EAU (L) / CONSOMME ALIMENT semaine (kg)
   const indiceEauAlimentResume =
-    weeklyTotals.totalWater > 0 && aggregatedConsommation.consoAlimentSemaineSum != null
-      ? aggregatedConsommation.consoAlimentSemaineSum / weeklyTotals.totalWater
+    aggregatedConsommation.consoAlimentSemaineSum != null &&
+    aggregatedConsommation.consoAlimentSemaineSum > 0
+      ? weeklyTotals.totalWater / aggregatedConsommation.consoAlimentSemaineSum
       : null;
 
   const aggregatedProduction = useMemo(() => {
@@ -473,6 +550,11 @@ export default function WeeklyProductionSummaryContent({
       batiments: allBatiments,
       setup: aggregatedSetup,
       totalEffectifDepart,
+      mortaliteTransportTousBatiments: totalMortaliteTransportAllBatiments,
+      mortaliteTransportPct:
+        aggregatedSetup.effectifMisEnPlace > 0
+          ? (totalMortaliteTransportAllBatiments / aggregatedSetup.effectifMisEnPlace) * 100
+          : null,
       weeklyRows: aggregatedRows,
       weeklyTotals,
       performance: exportPerformance,
@@ -487,6 +569,7 @@ export default function WeeklyProductionSummaryContent({
       allBatiments,
       aggregatedSetup,
       totalEffectifDepart,
+      totalMortaliteTransportAllBatiments,
       aggregatedRows,
       weeklyTotals,
       exportPerformance,
@@ -571,7 +654,7 @@ export default function WeeklyProductionSummaryContent({
           </h3>
         </div>
         <div className="overflow-x-auto rounded-b-lg border-border">
-          <table className="w-full min-w-[1100px] text-sm border-collapse bg-card table-fixed">
+          <table className="w-full min-w-[720px] text-sm border-collapse bg-card table-fixed">
             <colgroup>
               <col className="w-[100px]" />
               <col className="w-[70px]" />
@@ -580,11 +663,6 @@ export default function WeeklyProductionSummaryContent({
               <col className="w-[56px]" />
               <col className="w-[56px]" />
               <col className="w-[84px]" />
-              <col className="w-[64px]" />
-              <col className="w-[64px]" />
-              <col className="w-[100px]" />
-              <col className="w-[100px]" />
-              <col className="w-[120px]" />
             </colgroup>
             <thead>
               <tr className="bg-muted/80 border-b-2 border-border">
@@ -596,11 +674,6 @@ export default function WeeklyProductionSummaryContent({
                 <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">
                   CONSO. EAU (L)
                 </th>
-                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">T° MIN</th>
-                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">T° MAX</th>
-                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">VACCINATION</th>
-                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">TRAITEMENT</th>
-                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">OBSERVATION</th>
               </tr>
               <tr className="bg-muted/60 border-b border-border">
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
@@ -610,17 +683,24 @@ export default function WeeklyProductionSummaryContent({
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">CUMUL</th>
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">%</th>
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
               </tr>
             </thead>
             <tbody>
+              <tr className="border-b border-border bg-muted/40">
+                <td colSpan={4} className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle">
+                  MORTALITE DU TRANSPORT
+                </td>
+                <td className="border-r border-border px-1 py-2 text-center tabular-nums align-middle bg-amber-100/80 dark:bg-amber-950/40">
+                  {formatGroupedNumber(totalMortaliteTransportAllBatiments, 0)}
+                </td>
+                <td className="border-r border-border px-1 py-2 text-center tabular-nums text-muted-foreground align-middle">
+                  {formatPct(mortaliteTransportRowPct)}
+                </td>
+                <td className="border-r border-border px-1 py-2 align-middle" />
+              </tr>
               {aggregatedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
                     Aucune donnée hebdomadaire pour cette semaine.
                   </td>
                 </tr>
@@ -649,15 +729,6 @@ export default function WeeklyProductionSummaryContent({
                     <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
                       {formatGroupedNumber(row.consoEauL, 2)}
                     </td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
-                      {row.tempMin != null ? formatGroupedNumber(row.tempMin, 2) : "—"}
-                    </td>
-                    <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
-                      {row.tempMax != null ? formatGroupedNumber(row.tempMax, 2) : "—"}
-                    </td>
-                    <td className="border-r border-border px-1 py-1 text-left">{row.vaccination ?? "—"}</td>
-                    <td className="border-r border-border px-1 py-1 text-left">{row.traitement ?? "—"}</td>
-                    <td className="border-r border-border px-1 py-1 text-left">{row.observation ?? "—"}</td>
                   </tr>
                 ))
               )}
@@ -676,17 +747,14 @@ export default function WeeklyProductionSummaryContent({
                     : "—"}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums whitespace-nowrap">
-                  {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
+                  {formatGroupedNumber(totalMortaliteCumulFinSemaine, 0)}
                 </td>
                 <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
-                  {totalEffectifDepart > 0
-                    ? formatPct((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
-                    : "—"}
+                  {formatPct(totalMortaliteCumulFinSemainePct)}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground whitespace-nowrap">
                   {`${formatGroupedNumber(weeklyTotals.totalWater, 2)} L`}
                 </td>
-                <td colSpan={5} className="px-1.5 py-2 text-center border-r border-border"></td>
               </tr>
             </tfoot>
           </table>

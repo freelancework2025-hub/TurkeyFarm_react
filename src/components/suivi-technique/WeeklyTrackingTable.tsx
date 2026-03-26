@@ -246,6 +246,31 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     load();
   }, [load]);
 
+  /** Total NBRE mortalité semaine S1 (pour la ligne « MORTALITE DU TRANSPORT » en S2+). */
+  const [transportS1TotalNbre, setTransportS1TotalNbre] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (isFirstWeek) {
+      setTransportS1TotalNbre(0);
+      return;
+    }
+    let cancelled = false;
+    setTransportS1TotalNbre(null);
+    api.suiviTechniqueHebdo
+      .list({ farmId, lot, sex, batiment, semaine: "S1" })
+      .then((list) => {
+        if (cancelled) return;
+        const total = (list ?? []).reduce((s, r) => s + (Number(r.mortaliteNbre) || 0), 0);
+        setTransportS1TotalNbre(total);
+      })
+      .catch(() => {
+        if (!cancelled) setTransportS1TotalNbre(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [farmId, lot, sex, batiment, isFirstWeek]);
+
   const addRow = () => {
     const last = rows[rows.length - 1];
     // Calculate next date
@@ -458,9 +483,25 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   }, [effectifDepart, effectifInitial]);
 
   /**
-   * Computed mortality stats (aligned with backend SuiviTechniqueHebdoService):
+   * Cumul « mortalité transport » (S1 total NBRE) ajouté avant la somme journalière en S2+ ; 0 en S1.
+   * Tant que S2+ et chargement S1 en cours, offset = 0 pour éviter les cumuls erronés avant la valeur.
+   */
+  const mortaliteTransportOffsetPourCumul = useMemo(() => {
+    if (isFirstWeek) return 0;
+    if (transportS1TotalNbre === null) return 0;
+    return transportS1TotalNbre;
+  }, [isFirstWeek, transportS1TotalNbre]);
+
+  /** Cumul mortalité fin de semaine = offset transport (S2+) + somme NBRE de la semaine. */
+  const totalMortaliteCumulFinSemaine = useMemo(
+    () => mortaliteTransportOffsetPourCumul + weeklyTotals.totalMortality,
+    [mortaliteTransportOffsetPourCumul, weeklyTotals.totalMortality]
+  );
+
+  /**
+   * Computed mortality stats (aligned with backend SuiviTechniqueHebdoService, + offset transport en S2+):
    * - Mortalité % (Journée) = (Mortalité NBRE du jour / Effectif départ de la semaine) × 100
-   * - Mortalité CUMUL = CUMUL veille + NBRE du jour (by recordDate order)
+   * - Mortalité CUMUL = cumul MORTALITE DU TRANSPORT + somme NBRE des jours précédents (ordre date) + NBRE du jour
    * - Mortalité % CUMUL = (Mortalité CUMUL / Effectif départ de la semaine) × 100
    */
   const mortalityComputedByRowId = useMemo(() => {
@@ -471,7 +512,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     const withDate = rows.filter((r) => r.recordDate && r.recordDate.trim() !== "");
     const sorted = [...withDate].sort((a, b) => a.recordDate.localeCompare(b.recordDate));
     const map = new Map<string, { mortalitePct: string; mortaliteCumul: string; mortaliteCumulPct: string }>();
-    let runningCumul = 0;
+    let runningCumul = mortaliteTransportOffsetPourCumul;
 
     for (const row of sorted) {
       const nbre = parseInt(row.mortaliteNbre, 10) || 0;
@@ -485,7 +526,28 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       });
     }
     return map;
-  }, [rows, effectifPourCalculMortalite]);
+  }, [rows, effectifPourCalculMortalite, mortaliteTransportOffsetPourCumul]);
+
+  /** S1 : cumul 0 et % 0 ; S2+ : cumul = somme des NBRE mortalité de S1 ; % = cumul / effectif départ semaine courante. */
+  const mortaliteTransportDisplay = useMemo(() => {
+    if (isFirstWeek) {
+      return { cumul: 0, cumulPctDisplay: `${formatGroupedNumber(0, 2).replace(".", ",")} %` };
+    }
+    if (transportS1TotalNbre === null) return null;
+    const cumul = transportS1TotalNbre;
+    const ef = effectifPourCalculMortalite;
+    if (ef == null || ef <= 0) {
+      return {
+        cumul,
+        cumulPctDisplay: "—" as string,
+      };
+    }
+    const pct = (cumul / ef) * 100;
+    return {
+      cumul,
+      cumulPctDisplay: `${formatGroupedNumber(pct, 2).replace(".", ",")} %`,
+    };
+  }, [isFirstWeek, transportS1TotalNbre, effectifPourCalculMortalite]);
 
   if (loading) {
     return (
@@ -635,6 +697,27 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
               </tr>
             </thead>
             <tbody>
+              <tr className="border-b border-border bg-muted/40 hover:bg-muted/50 transition-colors">
+                <td colSpan={4} className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle">
+                  MORTALITE DU TRANSPORT
+                </td>
+                <td className="border-r border-border px-1 py-2 text-center tabular-nums align-middle bg-amber-100/80 dark:bg-amber-950/40">
+                  {mortaliteTransportDisplay == null
+                    ? "—"
+                    : formatGroupedNumber(mortaliteTransportDisplay.cumul, 0)}
+                </td>
+                <td className="border-r border-border px-1 py-2 text-center tabular-nums text-muted-foreground align-middle">
+                  {mortaliteTransportDisplay == null ? "—" : mortaliteTransportDisplay.cumulPctDisplay}
+                </td>
+                <td className="border-r border-border px-1 py-2 align-middle" />
+                <td className="border-r border-border px-1 py-2 align-middle" />
+                <td className="border-r border-border px-1 py-2 align-middle" />
+                <td className="border-r border-border px-1 py-2 align-middle" />
+                <td className="border-r border-border px-1 py-2 align-middle" />
+                <td className="border-r border-border px-1 py-2 align-middle" />
+                {showSaveCol ? <td className="border-l border-border px-1 py-2" /> : null}
+                {showDeleteCol ? <td className="border-l border-border px-1 py-2" /> : null}
+              </tr>
               {rows.map((row, index) => {
                 const saved = isSavedRow(row.id);
                 const isPlaceholder = row.isPlaceholder ?? !hasMeaningfulDailyData(row);
@@ -802,7 +885,17 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                     ? `${formatGroupedNumber((weeklyTotals.totalMortality / effectifPourCalculMortalite) * 100, 2)} %`
                     : "—"}
                 </td>
-                <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border"></td>
+                <td className="px-1.5 py-2 text-center border-r border-border tabular-nums whitespace-nowrap">
+                  {formatGroupedNumber(totalMortaliteCumulFinSemaine, 0)}
+                </td>
+                <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
+                  {effectifPourCalculMortalite != null && effectifPourCalculMortalite > 0
+                    ? `${formatGroupedNumber(
+                        (totalMortaliteCumulFinSemaine / effectifPourCalculMortalite) * 100,
+                        2
+                      )} %`
+                    : "—"}
+                </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground whitespace-nowrap">
                   {`${formatGroupedNumber(weeklyTotals.totalWater, 2)} L`}
                 </td>

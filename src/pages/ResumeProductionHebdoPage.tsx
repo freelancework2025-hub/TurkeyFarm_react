@@ -28,6 +28,10 @@ const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
  * URL: /suivi-technique-hebdomadaire/resume-production?farmId=8&lot=1&semaine=S1&batiments=B1,B2,B3,B4
  * batiments is optional; defaults to B1,B2,B3,B4.
  * effectifRestantFinSemaine and totalNbreProduction come from getResumeSummary (same source as Prix de revient).
+ * INDICE EAU/ALIMENT (résumé) = Σ CONSO. EAU (L) sur la semaine / CONSOMME ALIMENT semaine (kg).
+ * MORTALITE DU TRANSPORT (Tous bâtiments) : cumul = somme des mortalités S1 (NBRE) sur chaque bâtiment × sexe ; les CUMUL journaliers ajoutent ce total au cumul de la semaine affichée.
+ * « Suivi Hebdomadaire — Tous bâtiments » (dans WeeklyProductionSummaryContent) agrège par date la somme des colonnes
+ * sur tous les bâtiments et Mâle+Femelle, avec fusion reporting journalier + suivi hebdo comme par bâtiment.
  * Number display uses grouped thousands in WeeklyProductionSummaryContent and exports (formatGroupedNumber).
  * Permissions: child components (WeeklyProductionSummaryContent, etc.) apply the same role matrix; RESPONSABLE_FERME: saved rows read-only.
  */

@@ -12,7 +12,7 @@ export interface ResumePerformanceTrackingTableProps {
   consoAlimentSemaineSum: number | null;
   /** Sum of CUMUL ALIMENT CONSOMME over all batiments and both sexes (kg) */
   cumulAlimentConsommeSum: number | null;
-  /** INDICE EAU/ALIMENT = consoAlimentSemaineSum / totalWaterSemaineL (when totalWater > 0) */
+  /** INDICE EAU/ALIMENT = totalWaterSemaineL / consoAlimentSemaineSum (L per kg when conso > 0) */
   indiceEauAliment: number | null;
   /** POIDS VIF PRODUIT EN KG (sum over all batiments and sexes) */
   poidsVifProduitKg: number | null;

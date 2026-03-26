@@ -44,12 +44,34 @@ function safeFileName(parts: string[]): string {
   return parts.join("_").replace(/[^\w\-_]/g, "_");
 }
 
+function isSemaineS1(semaine: string): boolean {
+  return /^S1$/i.test(semaine.trim());
+}
+
+/** Cumul « mortalité transport » : 0 en S1 ; à partir de S2 = somme des NBRE mortalité de la semaine S1. */
+function mortaliteTransportCumul(semaine: string, s1List: Awaited<ReturnType<typeof api.suiviTechniqueHebdo.list>> | null | undefined): number {
+  if (isSemaineS1(semaine)) return 0;
+  return (s1List ?? []).reduce((s, r) => s + (Number(r.mortaliteNbre) || 0), 0);
+}
+
+function mortaliteTransportPctStr(
+  semaine: string,
+  cumul: number,
+  effectifDepart: number | null | undefined
+): string {
+  if (isSemaineS1(semaine)) return formatPctExport(0);
+  const ef = effectifDepart != null ? Number(effectifDepart) : NaN;
+  if (!Number.isFinite(ef) || ef <= 0) return "—";
+  return formatPctExport((cumul / ef) * 100);
+}
+
 export async function exportToExcel(params: SuiviTechniqueBatimentExportParams): Promise<void> {
   const { farmName, farmId, lot, semaine, batiment, sex } = params;
 
-  const [setup, hebdoList, production, consumption, performance, stock] = await Promise.all([
+  const [setup, hebdoList, hebdoS1List, production, consumption, performance, stock] = await Promise.all([
     api.suiviTechniqueSetup.getBySex({ farmId, lot, semaine, sex, batiment }),
     api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine }),
+    api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine: "S1" }).catch(() => []),
     api.suiviProductionHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviConsommationHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviPerformancesHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
@@ -167,6 +189,27 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
     "OBSERVATION",
   ];
   addTableHeader(hebdoHeaders);
+  const transportCumulExport = mortaliteTransportCumul(semaine, hebdoS1List);
+  const transportPctExport = mortaliteTransportPctStr(semaine, transportCumulExport, effectifDepart);
+  const TRANSPORT_CUMUL_BG = "FFFEF9C4";
+  ws.mergeCells(row, 1, row, 4);
+  ws.getCell(row, 1).value = "MORTALITE DU TRANSPORT";
+  ws.getCell(row, 1).font = { bold: true };
+  ws.getCell(row, 1).alignment = { horizontal: "center", vertical: "middle" };
+  for (let c = 1; c <= 12; c++) {
+    ws.getCell(row, c).border = BORDERS_ALL;
+  }
+  ws.getCell(row, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
+  ws.getCell(row, 5).value = formatGroupedNumber(transportCumulExport, 0);
+  ws.getCell(row, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TRANSPORT_CUMUL_BG } };
+  ws.getCell(row, 5).alignment = { horizontal: "center", vertical: "middle" };
+  ws.getCell(row, 6).value = transportPctExport;
+  ws.getCell(row, 6).alignment = { horizontal: "center", vertical: "middle" };
+  for (let c = 7; c <= 12; c++) {
+    ws.getCell(row, c).value = "";
+  }
+  row++;
+
   const sortedHebdo = (hebdoList ?? []).filter((r) => r.recordDate).sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
   for (let i = 0; i < sortedHebdo.length; i++) {
     const r = sortedHebdo[i]!;
@@ -295,9 +338,10 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
 export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): Promise<void> {
   const { farmName, farmId, lot, semaine, batiment, sex } = params;
 
-  const [setup, hebdoList, production, consumption, performance, stock] = await Promise.all([
+  const [setup, hebdoList, hebdoS1List, production, consumption, performance, stock] = await Promise.all([
     api.suiviTechniqueSetup.getBySex({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine }).catch(() => []),
+    api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine: "S1" }).catch(() => []),
     api.suiviProductionHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviConsommationHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviPerformancesHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
@@ -370,22 +414,39 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   doc.setFont("helvetica", "bold");
   doc.text(`3. Suivi hebdomadaire — ${sex} — ${semaine}`, margin, y);
   y += 6;
-  if (sortedHebdo.length > 0) {
-    const hebdoHeaders = [
-      "DATE",
-      "ÂGE EN J",
-      "MORT. NBRE",
-      "MORT. %",
-      "MORT. CUMUL",
-      "MORT. % CUMUL",
-      "CONSO. EAU (L)",
-      "T° MIN",
-      "T° MAX",
-      "VACCINATION",
-      "TRAITEMENT",
-      "OBSERVATION",
-    ];
-    const hebdoBody = sortedHebdo.map((r) => {
+  const hebdoHeaders = [
+    "DATE",
+    "ÂGE EN J",
+    "MORT. NBRE",
+    "MORT. %",
+    "MORT. CUMUL",
+    "MORT. % CUMUL",
+    "CONSO. EAU (L)",
+    "T° MIN",
+    "T° MAX",
+    "VACCINATION",
+    "TRAITEMENT",
+    "OBSERVATION",
+  ];
+  const transportCumulPdf = mortaliteTransportCumul(semaine, hebdoS1List);
+  const transportPctPdf = mortaliteTransportPctStr(semaine, transportCumulPdf, effectifDepart);
+  const transportRowPdf: string[] = [
+    "MORTALITE DU TRANSPORT",
+    "",
+    "",
+    "",
+    formatGroupedNumber(transportCumulPdf, 0),
+    transportPctPdf,
+    "—",
+    "—",
+    "—",
+    "—",
+    "—",
+    "—",
+  ];
+  const hebdoBody: string[][] = [
+    transportRowPdf,
+    ...sortedHebdo.map((r) => {
       const mortalitePct = r.mortalitePct != null ? formatPctExport(r.mortalitePct) : "—";
       const mortaliteCumulPct = r.mortaliteCumulPct != null ? formatPctExport(r.mortaliteCumulPct) : "—";
       return [
@@ -402,7 +463,11 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
         safeStr(r.traitement),
         safeStr(r.observation),
       ];
-    });
+    }),
+  ];
+  if (sortedHebdo.length === 0) {
+    hebdoBody.push(["Aucune donnée", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]);
+  } else {
     const totalMort = sortedHebdo.reduce((s, r) => s + (r.mortaliteNbre ?? 0), 0);
     const totalEau = sortedHebdo.reduce((s, r) => s + (r.consoEauL ?? 0), 0);
     hebdoBody.push([
@@ -419,36 +484,28 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
       "—",
       "—",
     ]);
-    autoTable(doc, {
-      head: [hebdoHeaders],
-      body: hebdoBody.map((row) => row.map(String)),
-      startY: y,
-      margin: { left: margin, right: margin },
-      theme: "grid",
-      styles: { fontSize: 7 },
-      headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
-      alternateRowStyles: { fillColor: [232, 230, 225] },
-      didParseCell: (data) => {
-        if (data.section === "body" && data.row.index === hebdoBody.length - 1) {
-          (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fontStyle = "bold";
-          (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fillColor = [216, 214, 208];
-        }
-      },
-    });
-    y = lastY() + 8;
-  } else {
-    const hebdoHeaders = ["DATE", "ÂGE EN J", "MORT. NBRE", "MORT. %", "MORT. CUMUL", "MORT. % CUMUL", "CONSO. EAU (L)", "T° MIN", "T° MAX", "VACCINATION", "TRAITEMENT", "OBSERVATION"];
-    autoTable(doc, {
-      head: [hebdoHeaders],
-      body: [["Aucune donnée", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]],
-      startY: y,
-      margin: { left: margin, right: margin },
-      theme: "grid",
-      styles: { fontSize: 7 },
-      headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
-    });
-    y = lastY() + 8;
   }
+  autoTable(doc, {
+    head: [hebdoHeaders],
+    body: hebdoBody.map((row) => row.map(String)),
+    startY: y,
+    margin: { left: margin, right: margin },
+    theme: "grid",
+    styles: { fontSize: 7 },
+    headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [232, 230, 225] },
+    didParseCell: (data) => {
+      if (
+        data.section === "body" &&
+        sortedHebdo.length > 0 &&
+        data.row.index === hebdoBody.length - 1
+      ) {
+        (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fontStyle = "bold";
+        (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fillColor = [216, 214, 208];
+      }
+    },
+  });
+  y = lastY() + 8;
 
   doc.setFont("helvetica", "bold");
   doc.text("4. Suivi de la livraison — Production", margin, y);

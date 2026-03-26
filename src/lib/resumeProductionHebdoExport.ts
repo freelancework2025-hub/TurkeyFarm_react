@@ -15,6 +15,10 @@ export interface ResumeProductionHebdoExportParams {
   /** Données mises en place */
   setup: { dateMiseEnPlace: string; souche: string; effectifMisEnPlace: number };
   totalEffectifDepart: number;
+  /** Somme des mortalités S1 (NBRE) sur tous les bâtiments × sexes — ligne MORTALITE DU TRANSPORT */
+  mortaliteTransportTousBatiments: number;
+  /** % transport = mortaliteTransportTousBatiments / effectif mis en place total ; null si dénominateur nul */
+  mortaliteTransportPct: number | null;
   /** Suivi hebdomadaire rows */
   weeklyRows: {
     recordDate: string;
@@ -24,11 +28,6 @@ export interface ResumeProductionHebdoExportParams {
     mortaliteCumul: number;
     mortaliteCumulPct: number;
     consoEauL: number;
-    tempMin: number | null;
-    tempMax: number | null;
-    vaccination: string | null;
-    traitement: string | null;
-    observation: string | null;
   }[];
   weeklyTotals: { totalMortality: number; totalWater: number };
   /** Suivi performances */
@@ -72,7 +71,22 @@ function safeFileName(parts: string[]): string {
 }
 
 export async function exportToExcel(params: ResumeProductionHebdoExportParams): Promise<void> {
-  const { farmName, lot, semaine, batiments, setup, totalEffectifDepart, weeklyRows, weeklyTotals, performance, production, stock, controleStock } = params;
+  const {
+    farmName,
+    lot,
+    semaine,
+    batiments,
+    setup,
+    totalEffectifDepart,
+    mortaliteTransportTousBatiments,
+    mortaliteTransportPct,
+    weeklyRows,
+    weeklyTotals,
+    performance,
+    production,
+    stock,
+    controleStock,
+  } = params;
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "ElevagePro";
@@ -110,11 +124,6 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     { width: 12 },  // CUMUL
     { width: 12 },  // CUMUL %
     { width: 14 },  // CONSO. EAU (L)
-    { width: 10 },  // T° MIN
-    { width: 10 },  // T° MAX
-    { width: 28 },  // VACCINATION — grand
-    { width: 32 },  // TRAITEMENT — sequentially grand
-    { width: 36 },  // OBSERVATION — sequentially grand
   ];
 
   addTitle(ws, "RÉSUMÉ HEBDOMADAIRE DE LA PRODUCTION");
@@ -144,11 +153,6 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     "CUMUL",
     "CUMUL %",
     "CONSO. EAU (L)",
-    "T° MIN",
-    "T° MAX",
-    "VACCINATION",
-    "TRAITEMENT",
-    "OBSERVATION",
   ];
   const weeklyColCount = weeklyHeaders.length;
   for (let c = 0; c < weeklyColCount; c++) {
@@ -159,9 +163,24 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     cell.border = BORDERS_ALL;
   }
   currentRow++;
-  const startWeekly = currentRow;
+  const TRANSPORT_CUMUL_BG = "FFFEF9C4";
+  ws.mergeCells(currentRow, 1, currentRow, 4);
+  ws.getCell(currentRow, 1).value = "MORTALITE DU TRANSPORT";
+  ws.getCell(currentRow, 1).font = { bold: true };
+  ws.getCell(currentRow, 1).alignment = { horizontal: "center", vertical: "middle" };
+  for (let c = 1; c <= weeklyColCount; c++) {
+    ws.getCell(currentRow, c).border = BORDERS_ALL;
+  }
+  ws.getCell(currentRow, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
+  ws.getCell(currentRow, 5).value = formatGroupedNumber(mortaliteTransportTousBatiments, 0);
+  ws.getCell(currentRow, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TRANSPORT_CUMUL_BG } };
+  ws.getCell(currentRow, 5).alignment = { horizontal: "center", vertical: "middle" };
+  ws.getCell(currentRow, 6).value =
+    mortaliteTransportPct != null ? formatPctExport(mortaliteTransportPct) : "—";
+  ws.getCell(currentRow, 6).alignment = { horizontal: "center", vertical: "middle" };
+  ws.getCell(currentRow, 7).value = "";
+  currentRow++;
   let weeklyIdx = 0;
-  const safeStr = (s: string | null | undefined) => (s?.trim() ? s.trim() : "—");
   for (const r of weeklyRows) {
     ws.getCell(currentRow, 1).value = r.recordDate;
     ws.getCell(currentRow, 2).value = r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—";
@@ -170,11 +189,6 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     ws.getCell(currentRow, 5).value = formatGroupedNumber(r.mortaliteCumul, 0);
     ws.getCell(currentRow, 6).value = formatPctExport(r.mortaliteCumulPct);
     ws.getCell(currentRow, 7).value = formatGroupedNumber(r.consoEauL, 2);
-    ws.getCell(currentRow, 8).value = r.tempMin != null ? formatGroupedNumber(r.tempMin, 2) : "—";
-    ws.getCell(currentRow, 9).value = r.tempMax != null ? formatGroupedNumber(r.tempMax, 2) : "—";
-    ws.getCell(currentRow, 10).value = safeStr(r.vaccination);
-    ws.getCell(currentRow, 11).value = safeStr(r.traitement);
-    ws.getCell(currentRow, 12).value = safeStr(r.observation);
     for (let c = 1; c <= weeklyColCount; c++) {
       ws.getCell(currentRow, c).border = BORDERS_ALL;
       if (weeklyIdx % 2 === 1) ws.getCell(currentRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
@@ -182,22 +196,24 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     currentRow++;
     weeklyIdx++;
   }
-  const totalPct =
+  const totalPctMortaliteVsDepart =
     totalEffectifDepart > 0
       ? formatPctExport((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
       : "—";
+  const finalMortaliteCumul =
+    weeklyRows.length > 0
+      ? weeklyRows[weeklyRows.length - 1].mortaliteCumul
+      : mortaliteTransportTousBatiments;
+  const finalMortaliteCumulPct =
+    setup.effectifMisEnPlace > 0 ? (finalMortaliteCumul / setup.effectifMisEnPlace) * 100 : null;
   ws.getCell(currentRow, 1).value = `TOTAL ${semaine}`;
   ws.getCell(currentRow, 2).value = "—";
   ws.getCell(currentRow, 3).value = formatGroupedNumber(weeklyTotals.totalMortality, 0);
-  ws.getCell(currentRow, 4).value = totalPct;
-  ws.getCell(currentRow, 5).value = formatGroupedNumber(weeklyTotals.totalMortality, 0);
-  ws.getCell(currentRow, 6).value = totalPct;
+  ws.getCell(currentRow, 4).value = totalPctMortaliteVsDepart;
+  ws.getCell(currentRow, 5).value = formatGroupedNumber(finalMortaliteCumul, 0);
+  ws.getCell(currentRow, 6).value =
+    finalMortaliteCumulPct != null ? formatPctExport(finalMortaliteCumulPct) : "—";
   ws.getCell(currentRow, 7).value = formatGroupedNumber(weeklyTotals.totalWater, 2);
-  ws.getCell(currentRow, 8).value = "—";
-  ws.getCell(currentRow, 9).value = "—";
-  ws.getCell(currentRow, 10).value = "—";
-  ws.getCell(currentRow, 11).value = "—";
-  ws.getCell(currentRow, 12).value = "—";
   for (let c = 1; c <= weeklyColCount; c++) {
     ws.getCell(currentRow, c).font = { bold: true };
     ws.getCell(currentRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
@@ -279,7 +295,22 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
 }
 
 export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
-  const { farmName, lot, semaine, batiments, setup, totalEffectifDepart, weeklyRows, weeklyTotals, performance, production, stock, controleStock } = params;
+  const {
+    farmName,
+    lot,
+    semaine,
+    batiments,
+    setup,
+    totalEffectifDepart,
+    mortaliteTransportTousBatiments,
+    mortaliteTransportPct,
+    weeklyRows,
+    weeklyTotals,
+    performance,
+    production,
+    stock,
+    controleStock,
+  } = params;
 
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const margin = 12;
@@ -341,7 +372,6 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   doc.setFont("helvetica", "bold");
   doc.text(`3. Suivi hebdomadaire — Tous bâtiments — ${semaine}`, margin, y);
   y += 6;
-  const pdfSafeStr = (s: string | null | undefined) => (s?.trim() ? s.trim() : "—");
   const weeklyHeaders = [
     "DATE",
     "ÂGE (J)",
@@ -350,43 +380,48 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
     "CUMUL",
     "CUMUL %",
     "CONSO. EAU (L)",
-    "T° MIN",
-    "T° MAX",
-    "VACCINATION",
-    "TRAITEMENT",
-    "OBSERVATION",
   ];
-  const weeklyBody = weeklyRows.map((r) => [
-    r.recordDate,
-    r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—",
-    formatGroupedNumber(r.mortaliteNbre, 0),
-    formatPctExport(r.mortalitePct),
-    formatGroupedNumber(r.mortaliteCumul, 0),
-    formatPctExport(r.mortaliteCumulPct),
-    formatGroupedNumber(r.consoEauL, 2),
-    r.tempMin != null ? formatGroupedNumber(r.tempMin, 2) : "—",
-    r.tempMax != null ? formatGroupedNumber(r.tempMax, 2) : "—",
-    pdfSafeStr(r.vaccination),
-    pdfSafeStr(r.traitement),
-    pdfSafeStr(r.observation),
-  ]);
-  const totalPct =
+  const transportRowPdf: (string | number)[] = [
+    "MORTALITE DU TRANSPORT",
+    "",
+    "",
+    "",
+    formatGroupedNumber(mortaliteTransportTousBatiments, 0),
+    mortaliteTransportPct != null ? formatPctExport(mortaliteTransportPct) : "—",
+    "—",
+  ];
+  const weeklyBody = [
+    transportRowPdf.map(String),
+    ...weeklyRows.map((r) => [
+      r.recordDate,
+      r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—",
+      formatGroupedNumber(r.mortaliteNbre, 0),
+      formatPctExport(r.mortalitePct),
+      formatGroupedNumber(r.mortaliteCumul, 0),
+      formatPctExport(r.mortaliteCumulPct),
+      formatGroupedNumber(r.consoEauL, 2),
+    ]),
+  ];
+  const totalPctMortaliteVsDepart =
     totalEffectifDepart > 0
       ? formatPctExport((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
+      : "—";
+  const finalMortaliteCumulPdf =
+    weeklyRows.length > 0
+      ? weeklyRows[weeklyRows.length - 1].mortaliteCumul
+      : mortaliteTransportTousBatiments;
+  const finalMortaliteCumulPctPdf =
+    setup.effectifMisEnPlace > 0
+      ? formatPctExport((finalMortaliteCumulPdf / setup.effectifMisEnPlace) * 100)
       : "—";
   weeklyBody.push([
     `TOTAL ${semaine}`,
     "—",
     formatGroupedNumber(weeklyTotals.totalMortality, 0),
-    totalPct,
-    formatGroupedNumber(weeklyTotals.totalMortality, 0),
-    totalPct,
+    totalPctMortaliteVsDepart,
+    formatGroupedNumber(finalMortaliteCumulPdf, 0),
+    finalMortaliteCumulPctPdf,
     formatGroupedNumber(weeklyTotals.totalWater, 2),
-    "—",
-    "—",
-    "—",
-    "—",
-    "—",
   ]);
 
   autoTable(doc, {

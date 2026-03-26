@@ -586,6 +586,18 @@ export default function Electricite() {
       ? (farms.find((f) => f.id === selectedFarmId)?.name ?? selectedFarmName ?? "Ferme")
       : (selectedFarmName ?? "Ferme");
 
+  const exportRows = currentRows.map((r) => ({
+    id: r.id,
+    date: r.date,
+    sem: getSemFromRow(r) || selectedSemaine || "",
+    designation: r.designation,
+    supplier: r.supplier,
+    qte: r.qte,
+    prixPerUnit: r.prixPerUnit,
+    montant: r.montant,
+    numeroBR: r.numeroBR,
+  }));
+
   const handleExportExcel = async () => {
     if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
     try {
@@ -593,7 +605,7 @@ export default function Electricite() {
         farmName: exportFarmName,
         lot: lotFilter.trim(),
         semaine: selectedSemaine,
-        rows: currentRows,
+        rows: exportRows,
         weekTotal,
         cumul: cumulForSelectedSemaine,
         ageByRowId: displayAgeByRowId,
@@ -610,7 +622,7 @@ export default function Electricite() {
       farmName: exportFarmName,
       lot: lotFilter.trim(),
       semaine: selectedSemaine,
-      rows: currentRows,
+      rows: exportRows,
       weekTotal,
       cumul: cumulForSelectedSemaine,
       ageByRowId: displayAgeByRowId,

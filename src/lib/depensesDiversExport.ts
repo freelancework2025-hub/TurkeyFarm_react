@@ -7,6 +7,7 @@
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface DepenseDiversRowExport {
   id: string;
@@ -16,7 +17,6 @@ export interface DepenseDiversRowExport {
   supplier: string;
   deliveryNoteNumber: string;
   numeroBR: string;
-  ug: string;
   qte: string;
   prixPerUnit: string;
   montant: string;
@@ -53,10 +53,10 @@ export interface DepensesDiversExportParams {
   videSanitaireTotalMontant: number;
 }
 
-// Table 1: Vide sanitaire — 9 columns (page attributes)
-const VS_COLS = ["DATE", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "N° BR", "UG", "QUANTITÉ", "PRIX", "MONTANT"];
+// Table 1: Vide sanitaire — align with DepensesDivers.tsx (Vide sanitaire)
+const VS_COLS = ["DATE", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "N° BR", "UG", "QTE", "PRIX", "MONTANT"];
 
-// Table 2: Dépenses divers — 10 columns (page attributes)
+// Table 2: Dépenses divers — AGE, DATE, SEM, … (no UG column on the page)
 const MAIN_COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "N° BR", "QTE", "PRIX", "MONTANT"];
 
 const HEADER_PRIMARY = "FF3D2E1A";
@@ -70,12 +70,20 @@ function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
-function parseExportNum(raw: string | number | undefined | null): number {
-  if (raw == null) return NaN;
-  if (typeof raw === "number") return Number.isFinite(raw) ? raw : NaN;
-  const s = String(raw).replace(/[\s\u00A0\u202F]/g, "").replace(",", ".");
-  const n = parseFloat(s);
-  return Number.isNaN(n) ? NaN : n;
+/** Same rule as formatMontantCell on DepensesDivers.tsx */
+function resolvedMontant(row: { montant: string; qte: string; prixPerUnit: string }): number | null {
+  const m = toOptionalNumber(row.montant);
+  if (m != null) return m;
+  const q = toOptionalNumber(row.qte);
+  const p = toOptionalNumber(row.prixPerUnit);
+  if (q != null && p != null && q >= 0 && p >= 0) return q * p;
+  return null;
+}
+
+function cellToPdfString(v: string | number): string {
+  if (v === "—") return "—";
+  if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+  return String(v);
 }
 
 function safeFileName(parts: string[]): string {
@@ -83,14 +91,9 @@ function safeFileName(parts: string[]): string {
 }
 
 function vsRowToArray(r: VideSanitaireDepenseDiversRow): (string | number)[] {
-  const qte = parseExportNum(r.qte);
-  const prix = parseExportNum(r.prixPerUnit);
-  const montant =
-    (r.montant ?? "").trim() !== ""
-      ? parseExportNum(r.montant)
-      : !Number.isNaN(qte) && !Number.isNaN(prix)
-        ? qte * prix
-        : 0;
+  const qte = toOptionalNumber(r.qte);
+  const prix = toOptionalNumber(r.prixPerUnit);
+  const montant = resolvedMontant(r);
   return [
     safeStr(r.date) || "—",
     safeStr(r.designation) || "—",
@@ -98,21 +101,16 @@ function vsRowToArray(r: VideSanitaireDepenseDiversRow): (string | number)[] {
     safeStr(r.deliveryNoteNumber) || "—",
     safeStr(r.numeroBR) || "—",
     safeStr(r.ug) || "—",
-    Number.isNaN(qte) ? "—" : qte,
-    Number.isNaN(prix) ? "—" : prix,
-    Number.isNaN(montant) ? "—" : montant,
+    qte == null ? "—" : qte,
+    prix == null ? "—" : prix,
+    montant == null ? "—" : montant,
   ];
 }
 
 function mainRowToArray(row: DepenseDiversRowExport, age: string | number): (string | number)[] {
-  const qte = parseExportNum(row.qte);
-  const prix = parseExportNum(row.prixPerUnit);
-  const montant =
-    (row.montant ?? "").trim() !== ""
-      ? parseExportNum(row.montant)
-      : !Number.isNaN(qte) && !Number.isNaN(prix)
-        ? qte * prix
-        : 0;
+  const qte = toOptionalNumber(row.qte);
+  const prix = toOptionalNumber(row.prixPerUnit);
+  const montant = resolvedMontant(row);
   return [
     age ?? "—",
     safeStr(row.date) || "—",
@@ -121,9 +119,9 @@ function mainRowToArray(row: DepenseDiversRowExport, age: string | number): (str
     safeStr(row.supplier) || "—",
     safeStr(row.deliveryNoteNumber) || "—",
     safeStr(row.numeroBR) || "—",
-    Number.isNaN(qte) ? "—" : qte,
-    Number.isNaN(prix) ? "—" : prix,
-    Number.isNaN(montant) ? "—" : montant,
+    qte == null ? "—" : qte,
+    prix == null ? "—" : prix,
+    montant == null ? "—" : montant,
   ];
 }
 
@@ -390,7 +388,7 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
   doc.text("Vide sanitaire", margin, startY);
   startY += 6;
 
-  const vsTableData: string[][] = videSanitaireRows.map((r) => vsRowToArray(r).map(String));
+  const vsTableData: string[][] = videSanitaireRows.map((r) => vsRowToArray(r).map(cellToPdfString));
   if (videSanitaireRows.length > 0) {
     vsTableData.push([
       "TOTAL",
@@ -399,9 +397,9 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
       "",
       "",
       "",
-      String(videSanitaireTotalQte),
-      String(videSanitaireTotalPrix),
-      String(videSanitaireTotalMontant),
+      formatGroupedNumber(videSanitaireTotalQte, 2),
+      formatGroupedNumber(videSanitaireTotalPrix, 2),
+      formatGroupedNumber(videSanitaireTotalMontant, 2),
     ]);
     vsTableData.push([
       "CUMUL",
@@ -410,9 +408,9 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
       "",
       "",
       "",
-      String(videSanitaireTotalQte),
-      String(videSanitaireTotalPrix),
-      String(videSanitaireTotalMontant),
+      formatGroupedNumber(videSanitaireTotalQte, 2),
+      formatGroupedNumber(videSanitaireTotalPrix, 2),
+      formatGroupedNumber(videSanitaireTotalMontant, 2),
     ]);
   }
 
@@ -452,7 +450,13 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
   doc.text("Dépenses divers", margin, startY);
   startY += 6;
 
-  const mainTableData: string[][] = rows.map((r) => mainRowToArray(r, ageByRowId.get(r.id) ?? "—").map(String));
+  const mainTableData: string[][] = rows.map((r) => {
+    const arr = mainRowToArray(r, ageByRowId.get(r.id) ?? "—");
+    return arr.map((v, colIdx) => {
+      if (colIdx === 0) return v === "—" ? "—" : String(v);
+      return cellToPdfString(v);
+    });
+  });
   mainTableData.push([
     `TOTAL ${semaine}`,
     "",
@@ -461,9 +465,9 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
     "",
     "",
     "",
-    String(weekTotalQte),
-    String(weekTotalPrix),
-    String(weekTotalMontant),
+    formatGroupedNumber(weekTotalQte, 2),
+    formatGroupedNumber(weekTotalPrix, 2),
+    formatGroupedNumber(weekTotalMontant, 2),
   ]);
   mainTableData.push([
     "CUMUL (Vide sanitaire + semaines)",
@@ -473,9 +477,9 @@ export function exportToPdf(params: DepensesDiversExportParams): void {
     "",
     "",
     "",
-    String(cumulQte),
-    String(cumulPrix),
-    String(cumulMontant),
+    formatGroupedNumber(cumulQte, 2),
+    formatGroupedNumber(cumulPrix, 2),
+    formatGroupedNumber(cumulMontant, 2),
   ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
