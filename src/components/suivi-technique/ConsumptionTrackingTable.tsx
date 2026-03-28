@@ -14,7 +14,11 @@ interface ConsumptionRow {
 }
 
 // Backend computes consommation_aliment_kg and cumul from DB (stock_aliment_hebdo + aliment_movement). React only reads from API; no client-side calculation.
-// Rule (backend): B1 = Stock_prev + Livraisons − Stock_actuel; B2+ = Stock_transfer − Stock_actuel. CUMUL = week-only sum.
+// Rule (backend): B1 = Stock_prev + Livraisons − Stock_actuel; B2+ = Stock_transfer − Stock_actuel.
+// CUMUL (Sn) = totaux chaîne S1…S(n−1) (par sexe) + somme sur la chaîne jusqu’au bâtiment courant pour Sn.
+// INDICE EAU/ALIMENT (par bâtiment, même sexe que la vue) =
+//   TOTAL S de CONSO. EAU (L) pour ce bâtiment / CONSOMMATION ALIMENT — S (kg) pour ce bâtiment
+//   = totalEauSemaineL / consommationAlimentSemaine. Affiché via indiceEauAliment (API) avec repli calcul local.
 const ROWS: ConsumptionRow[] = [
   { key: "consommation_aliment", label: "CONSOMMATION ALIMENT", editable: false, unit: "kg" },
   { key: "cumul_aliment", label: "CUMUL ALIMENT CONSOMMÉ", editable: false, unit: "kg" },
@@ -73,7 +77,25 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
     consoSemaine != null
       ? (data?.cumulAlimentConsomme != null ? Number(data.cumulAlimentConsomme) : 0)
       : 0; // 0 until current week's consumption is calculated
-  const indice = data?.indiceEauAliment != null ? Number(data.indiceEauAliment) : null;
+  const totalEauL =
+    data?.totalEauSemaineL != null && Number.isFinite(Number(data.totalEauSemaineL))
+      ? Number(data.totalEauSemaineL)
+      : null;
+  const consoKgForIndice =
+    consoSemaine != null && Number.isFinite(Number(consoSemaine)) ? Number(consoSemaine) : null;
+  const indiceFromApi =
+    data?.indiceEauAliment != null && Number.isFinite(Number(data.indiceEauAliment))
+      ? Number(data.indiceEauAliment)
+      : null;
+  const indiceComputed =
+    totalEauL != null &&
+    consoKgForIndice != null &&
+    consoKgForIndice > 0 &&
+    Number.isFinite(totalEauL)
+      ? totalEauL / consoKgForIndice
+      : null;
+  /** Préférence backend (même formule), repli si indice absent */
+  const indice = indiceFromApi ?? indiceComputed;
   const consoKgJ = data?.consoAlimentKgParJour != null ? Number(data.consoAlimentKgParJour) : null;
 
   const readOnlyCell = "px-4 py-2 text-sm text-center tabular-nums bg-muted/40";
@@ -92,7 +114,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
           Suivi de consommation
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock_prev + Livraisons − Stock. B2+ : Stock_transfer − Stock (stock du dernier bâtiment actif du même sexe dans la semaine). CUMUL = 0 jusqu&apos;à calcul.
+          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock_prev + Livraisons − Stock. B2+ : Stock_transfer − Stock. CUMUL inclut les semaines précédentes (totaux chaîne par sexe) + la semaine courante jusqu&apos;à ce bâtiment. CUMUL affiché 0 tant que la conso de la semaine n&apos;est pas calculée.
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -109,7 +131,14 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
               } else if (row.key === "cumul_aliment") {
                 displayValue = <div className={readOnlyCell}>{formatValue(cumul, "kg")}</div>;
               } else if (row.key === "indice_eau_aliment") {
-                displayValue = <div className={readOnlyCell}>{formatValue(indice)}</div>;
+                displayValue = (
+                  <div
+                    className={readOnlyCell}
+                    title="TOTAL S de CONSO. EAU (L) du bâtiment ÷ CONSOMMATION ALIMENT — S du bâtiment (L/kg)"
+                  >
+                    {formatValue(indice)}
+                  </div>
+                );
               } else {
                 displayValue = <div className={readOnlyCell}>{formatValue(consoKgJ, "Kg/J")}</div>;
               }

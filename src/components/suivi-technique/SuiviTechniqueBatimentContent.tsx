@@ -22,6 +22,8 @@ export interface SuiviTechniqueBatimentContentProps {
   /** Setup info from InfosSetup page for pre-populating forms */
   maleSetupInfo?: SetupInfoResponse | null;
   femelleSetupInfo?: SetupInfoResponse | null;
+  /** Force Suivi Hebdomadaire table to be read-only for everyone. */
+  forceWeeklyReadOnly?: boolean;
 }
 
 /**
@@ -41,6 +43,7 @@ export default function SuiviTechniqueBatimentContent({
   showSectionHeader = false,
   maleSetupInfo: propMaleSetupInfo,
   femelleSetupInfo: propFemelleSetupInfo,
+  forceWeeklyReadOnly = false,
 }: SuiviTechniqueBatimentContentProps) {
   const [maleSetup, setMaleSetup] = useState<SuiviTechniqueSetupResponse | null>(null);
   const [femelleSetup, setFemelleSetup] = useState<SuiviTechniqueSetupResponse | null>(null);
@@ -67,8 +70,10 @@ export default function SuiviTechniqueBatimentContent({
     setFemelleSetup(setup);
   };
 
-  const getMaleEffectif = () => maleSetup?.effectifMisEnPlace ?? undefined;
-  const getFemelleEffectif = () => femelleSetup?.effectifMisEnPlace ?? undefined;
+  const getMaleEffectif = () =>
+    maleSetup?.effectifMisEnPlace ?? propMaleSetupInfo?.effectifMisEnPlace ?? undefined;
+  const getFemelleEffectif = () =>
+    femelleSetup?.effectifMisEnPlace ?? propFemelleSetupInfo?.effectifMisEnPlace ?? undefined;
 
   const content = (
     <>
@@ -94,6 +99,7 @@ export default function SuiviTechniqueBatimentContent({
             batiment={batiment}
             effectifInitial={getMaleEffectif()}
             onSaveSuccess={onRefreshStock}
+            forceReadOnly={forceWeeklyReadOnly}
           />
           <ProductionTrackingTable
             farmId={farmId}
@@ -155,6 +161,7 @@ export default function SuiviTechniqueBatimentContent({
             batiment={batiment}
             effectifInitial={getFemelleEffectif()}
             onSaveSuccess={onRefreshStock}
+            forceReadOnly={forceWeeklyReadOnly}
           />
           <ProductionTrackingTable
             farmId={farmId}

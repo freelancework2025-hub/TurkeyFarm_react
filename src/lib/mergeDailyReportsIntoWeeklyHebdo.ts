@@ -16,6 +16,7 @@ export function parseSemaineIndex(semaine: string): number | null {
   return parseInt(m[1], 10);
 }
 
+/** Exported for WeeklyTrackingTable: detect when journalier data should be persisted into suivi hebdo. */
 export function dailyReportMatchesSuiviContext(
   d: DailyReportResponse,
   opts: { lot: string; batiment: string; sex: string; semaine: string }
@@ -38,6 +39,8 @@ export interface MergedWeeklyHebdoRow {
   mortalitePct: string;
   mortaliteCumul: string;
   mortaliteCumulPct: string;
+  /** Mortalité du transport — cumul fin semaine précédente (calculé côté backend) */
+  mortaliteTransportCumul?: number | null;
   consoEauL: string;
   tempMin: string;
   tempMax: string;
@@ -64,6 +67,7 @@ function hebdoToMerged(r: SuiviTechniqueHebdoResponse): MergedWeeklyHebdoRow {
     mortalitePct: r.mortalitePct != null ? r.mortalitePct.toFixed(2) : "",
     mortaliteCumul: r.mortaliteCumul != null ? String(r.mortaliteCumul) : "",
     mortaliteCumulPct: r.mortaliteCumulPct != null ? r.mortaliteCumulPct.toFixed(2) : "",
+    mortaliteTransportCumul: r.mortaliteTransportCumul,
     consoEauL: r.consoEauL != null ? String(r.consoEauL) : "",
     tempMin: r.tempMin != null ? String(r.tempMin) : "",
     tempMax: r.tempMax != null ? String(r.tempMax) : "",
@@ -85,9 +89,11 @@ function applyDailyOntoRow(row: MergedWeeklyHebdoRow, d: DailyReportResponse): M
     tempMin: d.tempMin != null ? normalizeDecFromApi(d.tempMin) : row.tempMin,
     tempMax: d.tempMax != null ? normalizeDecFromApi(d.tempMax) : row.tempMax,
     traitement: d.traitement != null && d.traitement !== "" ? d.traitement : row.traitement,
-    mortalitePct: "",
-    mortaliteCumul: "",
-    mortaliteCumulPct: "",
+    // Preserve calculated values from backend instead of clearing them
+    mortalitePct: row.mortalitePct,
+    mortaliteCumul: row.mortaliteCumul,
+    mortaliteCumulPct: row.mortaliteCumulPct,
+    mortaliteTransportCumul: row.mortaliteTransportCumul,
     isPlaceholder: false,
   };
 }
@@ -101,6 +107,7 @@ function newRowFromDaily(d: DailyReportResponse): MergedWeeklyHebdoRow {
     mortalitePct: "",
     mortaliteCumul: "",
     mortaliteCumulPct: "",
+    mortaliteTransportCumul: null,
     consoEauL: d.waterL != null ? normalizeDecFromApi(d.waterL) : "",
     tempMin: d.tempMin != null ? normalizeDecFromApi(d.tempMin) : "",
     tempMax: d.tempMax != null ? normalizeDecFromApi(d.tempMax) : "",

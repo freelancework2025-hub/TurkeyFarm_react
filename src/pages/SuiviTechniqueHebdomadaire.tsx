@@ -34,6 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusResponse, getStoredSelectedFarm } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/suiviTechniqueBatimentExport";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import { canonicalSemaine } from "@/lib/semaineCanonical";
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
@@ -82,6 +83,7 @@ const TAB_TO_API_SEX: Record<TabType, string> = { male: "Mâle", femelle: "Femel
  * - After lot: step 2 = Semaine only. After semaine: step 3 = Batiment boxes only (B1–B4 by default; input + "Ajouter" for B5, B6…).
  * - After choosing one batiment: user enters suivi for that batiment only. Tables empty if nothing saved yet.
  * - Batiment cannot be changed on the content screen; only "Retour au choix du bâtiment" clears batiment from URL and returns to step 3.
+ * - INDICE EAU/ALIMENT (suivi consommation) : TOTAL S de CONSO. EAU (L) du bâtiment / CONSOMMATION ALIMENT — S du bâtiment (voir ConsumptionTrackingTable + API suivi consommation).
  * Permissions: per permission.mdc (all roles; create/update/delete by role).
  * RESPONSABLE_FERME: can add and save new data in child tables; saved rows/cells are read-only.
  * Number display: grouped thousands (space) + dot decimal via formatGroupedNumber (same as Résumé coûts / production).
@@ -1086,7 +1088,7 @@ export default function SuiviTechniqueHebdomadaire() {
                   <SuiviTechniqueBatimentContent
                     farmId={reportingFarmId}
                     lot={lotParam}
-                    semaine={selectedSemaine}
+                    semaine={canonicalSemaine(selectedSemaine)}
                     batiment={selectedBatiment}
                     activeTab={activeTab}
                     onRefreshStock={refreshStock}
@@ -1094,6 +1096,7 @@ export default function SuiviTechniqueHebdomadaire() {
                     showSectionHeader={false}
                     maleSetupInfo={getSetupInfoForBatimentSex(selectedBatiment, "Mâle")}
                     femelleSetupInfo={getSetupInfoForBatimentSex(selectedBatiment, "Femelle")}
+                    forceWeeklyReadOnly={true}
                   />
                 </div>
               )}

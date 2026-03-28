@@ -8,6 +8,7 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { api } from "@/lib/api";
+import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 export interface SuiviTechniqueBatimentExportParams {
@@ -48,12 +49,6 @@ function isSemaineS1(semaine: string): boolean {
   return /^S1$/i.test(semaine.trim());
 }
 
-/** Cumul « mortalité transport » : 0 en S1 ; à partir de S2 = somme des NBRE mortalité de la semaine S1. */
-function mortaliteTransportCumul(semaine: string, s1List: Awaited<ReturnType<typeof api.suiviTechniqueHebdo.list>> | null | undefined): number {
-  if (isSemaineS1(semaine)) return 0;
-  return (s1List ?? []).reduce((s, r) => s + (Number(r.mortaliteNbre) || 0), 0);
-}
-
 function mortaliteTransportPctStr(
   semaine: string,
   cumul: number,
@@ -68,10 +63,10 @@ function mortaliteTransportPctStr(
 export async function exportToExcel(params: SuiviTechniqueBatimentExportParams): Promise<void> {
   const { farmName, farmId, lot, semaine, batiment, sex } = params;
 
-  const [setup, hebdoList, hebdoS1List, production, consumption, performance, stock] = await Promise.all([
+  const [setup, hebdoList, transportCumulExport, production, consumption, performance, stock] = await Promise.all([
     api.suiviTechniqueSetup.getBySex({ farmId, lot, semaine, sex, batiment }),
     api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine }),
-    api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine: "S1" }).catch(() => []),
+    fetchMortaliteCumulFinSemainePrecedente(farmId, lot, sex, batiment, semaine),
     api.suiviProductionHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviConsommationHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviPerformancesHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
@@ -189,7 +184,6 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
     "OBSERVATION",
   ];
   addTableHeader(hebdoHeaders);
-  const transportCumulExport = mortaliteTransportCumul(semaine, hebdoS1List);
   const transportPctExport = mortaliteTransportPctStr(semaine, transportCumulExport, effectifDepart);
   const TRANSPORT_CUMUL_BG = "FFFEF9C4";
   ws.mergeCells(row, 1, row, 4);
@@ -338,10 +332,10 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
 export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): Promise<void> {
   const { farmName, farmId, lot, semaine, batiment, sex } = params;
 
-  const [setup, hebdoList, hebdoS1List, production, consumption, performance, stock] = await Promise.all([
+  const [setup, hebdoList, transportCumulPdf, production, consumption, performance, stock] = await Promise.all([
     api.suiviTechniqueSetup.getBySex({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine }).catch(() => []),
-    api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine: "S1" }).catch(() => []),
+    fetchMortaliteCumulFinSemainePrecedente(farmId, lot, sex, batiment, semaine),
     api.suiviProductionHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviConsommationHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
     api.suiviPerformancesHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
@@ -428,7 +422,6 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
     "TRAITEMENT",
     "OBSERVATION",
   ];
-  const transportCumulPdf = mortaliteTransportCumul(semaine, hebdoS1List);
   const transportPctPdf = mortaliteTransportPctStr(semaine, transportCumulPdf, effectifDepart);
   const transportRowPdf: string[] = [
     "MORTALITE DU TRANSPORT",

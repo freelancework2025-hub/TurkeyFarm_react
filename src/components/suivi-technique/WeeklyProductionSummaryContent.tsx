@@ -13,6 +13,7 @@ import {
 import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumePerformanceTrackingTable";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { mergeHebdoRowsWithDailyReports } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
+import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
 
 const SEXES = ["Mâle", "Femelle"] as const;
 
@@ -58,8 +59,8 @@ export default function WeeklyProductionSummaryContent({
   const [loading, setLoading] = useState(true);
   const [setups, setSetups] = useState<Map<string, SuiviTechniqueSetupResponse | null>>(new Map());
   const [hebdoLists, setHebdoLists] = useState<Map<string, SuiviTechniqueHebdoResponse[]>>(new Map());
-  /** Données semaine S1 par bâtiment×sexe — pour mortalité transport (somme NBRE S1) en S2+. */
-  const [hebdoS1Lists, setHebdoS1Lists] = useState<Map<string, SuiviTechniqueHebdoResponse[]>>(new Map());
+  /** Cumul mortalité fin semaine précédente par bâtiment×sexe — point de départ « MORTALITE DU TRANSPORT » en S2+. */
+  const [prevWeekMortaliteCumulByKey, setPrevWeekMortaliteCumulByKey] = useState<Map<string, number>>(new Map());
   const [productionByKey, setProductionByKey] = useState<Map<string, SuiviProductionHebdoResponse | null>>(new Map());
   const [stockByKey, setStockByKey] = useState<Map<string, SuiviStockResponse | null>>(new Map());
   const [consumptionByKey, setConsumptionByKey] = useState<Map<string, SuiviConsommationHebdoResponse | null>>(new Map());
@@ -96,7 +97,6 @@ export default function WeeklyProductionSummaryContent({
     setLoading(true);
     const setupPromises: Promise<void>[] = [];
     const hebdoPromises: Promise<void>[] = [];
-    const hebdoS1Promises: Promise<void>[] = [];
     const productionPromises: Promise<void>[] = [];
     const stockPromises: Promise<void>[] = [];
     const consumptionPromises: Promise<void>[] = [];
@@ -114,12 +114,6 @@ export default function WeeklyProductionSummaryContent({
             .list({ farmId, lot, sex, batiment, semaine })
             .then((list) => setHebdoLists((prev) => new Map(prev).set(key(batiment, sex), list ?? [])))
             .catch(() => setHebdoLists((prev) => new Map(prev).set(key(batiment, sex), [])))
-        );
-        hebdoS1Promises.push(
-          api.suiviTechniqueHebdo
-            .list({ farmId, lot, sex, batiment, semaine: "S1" })
-            .then((list) => setHebdoS1Lists((prev) => new Map(prev).set(key(batiment, sex), list ?? [])))
-            .catch(() => setHebdoS1Lists((prev) => new Map(prev).set(key(batiment, sex), [])))
         );
         productionPromises.push(
           api.suiviProductionHebdo
@@ -157,16 +151,26 @@ export default function WeeklyProductionSummaryContent({
       .then((list) => setDailyReportsForLot(list ?? []))
       .catch(() => setDailyReportsForLot([]));
 
+    const priorCumulPromise = Promise.all(
+      allBatiments.flatMap((batiment) =>
+        SEXES.map((sex) =>
+          fetchMortaliteCumulFinSemainePrecedente(farmId, lot, sex, batiment, semaine).then(
+            (cumul) => [key(batiment, sex), cumul] as const
+          )
+        )
+      )
+    ).then((entries) => setPrevWeekMortaliteCumulByKey(new Map(entries)));
+
     Promise.all([
       ...setupPromises,
       ...hebdoPromises,
-      ...hebdoS1Promises,
       ...productionPromises,
       ...stockPromises,
       ...consumptionPromises,
       livraisonsPromise,
       resumeSummaryPromise,
       dailyPromise,
+      priorCumulPromise,
     ]).finally(() => setLoading(false));
   }, [farmId, lot, semaine, allBatiments.join(",")]);
 
@@ -209,18 +213,17 @@ export default function WeeklyProductionSummaryContent({
     return sum;
   }, [hebdoLists, allBatiments]);
 
-  /** Somme des NBRE mortalité S1 sur tous les bâtiments × (Mâle + Femelle) — cumul « MORTALITE DU TRANSPORT » (0 si semaine affichée = S1). */
+  /** Somme des cumuls fin semaine précédente (par bâtiment × sexe) — point de départ « MORTALITE DU TRANSPORT » agrégé (0 si S1). */
   const totalMortaliteTransportAllBatiments = useMemo(() => {
     if (isSemaineS1(semaine)) return 0;
     let sum = 0;
     for (const batiment of allBatiments) {
       for (const sex of SEXES) {
-        const list = hebdoS1Lists.get(key(batiment, sex)) ?? [];
-        sum += list.reduce((s, r) => s + (Number(r.mortaliteNbre) || 0), 0);
+        sum += prevWeekMortaliteCumulByKey.get(key(batiment, sex)) ?? 0;
       }
     }
     return sum;
-  }, [semaine, allBatiments, hebdoS1Lists]);
+  }, [semaine, allBatiments, prevWeekMortaliteCumulByKey]);
 
   const mortaliteTransportRowPct = useMemo(() => {
     const em = aggregatedSetup.effectifMisEnPlace;
@@ -270,7 +273,7 @@ export default function WeeklyProductionSummaryContent({
     const effectifDepartSemaine = totalEffectifDepart;
     /** % cumul : cumul mortalité ÷ effectif mis en place total (somme des setups Mâle+Femelle × bâtiments pour la semaine). */
     const effectifMisEnPlaceSemaine = aggregatedSetup.effectifMisEnPlace;
-    /** Cumul journalier inclut la somme des mortalités transport (S1) sur tous les bâtiments. */
+    /** Cumul journalier inclut la somme des cumuls départ (fin semaine précédente) sur tous les bâtiments × sexes. */
     let runningCumul = totalMortaliteTransportAllBatiments;
 
     return sortedDates.map((recordDate) => {
@@ -307,7 +310,7 @@ export default function WeeklyProductionSummaryContent({
     return { totalMortality, totalWater };
   }, [aggregatedRows]);
 
-  /** Cumul mortalité en fin de semaine affichée (transport S1 + somme journalière) — pour ligne TOTAL et exports. */
+  /** Cumul mortalité en fin de semaine affichée (transport départ + somme journalière) — pour ligne TOTAL et exports. */
   const totalMortaliteCumulFinSemaine = useMemo(() => {
     if (aggregatedRows.length > 0) {
       return aggregatedRows[aggregatedRows.length - 1].mortaliteCumul;
@@ -329,16 +332,48 @@ export default function WeeklyProductionSummaryContent({
     return Number.isFinite(pct) ? pct : null;
   }, [aggregatedRows]);
 
-  // CONSOMME ALIMENT (semaine) and CUMUL: from resume-summary API (backend computes from stock ± livraisons for S1 and S2+; livraisons may be 0).
-  // Per-sex values = sum across B1+B2+B3+... (all active batiments) for each sex.
+  // CONSOMME ALIMENT (semaine) and CUMUL: prefer resume-summary API; cumul stays chain-correct from resume.
+  // When resume returns 0 kg but per-bâtiment GETs have conso (S2+ edge: stock/effectif filters), sum conso from GETs so INDICE EAU/ALIMENT still shows.
   const aggregatedConsommation = useMemo(() => {
+    let keyedConsoSum = 0;
+    let keyedCumulSum = 0;
+    let keyedConsoMale = 0;
+    let keyedConsoFemelle = 0;
+    let keyedCumulMale = 0;
+    let keyedCumulFemelle = 0;
+    for (const batiment of allBatiments) {
+      for (const sex of SEXES) {
+        const stock = stockByKey.get(key(batiment, sex));
+        if (!stock?.stockAlimentRecordExists) continue;
+        const c = consumptionByKey.get(key(batiment, sex));
+        const consoVal = c?.consommationAlimentSemaine != null ? Number(c.consommationAlimentSemaine) : 0;
+        const cumulVal = c?.cumulAlimentConsomme != null ? Number(c.cumulAlimentConsomme) : 0;
+        keyedConsoSum += consoVal;
+        keyedCumulSum += cumulVal;
+        if (sex === "Mâle") {
+          keyedConsoMale += consoVal;
+          keyedCumulMale += cumulVal;
+        } else {
+          keyedConsoFemelle += consoVal;
+          keyedCumulFemelle += cumulVal;
+        }
+      }
+    }
+
     if (resumeConsoSummary != null) {
-      const conso = resumeConsoSummary.consoAlimentSemaineSum != null ? Number(resumeConsoSummary.consoAlimentSemaineSum) : 0;
+      const consoResume = resumeConsoSummary.consoAlimentSemaineSum != null ? Number(resumeConsoSummary.consoAlimentSemaineSum) : 0;
       const cumul = resumeConsoSummary.cumulAlimentConsommeSum != null ? Number(resumeConsoSummary.cumulAlimentConsommeSum) : 0;
-      const consoMale = resumeConsoSummary.consoAlimentSemaineMale != null ? Number(resumeConsoSummary.consoAlimentSemaineMale) : null;
-      const consoFemelle = resumeConsoSummary.consoAlimentSemaineFemelle != null ? Number(resumeConsoSummary.consoAlimentSemaineFemelle) : null;
+      let consoMale = resumeConsoSummary.consoAlimentSemaineMale != null ? Number(resumeConsoSummary.consoAlimentSemaineMale) : null;
+      let consoFemelle = resumeConsoSummary.consoAlimentSemaineFemelle != null ? Number(resumeConsoSummary.consoAlimentSemaineFemelle) : null;
       const cumulMale = resumeConsoSummary.cumulAlimentConsommeMale != null ? Number(resumeConsoSummary.cumulAlimentConsommeMale) : null;
       const cumulFemelle = resumeConsoSummary.cumulAlimentConsommeFemelle != null ? Number(resumeConsoSummary.cumulAlimentConsommeFemelle) : null;
+
+      let conso = consoResume;
+      if (conso <= 0 && keyedConsoSum > 0) {
+        conso = keyedConsoSum;
+        consoMale = keyedConsoMale;
+        consoFemelle = keyedConsoFemelle;
+      }
       return {
         consoAlimentSemaineSum: conso,
         cumulAlimentConsommeSum: cumul,
@@ -348,37 +383,13 @@ export default function WeeklyProductionSummaryContent({
         cumulAlimentConsommeFemelle: cumulFemelle,
       };
     }
-    let consoAlimentSemaineSum = 0;
-    let cumulAlimentConsommeSum = 0;
-    let consoAlimentSemaineMale = 0;
-    let consoAlimentSemaineFemelle = 0;
-    let cumulAlimentConsommeMale = 0;
-    let cumulAlimentConsommeFemelle = 0;
-    for (const batiment of allBatiments) {
-      for (const sex of SEXES) {
-        const stock = stockByKey.get(key(batiment, sex));
-        if (!stock?.stockAlimentRecordExists) continue;
-        const c = consumptionByKey.get(key(batiment, sex));
-        const consoVal = c?.consommationAlimentSemaine != null ? Number(c.consommationAlimentSemaine) : 0;
-        const cumulVal = c?.cumulAlimentConsomme != null ? Number(c.cumulAlimentConsomme) : 0;
-        consoAlimentSemaineSum += consoVal;
-        cumulAlimentConsommeSum += cumulVal;
-        if (sex === "Mâle") {
-          consoAlimentSemaineMale += consoVal;
-          cumulAlimentConsommeMale += cumulVal;
-        } else {
-          consoAlimentSemaineFemelle += consoVal;
-          cumulAlimentConsommeFemelle += cumulVal;
-        }
-      }
-    }
     return {
-      consoAlimentSemaineSum,
-      cumulAlimentConsommeSum,
-      consoAlimentSemaineMale,
-      consoAlimentSemaineFemelle,
-      cumulAlimentConsommeMale,
-      cumulAlimentConsommeFemelle,
+      consoAlimentSemaineSum: keyedConsoSum,
+      cumulAlimentConsommeSum: keyedCumulSum,
+      consoAlimentSemaineMale: keyedConsoMale,
+      consoAlimentSemaineFemelle: keyedConsoFemelle,
+      cumulAlimentConsommeMale: keyedCumulMale,
+      cumulAlimentConsommeFemelle: keyedCumulFemelle,
     };
   }, [resumeConsoSummary, consumptionByKey, stockByKey, allBatiments]);
 

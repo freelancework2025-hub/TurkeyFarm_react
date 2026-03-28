@@ -2,6 +2,8 @@
  * API base URL. In dev: backend often runs on 7070 while Vite runs on 8080.
  * Set VITE_API_URL in .env (e.g. VITE_API_URL=http://localhost:7070)
  */
+import { canonicalSemaine } from "@/lib/semaineCanonical";
+
 const API_BASE =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
   "http://localhost:7070";
@@ -1054,7 +1056,7 @@ export const api = {
       if (params.lot != null && params.lot !== "") search.set("lot", params.lot);
       if (params.sex != null && params.sex !== "") search.set("sex", params.sex);
       if (params.batiment != null && params.batiment !== "") search.set("batiment", params.batiment);
-      if (params.semaine != null && params.semaine !== "") search.set("semaine", params.semaine);
+      if (params.semaine != null && params.semaine !== "") search.set("semaine", canonicalSemaine(params.semaine));
       return apiFetch<SuiviTechniqueHebdoResponse[]>(
         `/api/suivi-technique-hebdo?${search.toString()}`,
         { token: token ?? getStoredToken() }
@@ -1065,7 +1067,11 @@ export const api = {
         `/api/suivi-technique-hebdo/batch?farmId=${farmId}`,
         {
           method: "POST",
-          body: JSON.stringify(body),
+          body: JSON.stringify(
+            body.map((row) =>
+              row.semaine ? { ...row, semaine: canonicalSemaine(row.semaine) } : row
+            )
+          ),
           token: token ?? getStoredToken(),
         }
       ),
@@ -1074,7 +1080,9 @@ export const api = {
         `/api/suivi-technique-hebdo?farmId=${farmId}`,
         {
           method: "PUT",
-          body: JSON.stringify(body),
+          body: JSON.stringify(
+            body.semaine ? { ...body, semaine: canonicalSemaine(body.semaine) } : body
+          ),
           token: token ?? getStoredToken(),
         }
       ),
@@ -1089,6 +1097,21 @@ export const api = {
         `/api/suivi-technique-hebdo/weekly-summary?${search.toString()}`,
         { token: token ?? getStoredToken() }
       );
+    },
+    getTransportCumul: (
+      params: { farmId: number; lot: string; sex: string; batiment: string; semaine: string; persist?: boolean },
+      token?: string | null
+    ) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("sex", params.sex);
+      search.set("batiment", params.batiment);
+      search.set("semaine", canonicalSemaine(params.semaine));
+      if (params.persist) search.set("persist", "true");
+      return apiFetch<number>(`/api/suivi-technique-hebdo/transport-cumul?${search.toString()}`, {
+        token: token ?? getStoredToken(),
+      });
     },
   },
   /** Suivi de Production Hebdomadaire — REPORT (previous week total), VENTE, CONSO, AUTRE, TOTAL. Lot → Semaine → Batiment. */
@@ -2024,6 +2047,8 @@ export interface SuiviTechniqueHebdoResponse {
   recordDate: string;
   ageJour?: number | null;
   mortaliteNbre?: number | null;
+  /** Mortalité du transport — cumul fin semaine précédente (offset) */
+  mortaliteTransportCumul?: number | null;
   mortalitePct?: number | null;
   mortaliteCumul?: number | null;
   mortaliteCumulPct?: number | null;
@@ -2095,7 +2120,7 @@ export interface SuiviConsommationHebdoRequest {
   consommationAlimentKg?: number | null;
 }
 
-/** Suivi de Consommation Hebdo — response. All values are computed in the backend from DB (stock + livraisons). Frontend must only read; never calculate consommation or cumul on the client. */
+/** Suivi de Consommation Hebdo — response. INDICE EAU/ALIMENT (par bâtiment) = TOTAL S CONSO. EAU (L) / CONSOMMATION ALIMENT — S (kg) = totalEauSemaineL / consommationAlimentSemaine (L/kg). */
 export interface SuiviConsommationHebdoResponse {
   id?: number;
   farmId: number;

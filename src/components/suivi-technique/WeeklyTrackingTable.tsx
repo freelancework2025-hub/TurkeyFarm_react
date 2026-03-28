@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Plus, Save, Trash2, Loader2, Check } from "lucide-react";
 import { api, type SuiviTechniqueHebdoResponse, type SuiviTechniqueHebdoRequest, type DailyReportResponse } from "@/lib/api";
-import { mergeHebdoRowsWithDailyReports, resolveAnchorRecordDateForEffectif } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
+import {
+  mergeHebdoRowsWithDailyReports,
+  resolveAnchorRecordDateForEffectif,
+  dailyReportMatchesSuiviContext,
+} from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
+import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
+import { canonicalSemaine } from "@/lib/semaineCanonical";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -14,6 +20,8 @@ interface WeeklyRow {
   mortalitePct: string;
   mortaliteCumul: string;
   mortaliteCumulPct: string;
+  /** Mortalité du transport — cumul fin semaine précédente (calculé côté backend) */
+  mortaliteTransportCumul?: number | null;
   consoEauL: string;
   tempMin: string;
   tempMax: string;
@@ -33,6 +41,7 @@ function emptyRow(date: string): WeeklyRow {
     mortalitePct: "",
     mortaliteCumul: "",
     mortaliteCumulPct: "",
+    mortaliteTransportCumul: null,
     consoEauL: "",
     tempMin: "",
     tempMax: "",
@@ -75,6 +84,85 @@ function hasMeaningfulDailyData(row: WeeklyRow): boolean {
   );
 }
 
+/** Persist merged rows one-by-one via PUT upsert; reload afterwards reads truth from the API. */
+async function saveHebdoRequestsSequentially(rows: SuiviTechniqueHebdoRequest[], farmId: number): Promise<void> {
+  const sorted = [...rows].sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
+  for (const body of sorted) {
+    await api.suiviTechniqueHebdo.save(body, farmId);
+  }
+}
+
+function buildHebdoRequestFromRow(
+  r: WeeklyRow,
+  p: {
+    lot: string;
+    sex: string;
+    batiment: string;
+    semaine: string;
+    effectifDepart: number | null;
+  }
+): SuiviTechniqueHebdoRequest {
+  return {
+    lot: p.lot,
+    sex: p.sex,
+    batiment: p.batiment,
+    semaine: p.semaine,
+    effectifDepart: p.effectifDepart,
+    recordDate: r.recordDate,
+    ageJour: r.ageJour.trim() !== "" ? parseInt(r.ageJour, 10) : null,
+    mortaliteNbre: r.mortaliteNbre.trim() !== "" ? parseInt(r.mortaliteNbre, 10) : null,
+    consoEauL: r.consoEauL.trim() !== "" ? parseFloat(r.consoEauL.replace(",", ".")) : null,
+    tempMin: r.tempMin.trim() !== "" ? parseFloat(r.tempMin.replace(",", ".")) : null,
+    tempMax: r.tempMax.trim() !== "" ? parseFloat(r.tempMax.replace(",", ".")) : null,
+    vaccination: r.vaccination.trim() || null,
+    traitement: r.traitement.trim() || null,
+    observation: r.observation.trim() || null,
+  };
+}
+
+function floatCloseEnough(a: number | null | undefined, b: number | null | undefined): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return Math.abs(Number(a) - Number(b)) < 1e-5;
+}
+
+/** True when journalier should be written to DB: new unsaved merged lines, or saved lines still missing daily fields. */
+function mergedWeekNeedsDbPersist(
+  mapped: WeeklyRow[],
+  list: SuiviTechniqueHebdoResponse[],
+  dailyList: DailyReportResponse[],
+  opts: { lot: string; batiment: string; sex: string; semaine: string }
+): boolean {
+  const hasNewUnsaved = mapped.some((row) => !isSavedRow(row.id) && hasMeaningfulDailyData(row));
+  if (hasNewUnsaved) return true;
+
+  const dailyWeek = dailyList.filter((d) => dailyReportMatchesSuiviContext(d, opts));
+  if (dailyWeek.length === 0) return false;
+
+  const byDate = new Map<string, DailyReportResponse>();
+  for (const d of dailyWeek) {
+    byDate.set(d.reportDate, d);
+  }
+
+  for (const row of mapped) {
+    if (!isSavedRow(row.id) || !row.recordDate?.trim()) continue;
+    const day = byDate.get(row.recordDate);
+    if (!day) continue;
+    const h = list.find((rec) => String(rec.id) === row.id);
+    if (!h) continue;
+
+    if (day.ageJour != null && (h.ageJour == null || h.ageJour !== day.ageJour)) return true;
+    if (h.mortaliteNbre == null || h.mortaliteNbre !== day.nbr) return true;
+    if (day.waterL != null && !floatCloseEnough(h.consoEauL ?? null, day.waterL)) return true;
+    if (day.tempMin != null && !floatCloseEnough(h.tempMin ?? null, day.tempMin)) return true;
+    if (day.tempMax != null && !floatCloseEnough(h.tempMax ?? null, day.tempMax)) return true;
+    const dt = day.traitement?.trim() ?? "";
+    const ht = h.traitement?.trim() ?? "";
+    if (dt !== "" && dt !== ht) return true;
+  }
+  return false;
+}
+
 const ROWS_PER_WEEK = 7;
 
 /** Previous semaine for effectif chain: S2 → S1, S3 → S2, etc. Returns null for S1 or non-Sn format. */
@@ -92,6 +180,14 @@ function addDays(isoDate: string, days: number): string {
   return d.toISOString().split("T")[0];
 }
 
+/** Display yyyy-mm-dd as dd/mm/yyyy. Used for read-only rows so no browser date-picker icon appears. */
+function formatIsoDateDisplay(iso: string): string {
+  if (!iso?.trim()) return "—";
+  const m = iso.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
 function emptyWeekRows(startDate: string): WeeklyRow[] {
   return Array.from({ length: ROWS_PER_WEEK }, (_, i) => emptyRow(addDays(startDate, i)));
 }
@@ -106,15 +202,24 @@ interface WeeklyTrackingTableProps {
   effectifInitial?: number;
   /** Called after hebdo or effectif départ is saved so parent can refresh stock. */
   onSaveSuccess?: () => void;
+  /**
+   * When true, the table is fully read-only for everyone (no edit/add/save/delete),
+   * regardless of role permissions. Useful when the table is treated as calculated-only.
+   */
+  forceReadOnly?: boolean;
 }
 
-export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batiment = "B1", effectifInitial, onSaveSuccess }: WeeklyTrackingTableProps) {
+export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batiment = "B1", effectifInitial, onSaveSuccess, forceReadOnly = false }: WeeklyTrackingTableProps) {
   const today = new Date().toISOString().split("T")[0];
   const { isReadOnly, canCreate, canUpdate, canDelete } = useAuth();
   const { toast } = useToast();
+  const effectiveReadOnly = isReadOnly || forceReadOnly;
+
+  /** Align with backend week keys (S02 → S2) for list/save/transport-cumul. */
+  const semaineCanon = useMemo(() => canonicalSemaine(semaine), [semaine]);
 
   // Determine if this is the first week (S1) or subsequent weeks (S2+)
-  const isFirstWeek = previousSemaine(semaine) === null;
+  const isFirstWeek = previousSemaine(semaineCanon) === null;
 
   const [effectifDepart, setEffectifDepart] = useState<string>("");
   /** True when effectif départ was loaded from API (already saved). RESPONSABLE_FERME cannot modify after save (permission.mdc). */
@@ -130,10 +235,10 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   const load = useCallback(async () => {
     const gen = ++loadGenRef.current;
     setLoading(true);
-    const prevSem = previousSemaine(semaine);
+    const prevSem = previousSemaine(semaineCanon);
     try {
       const [list, dailyList, stockPrev] = await Promise.all([
-        api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine }),
+        api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine: semaineCanon }),
         api.dailyReports.list(farmId, lot).catch((): DailyReportResponse[] => []),
         prevSem != null
           ? api.suiviStock
@@ -147,8 +252,68 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
         lot,
         batiment,
         sex,
-        semaine,
+        semaine: semaineCanon,
       }) as WeeklyRow[];
+
+      const mergeOpts = { lot, batiment, sex, semaine: semaineCanon };
+      const needsPersistMergedWeek =
+        mergedWeekNeedsDbPersist(mapped, list, dailyList, mergeOpts) &&
+        mapped.some((row) => row.recordDate?.trim());
+
+      // Check if existing data needs transport cumulative recalculation
+      // This happens when data was saved from other pages and transport cumul is missing or incorrect
+      const needsTransportRecalculation = list.length > 0 && 
+        (list.some(row => row.mortaliteTransportCumul == null) || // Missing transport cumul
+         (!isFirstWeek && list.every(row => row.mortaliteTransportCumul === 0))); // All zeros for non-S1 weeks
+      
+      // If merged journalier/hebdo should be persisted OR transport cumul needs a backend pass
+      if ((needsPersistMergedWeek || needsTransportRecalculation) && (canCreate || canUpdate) && !effectiveReadOnly) {
+        try {
+          if (needsPersistMergedWeek) {
+            const weekEffectifDepart =
+              list.find((rec) => rec.effectifDepart != null)?.effectifDepart ??
+              (!isFirstWeek && prevSem != null ? stockPrev?.effectifRestantFinSemaine ?? null : null) ??
+              (isFirstWeek && effectifInitial != null && effectifInitial > 0 ? effectifInitial : null);
+
+            const rowsToSave = mapped
+              .filter((row) => row.recordDate?.trim())
+              .map((row) =>
+                buildHebdoRequestFromRow(row, {
+                  lot,
+                  sex,
+                  batiment,
+                  semaine: semaineCanon,
+                  effectifDepart: weekEffectifDepart,
+                })
+              );
+
+            if (rowsToSave.length > 0) {
+              await saveHebdoRequestsSequentially(rowsToSave, farmId);
+            }
+          } else if (needsTransportRecalculation) {
+            // Force recalculation of transport cumulative for existing data
+            await api.suiviTechniqueHebdo.getTransportCumul({ 
+              farmId, lot, sex, batiment, semaine: semaineCanon, persist: true 
+            });
+          }
+          
+          // Reload data to get the calculated transport cumulative values
+          const updatedList = await api.suiviTechniqueHebdo.list({ farmId, lot, sex, batiment, semaine: semaineCanon });
+          const updatedMapped: WeeklyRow[] = mergeHebdoRowsWithDailyReports(updatedList, dailyList, {
+            lot,
+            batiment,
+            sex,
+            semaine: semaineCanon,
+          }) as WeeklyRow[];
+          setRows(updatedMapped.length >= ROWS_PER_WEEK ? updatedMapped : [...updatedMapped, ...Array.from({ length: ROWS_PER_WEEK - updatedMapped.length }, (_, i) => emptyRow(addDays(updatedMapped[updatedMapped.length - 1]?.recordDate || today, i + 1)))]);
+          const savedEffectif = updatedList.length > 0 && updatedList.some((r) => r.effectifDepart != null);
+          setHasSavedEffectif(!!savedEffectif);
+          return; // Skip the rest of the loading logic since we've already set the rows
+        } catch (error) {
+          console.warn("Auto-recalculation of transport cumulative failed:", error);
+        }
+      }
+      
       const savedEffectif = list.length > 0 && list.some((r) => r.effectifDepart != null);
       setHasSavedEffectif(!!savedEffectif);
       // When no data (e.g. after "delete sex data"), ensure table is fully editable
@@ -159,6 +324,9 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       let shouldAutoSaveEffectif = false;
       if (list.length > 0 && list[0].effectifDepart != null) {
         setEffectifDepart(String(list[0].effectifDepart));
+      } else if (isFirstWeek && effectifInitial != null && effectifInitial > 0) {
+        setEffectifDepart(String(effectifInitial));
+        shouldAutoSaveEffectif = (canCreate || canUpdate);
       } else if (prevSem != null && stockPrev?.effectifRestantFinSemaine != null) {
         setEffectifDepart(String(stockPrev.effectifRestantFinSemaine));
         shouldAutoSaveEffectif = !isFirstWeek && (canCreate || canUpdate);
@@ -167,7 +335,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       if (gen !== loadGenRef.current) return;
 
       // Display exactly 7 rows by default (one per day). User can add more via "+ Ligne".
-      if (isReadOnly) {
+      if (effectiveReadOnly) {
         if (mapped.length === 0) {
           setRows(emptyWeekRows(today));
         } else if (mapped.length < ROWS_PER_WEEK) {
@@ -189,40 +357,58 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
         setRows(emptyWeekRows(today));
       }
 
-      if (shouldAutoSaveEffectif && stockPrev?.effectifRestantFinSemaine != null) {
+      const effectifValForAutoSave =
+        isFirstWeek && effectifInitial != null && effectifInitial > 0
+          ? effectifInitial
+          : stockPrev?.effectifRestantFinSemaine ?? null;
+
+      if (shouldAutoSaveEffectif && effectifValForAutoSave != null) {
         try {
-          const anchorDate = resolveAnchorRecordDateForEffectif(
-            list,
-            dailyList,
-            { lot, batiment, sex, semaine },
-            today
-          );
-          await api.suiviTechniqueHebdo.saveBatch(
-            [
-              {
-                lot,
-                sex,
-                batiment,
-                semaine,
-                effectifDepart: stockPrev.effectifRestantFinSemaine,
-                recordDate: anchorDate,
-                ageJour: null,
-                mortaliteNbre: null,
-                consoEauL: null,
-                tempMin: null,
-                tempMax: null,
-                vaccination: null,
-                traitement: null,
-                observation: null,
-              },
-            ],
-            farmId
-          );
+          const effectifVal = effectifValForAutoSave;
+          const effectifPayloads: SuiviTechniqueHebdoRequest[] =
+            mapped.filter((r) => r.recordDate?.trim()).length > 0
+              ? mapped
+                  .filter((r) => r.recordDate?.trim())
+                  .map((r) =>
+                    buildHebdoRequestFromRow(r, {
+                      lot,
+                      sex,
+                      batiment,
+                      semaine: semaineCanon,
+                      effectifDepart: effectifVal,
+                    })
+                  )
+              : [
+                  {
+                    lot,
+                    sex,
+                    batiment,
+                    semaine: semaineCanon,
+                    effectifDepart: effectifVal,
+                    recordDate: resolveAnchorRecordDateForEffectif(
+                      list,
+                      dailyList,
+                      { lot, batiment, sex, semaine: semaineCanon },
+                      today
+                    ),
+                    ageJour: null,
+                    mortaliteNbre: null,
+                    consoEauL: null,
+                    tempMin: null,
+                    tempMax: null,
+                    vaccination: null,
+                    traitement: null,
+                    observation: null,
+                  },
+                ];
+          await saveHebdoRequestsSequentially(effectifPayloads, farmId);
           if (gen === loadGenRef.current) {
             setHasSavedEffectif(true);
             toast({
               title: "Effectif départ calculé",
-              description: `Effectif départ de ${semaine} automatiquement calculé et enregistré: ${stockPrev.effectifRestantFinSemaine}`,
+              description: isFirstWeek
+                ? `Effectif départ de ${semaineCanon} enregistré depuis Infos setup: ${effectifVal}`
+                : `Effectif départ de ${semaineCanon} automatiquement calculé et enregistré: ${effectifVal}`,
               duration: 3000,
             });
             onSaveSuccess?.();
@@ -240,38 +426,75 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     } finally {
       if (gen === loadGenRef.current) setLoading(false);
     }
-  }, [farmId, lot, sex, batiment, semaine, isReadOnly, toast, today, canCreate, canUpdate, isFirstWeek, onSaveSuccess]);
+  }, [
+    farmId,
+    lot,
+    sex,
+    batiment,
+    semaineCanon,
+    effectiveReadOnly,
+    toast,
+    today,
+    canCreate,
+    canUpdate,
+    isFirstWeek,
+    onSaveSuccess,
+    effectifInitial,
+  ]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  /** Total NBRE mortalité semaine S1 (pour la ligne « MORTALITE DU TRANSPORT » en S2+). */
-  const [transportS1TotalNbre, setTransportS1TotalNbre] = useState<number | null>(null);
+  /**
+   * Valeur « MORTALITE DU TRANSPORT » (offset) pour la semaine courante, **même bâtiment + sexe** que ce tableau:
+   * - S2 B1 Mâle = total cumul mortalité fin S1 pour B1 Mâle (lot/farm identiques)
+   * - S3 = total cumul mortalité fin S2 sur ce même scope ; etc.
+   * S1 affiche 0. Source: mortaliteTransportCumul calculé côté backend et persisté dans les données.
+   */
+  const mortaliteTransportFromBackend = useMemo(() => {
+    if (isFirstWeek) return 0;
+    
+    // Get transport cumul from the first row that has it (all rows in the week should have the same value)
+    const firstRowWithTransport = rows.find(row => 
+      isSavedRow(row.id) && 
+      row.mortaliteTransportCumul !== undefined && 
+      row.mortaliteTransportCumul !== null
+    );
+    
+    return firstRowWithTransport?.mortaliteTransportCumul ?? null;
+  }, [rows, isFirstWeek]);
+
+  // Fallback to API call if backend value is not available (for backward compatibility)
+  const [prevWeekEndCumulMortalite, setPrevWeekEndCumulMortalite] = useState<number | null>(null);
 
   useEffect(() => {
-    if (isFirstWeek) {
-      setTransportS1TotalNbre(0);
+    if (mortaliteTransportFromBackend !== null) {
+      setPrevWeekEndCumulMortalite(mortaliteTransportFromBackend);
       return;
     }
+    
+    if (isFirstWeek) {
+      setPrevWeekEndCumulMortalite(0);
+      return;
+    }
+    
     let cancelled = false;
-    setTransportS1TotalNbre(null);
-    api.suiviTechniqueHebdo
-      .list({ farmId, lot, sex, batiment, semaine: "S1" })
-      .then((list) => {
-        if (cancelled) return;
-        const total = (list ?? []).reduce((s, r) => s + (Number(r.mortaliteNbre) || 0), 0);
-        setTransportS1TotalNbre(total);
+    setPrevWeekEndCumulMortalite(null);
+    fetchMortaliteCumulFinSemainePrecedente(farmId, lot, sex, batiment, semaineCanon)
+      .then((total) => {
+        if (!cancelled) setPrevWeekEndCumulMortalite(total);
       })
       .catch(() => {
-        if (!cancelled) setTransportS1TotalNbre(0);
+        if (!cancelled) setPrevWeekEndCumulMortalite(0);
       });
     return () => {
       cancelled = true;
     };
-  }, [farmId, lot, sex, batiment, isFirstWeek]);
+  }, [farmId, lot, sex, batiment, semaineCanon, isFirstWeek, mortaliteTransportFromBackend]);
 
   const addRow = () => {
+    if (effectiveReadOnly) return;
     const last = rows[rows.length - 1];
     // Calculate next date
     let nextDate = today;
@@ -295,6 +518,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   };
 
   const removeRow = (id: string) => {
+    if (effectiveReadOnly) return;
     if (rows.length <= ROWS_PER_WEEK) return;
     const row = rows.find((r) => r.id === id);
     if (!row) return;
@@ -304,34 +528,34 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   };
 
   const updateRow = (id: string, field: keyof WeeklyRow, value: string) => {
+    // Enforce permission.mdc at the state-update level (not only via input attributes):
+    // - Read-only roles cannot edit anything
+    // - RESPONSABLE_FERME (create-only) may edit only non-saved rows OR backend placeholders
+    // - Saved non-placeholder rows require update permission
+    if (effectiveReadOnly || (!canCreate && !canUpdate)) return;
     setRows((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
+      prev.map((r) => {
+        if (r.id !== id) return r;
+        const saved = isSavedRow(r.id);
+        const isPlaceholder = r.isPlaceholder ?? !hasMeaningfulDailyData(r);
+        if (saved && !canUpdate && !isPlaceholder) return r;
+        return { ...r, [field]: value };
+      })
     );
   };
 
-  const rowToRequest = (r: WeeklyRow): SuiviTechniqueHebdoRequest => ({
-    lot,
-    sex,
-    batiment,
-    semaine,
-    effectifDepart: effectifDepart ? parseInt(effectifDepart, 10) : null,
-    recordDate: r.recordDate,
-    ageJour: r.ageJour.trim() !== "" ? parseInt(r.ageJour, 10) : null,
-    mortaliteNbre: r.mortaliteNbre.trim() !== "" ? parseInt(r.mortaliteNbre, 10) : null,
-    consoEauL: r.consoEauL.trim() !== "" ? parseFloat(r.consoEauL) : null,
-    tempMin: r.tempMin.trim() !== "" ? parseFloat(r.tempMin) : null,
-    tempMax: r.tempMax.trim() !== "" ? parseFloat(r.tempMax) : null,
-    vaccination: r.vaccination.trim() || null,
-    traitement: r.traitement.trim() || null,
-    observation: r.observation.trim() || null,
-  });
+  const rowToRequest = (r: WeeklyRow): SuiviTechniqueHebdoRequest =>
+    buildHebdoRequestFromRow(r, {
+      lot,
+      sex,
+      batiment,
+      semaine: semaineCanon,
+      effectifDepart: effectifDepart.trim() !== "" ? parseInt(effectifDepart, 10) : null,
+    });
 
-  /**
-   * Per-row save. Uses PUT upsert when possible. For Responsable Ferme completing a DB placeholder
-   * (no update permission), uses saveBatch([one]) so the backend merges without requiring UPDATE
-   * — never use single-row saveBatch when user has DELETE, or the week would be wiped and replaced.
-   */
+  /** Per-row save: PUT upsert only (backend allows merge into placeholder rows without update permission). */
   const saveRow = async (row: WeeklyRow) => {
+    if (effectiveReadOnly) return;
     if (!canCreate && !canUpdate) {
       toast({ title: "Non autorisé", description: "Vous ne pouvez pas enregistrer.", variant: "destructive" });
       return;
@@ -358,16 +582,10 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     if (saved && !canUpdate && !isPlaceholder) return;
 
     const payload = rowToRequest(row);
-    const useBatchMergeOnly =
-      !canDelete && saved && isPlaceholder;
 
     setSavingRowId(row.id);
     try {
-      if (useBatchMergeOnly) {
-        await api.suiviTechniqueHebdo.saveBatch([payload], farmId);
-      } else {
-        await api.suiviTechniqueHebdo.save(payload, farmId);
-      }
+      await api.suiviTechniqueHebdo.save(payload, farmId);
       toast({ title: "Ligne enregistrée", description: "Données du jour sauvegardées." });
       onSaveSuccess?.();
       await load();
@@ -387,10 +605,10 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   );
   /** RESPONSABLE_FERME cannot update after save: once effectif départ was saved, they cannot modify it (permission.mdc). */
   const canSaveEffectif =
-    (canCreate || canUpdate) && effectifEligibleRowCount > 0 && (canUpdate || !hasSavedEffectif);
+    !effectiveReadOnly && (canCreate || canUpdate) && effectifEligibleRowCount > 0 && (canUpdate || !hasSavedEffectif);
   /** Effectif input read-only when: full read-only, or effectif was already saved and user cannot update (e.g. RESPONSABLE_FERME), or it's week 2+ (auto-calculated). */
   const effectifInputReadOnly =
-    isReadOnly || (hasSavedEffectif && !canUpdate) || !isFirstWeek;
+    effectiveReadOnly || (hasSavedEffectif && !canUpdate) || !isFirstWeek;
 
   /** Save only effectif départ de la semaine. Respects permission.mdc: create for new rows, update for existing (RESPONSABLE_FERME cannot update). */
   const handleSaveEffectifDepart = async () => {
@@ -425,7 +643,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
         lot,
         sex,
         batiment,
-        semaine,
+        semaine: semaineCanon,
         effectifDepart: effectifVal ?? null,
         recordDate: r.recordDate,
         ageJour: r.ageJour.trim() !== "" ? parseInt(r.ageJour) : null,
@@ -447,7 +665,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     }
     setSavingEffectif(true);
     try {
-      await api.suiviTechniqueHebdo.saveBatch(toSend, farmId);
+      await saveHebdoRequestsSequentially(toSend, farmId);
       setHasSavedEffectif(true);
       toast({ title: "Effectif enregistré", description: "Effectif départ de la semaine enregistré." });
       onSaveSuccess?.();
@@ -483,25 +701,73 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   }, [effectifDepart, effectifInitial]);
 
   /**
-   * Cumul « mortalité transport » (S1 total NBRE) ajouté avant la somme journalière en S2+ ; 0 en S1.
-   * Tant que S2+ et chargement S1 en cours, offset = 0 pour éviter les cumuls erronés avant la valeur.
+   * NEW LOGIC: Starting point for cumul calculation
+   * S1: First day's mortalité NBRE value
+   * S2+: Previous week's ending cumul
+   * This is used to display and start cumul calculations from the correct baseline
    */
-  const mortaliteTransportOffsetPourCumul = useMemo(() => {
-    if (isFirstWeek) return 0;
-    if (transportS1TotalNbre === null) return 0;
-    return transportS1TotalNbre;
-  }, [isFirstWeek, transportS1TotalNbre]);
+  const mortaliteTransportStartingPoint = useMemo(() => {
+    if (isFirstWeek) {
+      // S1: Get first day's mortalité NBRE if available
+      const withDate = rows.filter((r) => r.recordDate && r.recordDate.trim() !== "");
+      if (withDate.length === 0) return 0;
+      const sorted = [...withDate].sort((a, b) => a.recordDate.localeCompare(b.recordDate));
+      const firstRowNbre = parseInt(sorted[0].mortaliteNbre, 10) || 0;
+      return firstRowNbre;
+    } else {
+      // S2+: Use previous week's ending cumul
+      if (prevWeekEndCumulMortalite === null) return 0;
+      return prevWeekEndCumulMortalite;
+    }
+  }, [isFirstWeek, rows, prevWeekEndCumulMortalite]);
 
-  /** Cumul mortalité fin de semaine = offset transport (S2+) + somme NBRE de la semaine. */
-  const totalMortaliteCumulFinSemaine = useMemo(
-    () => mortaliteTransportOffsetPourCumul + weeklyTotals.totalMortality,
-    [mortaliteTransportOffsetPourCumul, weeklyTotals.totalMortality]
-  );
+  /** Cumul mortalité fin de semaine = sum of all NBRE up to and including the last day.
+   * For S2+, includes starting point from previous week. */
+  const totalMortaliteCumulFinSemaine = useMemo(() => {
+    const withDate = rows.filter((r) => r.recordDate?.trim());
+    if (withDate.length === 0) return 0;
+    const sorted = [...withDate].sort((a, b) => a.recordDate.localeCompare(b.recordDate));
+    
+    // Calculate cumul for each day to get the final value
+    let runningCumul = 0;
+    for (const row of sorted) {
+      const nbre = parseInt(row.mortaliteNbre, 10) || 0;
+      runningCumul += nbre;
+    }
+    
+    // For S2+, add previous week's ending cumul as the starting point
+    if (!isFirstWeek && prevWeekEndCumulMortalite !== null) {
+      return prevWeekEndCumulMortalite + runningCumul;
+    }
+    return runningCumul;
+  }, [rows, isFirstWeek, prevWeekEndCumulMortalite]);
 
   /**
-   * Computed mortality stats (aligned with backend SuiviTechniqueHebdoService, + offset transport en S2+):
+   * Footer TOTAL CUMUL: prefer last row's persisted `mortaliteCumul` from API when present so the table
+   * matches DB-backed values; otherwise use client offset + weekly sum.
+   * Should always show the final cumulative value from the last day (day 7).
+   */
+  const totalCumulFooterDisplay = useMemo(() => {
+    const withDate = rows.filter((r) => r.recordDate?.trim());
+    if (withDate.length === 0) return totalMortaliteCumulFinSemaine;
+    const sorted = [...withDate].sort((a, b) => a.recordDate.localeCompare(b.recordDate));
+    
+    // Find the last row with a valid cumulative value (including 0)
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const c = sorted[i].mortaliteCumul?.trim() ?? "";
+      if (c !== "") {
+        const n = parseInt(c, 10);
+        if (!Number.isNaN(n)) return n; // Return any valid number, including 0
+      }
+    }
+    return totalMortaliteCumulFinSemaine;
+  }, [rows, totalMortaliteCumulFinSemaine]);
+
+  /**
+   * NEW LOGIC - Computed mortality stats:
    * - Mortalité % (Journée) = (Mortalité NBRE du jour / Effectif départ de la semaine) × 100
-   * - Mortalité CUMUL = cumul MORTALITE DU TRANSPORT + somme NBRE des jours précédents (ordre date) + NBRE du jour
+   * - Mortalité CUMUL = sum of NBRE from day 1 to current day
+   *   (For S1: starts from 0, first day's NBRE becomes the first cumul; for S2+: starts from previous week's end)
    * - Mortalité % CUMUL = (Mortalité CUMUL / Effectif départ de la semaine) × 100
    */
   const mortalityComputedByRowId = useMemo(() => {
@@ -512,7 +778,10 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     const withDate = rows.filter((r) => r.recordDate && r.recordDate.trim() !== "");
     const sorted = [...withDate].sort((a, b) => a.recordDate.localeCompare(b.recordDate));
     const map = new Map<string, { mortalitePct: string; mortaliteCumul: string; mortaliteCumulPct: string }>();
-    let runningCumul = mortaliteTransportOffsetPourCumul;
+    
+    // Starting point depends on week
+    const startingCumul = isFirstWeek ? 0 : (prevWeekEndCumulMortalite ?? 0);
+    let runningCumul = startingCumul;
 
     for (const row of sorted) {
       const nbre = parseInt(row.mortaliteNbre, 10) || 0;
@@ -526,16 +795,20 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       });
     }
     return map;
-  }, [rows, effectifPourCalculMortalite, mortaliteTransportOffsetPourCumul]);
+  }, [rows, effectifPourCalculMortalite, isFirstWeek, prevWeekEndCumulMortalite]);
 
-  /** S1 : cumul 0 et % 0 ; S2+ : cumul = somme des NBRE mortalité de S1 ; % = cumul / effectif départ semaine courante. */
+  /**
+   * NEW LOGIC - Ligne MORTALITE DU TRANSPORT (now shows the starting point):
+   * S1: First day's mortalité NBRE value (starting point for cumul calculation)
+   * S2+: Previous week's ending cumul (starting point for cumul calculation)
+   * % cumul = (starting point / effectif départ semaine courante) × 100
+   */
   const mortaliteTransportDisplay = useMemo(() => {
-    if (isFirstWeek) {
-      return { cumul: 0, cumulPctDisplay: `${formatGroupedNumber(0, 2).replace(".", ",")} %` };
-    }
-    if (transportS1TotalNbre === null) return null;
-    const cumul = transportS1TotalNbre;
     const ef = effectifPourCalculMortalite;
+    const cumul = mortaliteTransportStartingPoint;
+
+    if (cumul === null || cumul === undefined) return null;
+
     if (ef == null || ef <= 0) {
       return {
         cumul,
@@ -547,7 +820,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       cumul,
       cumulPctDisplay: `${formatGroupedNumber(pct, 2).replace(".", ",")} %`,
     };
-  }, [isFirstWeek, transportS1TotalNbre, effectifPourCalculMortalite]);
+  }, [mortaliteTransportStartingPoint, effectifPourCalculMortalite]);
 
   if (loading) {
     return (
@@ -558,15 +831,15 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     );
   }
 
-  const showSaveCol = !isReadOnly && (canCreate || canUpdate);
-  const showDeleteCol = !isReadOnly && (canDelete || canCreate);
+  const showSaveCol = !effectiveReadOnly && (canCreate || canUpdate);
+  const showDeleteCol = !effectiveReadOnly && (canDelete || canCreate);
 
   return (
     <div className="space-y-4">
       {/* Effectif départ: compact card for current semaine */}
       <div className="inline-flex flex-wrap items-end gap-2 rounded-lg border border-border bg-card px-3 py-2 shadow-sm">
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-foreground">Effectif départ de {semaine}</label>
+          <label className="text-sm font-medium text-foreground">Effectif départ de {semaineCanon}</label>
           <input
             type="number"
             value={effectifDepart}
@@ -577,7 +850,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             readOnly={effectifInputReadOnly}
           />
         </div>
-        {!isReadOnly && (canCreate || canUpdate) && isFirstWeek && (
+        {!effectiveReadOnly && (canCreate || canUpdate) && isFirstWeek && (
           <button
             type="button"
             onClick={handleSaveEffectifDepart}
@@ -593,7 +866,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             Enregistrer effectif
           </button>
         )}
-        {!isReadOnly && !isFirstWeek && effectifDepart && (
+        {!effectiveReadOnly && !isFirstWeek && effectifDepart && (
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-md text-sm font-medium">
             <Save className="w-4 h-4" />
             Auto-enregistré
@@ -606,19 +879,19 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
             <h3 className="text-base font-display font-bold text-foreground">
-              Suivi Hebdomadaire — {sex} — {semaine}
+              Suivi Hebdomadaire — {sex} — {semaineCanon}
             </h3>
             <p className="text-xs text-muted-foreground">
               Lot {lot}
             </p>
-            {!isReadOnly && (canCreate || canUpdate) && (
+            {!effectiveReadOnly && (canCreate || canUpdate) && (
               <p className="text-xs text-muted-foreground mt-1 max-w-xl">
                 Enregistrez chaque ligne avec ✓. Les rôles sans droit de mise à jour complètent les lignes
                 « brouillon » (effectif seul) via la même action.
               </p>
             )}
           </div>
-          {!isReadOnly && canCreate && (
+          {!effectiveReadOnly && canCreate && (
             <div className="flex gap-2">
               <button
                 type="button"
@@ -721,21 +994,53 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
               {rows.map((row, index) => {
                 const saved = isSavedRow(row.id);
                 const isPlaceholder = row.isPlaceholder ?? !hasMeaningfulDailyData(row);
-                const readOnly = isReadOnly || (saved && !canUpdate && !isPlaceholder);
+                const readOnly = effectiveReadOnly || (saved && !canUpdate && !isPlaceholder);
                 const inputBase = "w-full bg-transparent border-0 outline-none px-1 py-1 text-sm focus:ring-1 focus:ring-ring rounded " + (readOnly ? "bg-muted/40 cursor-not-allowed" : "");
+                const comp = mortalityComputedByRowId.get(row.id);
+                const pctJourDisplay =
+                  row.mortalitePct.trim() !== ""
+                    ? `${row.mortalitePct.replace(".", ",")} %`
+                    : comp?.mortalitePct
+                      ? `${comp.mortalitePct.replace(".", ",")} %`
+                      : "—";
+                const apiCumulParsed = row.mortaliteCumul.trim() === "" ? null : parseInt(row.mortaliteCumul, 10);
+                const compCumulParsed = comp?.mortaliteCumul ? parseInt(comp.mortaliteCumul, 10) : null;
+                /** API may return 0 from uninitialized DB columns while client running cumul is correct */
+                const preferClientCumul =
+                  apiCumulParsed === 0 &&
+                  compCumulParsed != null &&
+                  !Number.isNaN(compCumulParsed) &&
+                  compCumulParsed > 0;
+                const cumulDisplay =
+                  row.mortaliteCumul.trim() !== "" && !preferClientCumul
+                    ? formatIntCell(row.mortaliteCumul)
+                    : comp?.mortaliteCumul
+                      ? formatGroupedNumber(parseInt(comp.mortaliteCumul, 10) || 0, 0)
+                      : "—";
+                const pctCumulDisplay =
+                  row.mortaliteCumulPct.trim() !== "" && !preferClientCumul
+                    ? `${row.mortaliteCumulPct.replace(".", ",")} %`
+                    : comp?.mortaliteCumulPct
+                      ? `${comp.mortaliteCumulPct.replace(".", ",")} %`
+                      : "—";
                 return (
                   <tr
                     key={row.id}
                     className={`border-b border-border ${index % 2 === 0 ? "bg-card" : "bg-muted/20"} hover:bg-muted/30 transition-colors`}
                   >
                     <td className="border-r border-border align-middle px-1">
-                      <input
-                        type="date"
-                        value={row.recordDate}
-                        onChange={(e) => updateRow(row.id, "recordDate", e.target.value)}
-                        readOnly={readOnly}
-                        className={`${inputBase} max-w-[120px]`}
-                      />
+                      {readOnly ? (
+                        <span className="block px-1 py-1 text-sm tabular-nums text-foreground max-w-[120px]">
+                          {formatIsoDateDisplay(row.recordDate)}
+                        </span>
+                      ) : (
+                        <input
+                          type="date"
+                          value={row.recordDate}
+                          onChange={(e) => updateRow(row.id, "recordDate", e.target.value)}
+                          className={`${inputBase} max-w-[120px]`}
+                        />
+                      )}
                     </td>
                     <td className="border-r border-border align-middle px-1">
                       <input
@@ -760,17 +1065,13 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                       />
                     </td>
                     <td className="border-r border-border text-center text-muted-foreground tabular-nums px-1 py-1 min-w-[56px]">
-                      {(mortalityComputedByRowId.get(row.id)?.mortalitePct ?? row.mortalitePct)
-                        ? `${(mortalityComputedByRowId.get(row.id)?.mortalitePct ?? row.mortalitePct).replace(".", ",")} %`
-                        : "—"}
+                      {pctJourDisplay}
                     </td>
                     <td className="border-r border-border text-center tabular-nums px-1 py-1 min-w-[56px]">
-                      {mortalityComputedByRowId.get(row.id)?.mortaliteCumul ?? (row.mortaliteCumul || "—")}
+                      {cumulDisplay}
                     </td>
                     <td className="border-r border-border text-center text-muted-foreground tabular-nums px-1 py-1 min-w-[56px]">
-                      {(mortalityComputedByRowId.get(row.id)?.mortaliteCumulPct ?? row.mortaliteCumulPct)
-                        ? `${(mortalityComputedByRowId.get(row.id)?.mortaliteCumulPct ?? row.mortaliteCumulPct).replace(".", ",")} %`
-                        : "—"}
+                      {pctCumulDisplay}
                     </td>
                     <td className="border-r border-border align-middle px-1 min-w-[84px]">
                       <input
@@ -875,7 +1176,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             <tfoot>
               <tr className="border-t-2 border-border bg-muted font-semibold text-foreground">
                 <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border">
-                  TOTAL {semaine}
+                  TOTAL {semaineCanon}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-destructive whitespace-nowrap">
                   {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
@@ -886,12 +1187,12 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                     : "—"}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums whitespace-nowrap">
-                  {formatGroupedNumber(totalMortaliteCumulFinSemaine, 0)}
+                  {formatGroupedNumber(totalCumulFooterDisplay, 0)}
                 </td>
                 <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
                   {effectifPourCalculMortalite != null && effectifPourCalculMortalite > 0
                     ? `${formatGroupedNumber(
-                        (totalMortaliteCumulFinSemaine / effectifPourCalculMortalite) * 100,
+                        (totalCumulFooterDisplay / effectifPourCalculMortalite) * 100,
                         2
                       )} %`
                     : "—"}
