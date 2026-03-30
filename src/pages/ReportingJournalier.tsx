@@ -212,7 +212,7 @@ export default function ReportingJournalier() {
           )}
         </div>
         <p>
-          Suivi quotidien de l'élevage — Effectif initial et rapport journalier
+          Suivi quotidien de l'élevage
           {isReadOnly && (
             <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               Consultation seule

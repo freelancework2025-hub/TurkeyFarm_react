@@ -1017,7 +1017,7 @@ export default function LivraisonsPaille() {
                   </h2>
                   {!isReadOnly && (canCreate || canUpdate) && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Remplissez les lignes puis cliquez sur ✓ pour enregistrer chaque ligne (comme les livraisons aliment). Vide sanitaire : ✓ dans la ligne rouge.
+                      Remplissez les lignes puis cliquez sur ✓ pour enregistrer chaque ligne.
                     </p>
                   )}
                 </div>

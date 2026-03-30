@@ -595,7 +595,7 @@ export default function SuiviTechniqueHebdomadaire() {
                 }}
                 canCreate={false}
                 title="Étape 1 : Choisir un lot"
-                description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+                description=""
                 emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
               />
             </>

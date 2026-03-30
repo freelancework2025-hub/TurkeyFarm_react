@@ -13,6 +13,7 @@ import {
 import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumePerformanceTrackingTable";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { mergeHebdoRowsWithDailyReports } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
+import { canonicalSemaine } from "@/lib/semaineCanonical";
 import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
 import type { ResumeProductionHebdoExportParams } from "@/lib/resumeProductionHebdoExport";
 import {
@@ -41,6 +42,15 @@ const SEXES = ["Mâle", "Femelle"] as const;
 
 function isSemaineS1(semaine: string): boolean {
   return /^S1$/i.test(semaine.trim());
+}
+
+/** Previous semaine for effectif chain: S2 → S1. Returns null for S1 or non-Sn format. */
+function previousSemaineSn(semaine: string): string | null {
+  const m = semaine.trim().match(/^S(\d+)$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (n <= 1) return null;
+  return `S${n - 1}`;
 }
 
 export interface WeeklyProductionSummaryContentProps {
@@ -78,9 +88,15 @@ export default function WeeklyProductionSummaryContent({
   totalNbreProduction: totalNbreFromBackend,
   onExportParamsReady,
 }: WeeklyProductionSummaryContentProps) {
+  const semaineCanon = useMemo(() => canonicalSemaine(semaine), [semaine]);
+  const prevSemaine = useMemo(() => previousSemaineSn(semaineCanon), [semaineCanon]);
+  const isFirstCycleWeek = prevSemaine == null;
+
   const [loading, setLoading] = useState(true);
   const [setups, setSetups] = useState<Map<string, SuiviTechniqueSetupResponse | null>>(new Map());
   const [hebdoLists, setHebdoLists] = useState<Map<string, SuiviTechniqueHebdoResponse[]>>(new Map());
+  /** Stock fin de semaine précédente par bâtiment×sexe — même source que WeeklyTrackingTable pour l’effectif départ S2+. */
+  const [stockPrevByKey, setStockPrevByKey] = useState<Map<string, SuiviStockResponse | null>>(new Map());
   /** Cumul mortalité fin semaine précédente par bâtiment×sexe — point de départ « MORTALITE DU TRANSPORT » en S2+. */
   const [prevWeekMortaliteCumulByKey, setPrevWeekMortaliteCumulByKey] = useState<Map<string, number>>(new Map());
   const [productionByKey, setProductionByKey] = useState<Map<string, SuiviProductionHebdoResponse | null>>(new Map());
@@ -111,60 +127,73 @@ export default function WeeklyProductionSummaryContent({
   }
 
   useEffect(() => {
-    if (!farmId || !lot || !semaine || allBatiments.length === 0) {
+    if (!farmId || !lot || !semaineCanon || allBatiments.length === 0) {
       setLoading(false);
       return;
     }
 
     setLoading(true);
+    if (!prevSemaine) {
+      setStockPrevByKey(new Map());
+    }
+
     const setupPromises: Promise<void>[] = [];
     const hebdoPromises: Promise<void>[] = [];
     const productionPromises: Promise<void>[] = [];
     const stockPromises: Promise<void>[] = [];
     const consumptionPromises: Promise<void>[] = [];
+    const stockPrevPromises: Promise<void>[] = [];
 
     for (const batiment of allBatiments) {
       for (const sex of SEXES) {
         setupPromises.push(
           api.suiviTechniqueSetup
-            .getBySex({ farmId, lot, semaine, sex, batiment })
+            .getBySex({ farmId, lot, semaine: semaineCanon, sex, batiment })
             .then((r) => setSetups((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
             .catch(() => setSetups((prev) => new Map(prev).set(key(batiment, sex), null)))
         );
         hebdoPromises.push(
           api.suiviTechniqueHebdo
-            .list({ farmId, lot, sex, batiment, semaine })
+            .list({ farmId, lot, sex, batiment, semaine: semaineCanon })
             .then((list) => setHebdoLists((prev) => new Map(prev).set(key(batiment, sex), list ?? [])))
             .catch(() => setHebdoLists((prev) => new Map(prev).set(key(batiment, sex), [])))
         );
         productionPromises.push(
           api.suiviProductionHebdo
-            .get({ farmId, lot, semaine, sex, batiment })
+            .get({ farmId, lot, semaine: semaineCanon, sex, batiment })
             .then((r) => setProductionByKey((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
             .catch(() => setProductionByKey((prev) => new Map(prev).set(key(batiment, sex), null)))
         );
         stockPromises.push(
           api.suiviStock
-            .get({ farmId, lot, semaine, sex, batiment })
+            .get({ farmId, lot, semaine: semaineCanon, sex, batiment })
             .then((r) => setStockByKey((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
             .catch(() => setStockByKey((prev) => new Map(prev).set(key(batiment, sex), null)))
         );
         consumptionPromises.push(
           api.suiviConsommationHebdo
-            .get({ farmId, lot, semaine, sex, batiment })
+            .get({ farmId, lot, semaine: semaineCanon, sex, batiment })
             .then((r) => setConsumptionByKey((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
             .catch(() => setConsumptionByKey((prev) => new Map(prev).set(key(batiment, sex), null)))
         );
+        if (prevSemaine) {
+          stockPrevPromises.push(
+            api.suiviStock
+              .get({ farmId, lot, semaine: prevSemaine, sex, batiment })
+              .then((r) => setStockPrevByKey((prev) => new Map(prev).set(key(batiment, sex), r ?? null)))
+              .catch(() => setStockPrevByKey((prev) => new Map(prev).set(key(batiment, sex), null)))
+          );
+        }
       }
     }
 
     const livraisonsPromise = api.livraisonsAliment
-      .list({ farmId, lot, sem: semaine })
+      .list({ farmId, lot, sem: semaineCanon })
       .then((list) => setLivraisonsAlimentList(list ?? []))
       .catch(() => setLivraisonsAlimentList([]));
 
     const resumeSummaryPromise = api.suiviConsommationHebdo
-      .getResumeSummary({ farmId, lot, semaine, batiments: allBatiments })
+      .getResumeSummary({ farmId, lot, semaine: semaineCanon, batiments: allBatiments })
       .then((r) => setResumeConsoSummary(r ?? null))
       .catch(() => setResumeConsoSummary(null));
 
@@ -176,7 +205,7 @@ export default function WeeklyProductionSummaryContent({
     const priorCumulPromise = Promise.all(
       allBatiments.flatMap((batiment) =>
         SEXES.map((sex) =>
-          fetchMortaliteCumulFinSemainePrecedente(farmId, lot, sex, batiment, semaine).then(
+          fetchMortaliteCumulFinSemainePrecedente(farmId, lot, sex, batiment, semaineCanon).then(
             (cumul) => [key(batiment, sex), cumul] as const
           )
         )
@@ -189,12 +218,13 @@ export default function WeeklyProductionSummaryContent({
       ...productionPromises,
       ...stockPromises,
       ...consumptionPromises,
+      ...stockPrevPromises,
       livraisonsPromise,
       resumeSummaryPromise,
       dailyPromise,
       priorCumulPromise,
     ]).finally(() => setLoading(false));
-  }, [farmId, lot, semaine, allBatiments.join(",")]);
+  }, [farmId, lot, semaineCanon, prevSemaine, allBatiments.join(",")]);
 
   const aggregatedSetup = useMemo(() => {
     let totalEffectif = 0;
@@ -217,35 +247,89 @@ export default function WeeklyProductionSummaryContent({
     };
   }, [setups, allBatiments]);
 
-  // Effectif départ de la semaine (e.g. S1) = sum of Effectif départ for all Mâle + all Femelle of every bâtiment.
-  // So: total = Σ (over all batiments, over Mâle and Femelle) of effectif_depart for first day of that week.
+  // Effectif départ = Σ sur bâtiments×sexes actifs (effectif mis en place > 0), même résolution que WeeklyTrackingTable :
+  // hebdo (1er jour avec effectif enregistré) → sinon S1 : effectif mis en place du setup → sinon S2+ : effectif restant fin semaine précédente (stock).
   const totalEffectifDepart = useMemo(() => {
     let sum = 0;
     for (const batiment of allBatiments) {
       for (const sex of SEXES) {
+        const setup = setups.get(key(batiment, sex));
+        if ((setup?.effectifMisEnPlace ?? 0) <= 0) continue;
+
         const list = hebdoLists.get(key(batiment, sex)) ?? [];
         const withEffectif = list.filter((r) => r.effectifDepart != null && r.recordDate);
         const byDate = [...withEffectif].sort(
           (a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? "")
         );
-        const firstOfWeek = byDate[0];
-        if (firstOfWeek?.effectifDepart != null) sum += firstOfWeek.effectifDepart;
+        let ed: number | null = byDate[0]?.effectifDepart ?? null;
+
+        if (ed == null && isFirstCycleWeek) {
+          const emp = setup?.effectifMisEnPlace;
+          if (emp != null && emp > 0) ed = emp;
+        }
+        if (ed == null && prevSemaine != null) {
+          const prevStock = stockPrevByKey.get(key(batiment, sex));
+          const rest = prevStock?.effectifRestantFinSemaine;
+          if (rest != null) ed = rest;
+        }
+        if (ed != null) sum += ed;
       }
     }
     return sum;
-  }, [hebdoLists, allBatiments]);
+  }, [hebdoLists, allBatiments, setups, stockPrevByKey, isFirstCycleWeek, prevSemaine]);
 
-  /** Somme des cumuls fin semaine précédente (par bâtiment × sexe) — point de départ « MORTALITE DU TRANSPORT » agrégé (0 si S1). */
+  /**
+   * Même logique que WeeklyTrackingTable par bâtiment×sexe, puis somme sur les périmètres actifs
+   * (effectif mis en place > 0 pour la semaine), comme sur Suivi technique hebdomadaire.
+   * S1 : somme des mortalités NBRE du premier jour (données fusionnées hebdo + journalier).
+   * S2+ : somme des cumuls fin semaine précédente (API transport-cumul), identique à mortaliteTransportCumul affiché par bâtiment.
+   */
   const totalMortaliteTransportAllBatiments = useMemo(() => {
-    if (isSemaineS1(semaine)) return 0;
+    const isActiveBatimentSex = (batiment: string, sex: (typeof SEXES)[number]) => {
+      const setup = setups.get(key(batiment, sex));
+      return (setup?.effectifMisEnPlace ?? 0) > 0;
+    };
+
+    if (isSemaineS1(semaineCanon)) {
+      let s1Sum = 0;
+      for (const batiment of allBatiments) {
+        for (const sex of SEXES) {
+          if (!isActiveBatimentSex(batiment, sex)) continue;
+          const raw = hebdoLists.get(key(batiment, sex)) ?? [];
+          const merged = mergeHebdoRowsWithDailyReports(raw, dailyReportsForLot, {
+            lot,
+            batiment,
+            sex,
+            semaine: semaineCanon,
+          });
+          const withDate = merged.filter((r) => r.recordDate?.trim());
+          if (withDate.length === 0) continue;
+          const sorted = [...withDate].sort((a, b) =>
+            (a.recordDate ?? "").localeCompare(b.recordDate ?? "")
+          );
+          s1Sum += parseIntLoose(sorted[0].mortaliteNbre);
+        }
+      }
+      return s1Sum;
+    }
+
     let sum = 0;
     for (const batiment of allBatiments) {
       for (const sex of SEXES) {
+        if (!isActiveBatimentSex(batiment, sex)) continue;
         sum += prevWeekMortaliteCumulByKey.get(key(batiment, sex)) ?? 0;
       }
     }
     return sum;
-  }, [semaine, allBatiments, prevWeekMortaliteCumulByKey]);
+  }, [
+    semaineCanon,
+    allBatiments,
+    prevWeekMortaliteCumulByKey,
+    setups,
+    hebdoLists,
+    dailyReportsForLot,
+    lot,
+  ]);
 
   const mortaliteTransportRowPct = useMemo(() => {
     const em = aggregatedSetup.effectifMisEnPlace;
@@ -270,7 +354,7 @@ export default function WeeklyProductionSummaryContent({
           lot,
           batiment,
           sex,
-          semaine,
+          semaine: semaineCanon,
         });
         for (const r of merged) {
           if (!r.recordDate) continue;
@@ -320,7 +404,7 @@ export default function WeeklyProductionSummaryContent({
     dailyReportsForLot,
     allBatiments,
     lot,
-    semaine,
+    semaineCanon,
     totalEffectifDepart,
     aggregatedSetup.effectifMisEnPlace,
     totalMortaliteTransportAllBatiments,
@@ -511,9 +595,9 @@ export default function WeeklyProductionSummaryContent({
   /** Quantité livrée = sum of QTE for the selected semaine (from livraisons aliment) */
   const quantiteLivreeSemaine = useMemo(() => {
     return livraisonsAlimentList
-      .filter((r) => (r.sem ?? "").trim() === semaine)
+      .filter((r) => canonicalSemaine(r.sem ?? "") === semaineCanon)
       .reduce((sum, r) => sum + (Number(r.qte) || 0), 0);
-  }, [livraisonsAlimentList, semaine]);
+  }, [livraisonsAlimentList, semaineCanon]);
 
   /** QL-Stock = Quantité livrée − stock aliment */
   const qlStock = useMemo(() => {

@@ -114,7 +114,7 @@ export default function ConsumptionTrackingTable({ farmId, lot, semaine, sex, ba
           Suivi de consommation
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock_prev + Livraisons − Stock. B2+ : Stock_transfer − Stock. CUMUL inclut les semaines précédentes (totaux chaîne par sexe) + la semaine courante jusqu&apos;à ce bâtiment. CUMUL affiché 0 tant que la conso de la semaine n&apos;est pas calculée.
+          Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}
         </p>
       </div>
       <div className="overflow-x-auto">

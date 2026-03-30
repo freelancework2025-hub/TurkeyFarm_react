@@ -341,14 +341,13 @@ export default function Fournisseurs() {
             </TooltipProvider>
           )}
         </div>
-        <p>
-          Grille comparative des prix d'aliment par fournisseur et désignation
-          {isReadOnly && (
-            <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+        {isReadOnly && (
+          <p>
+            <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               Consultation seule
             </span>
-          )}
-        </p>
+          </p>
+        )}
       </div>
 
       {showFarmSelector ? (

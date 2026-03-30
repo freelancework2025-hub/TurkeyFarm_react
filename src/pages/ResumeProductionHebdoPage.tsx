@@ -23,6 +23,7 @@ import {
   type ResumeProductionHebdoExportParams,
 } from "@/lib/resumeProductionHebdoExport";
 import { toOptionalNumber } from "@/lib/formatResumeAmount";
+import { canonicalSemaine } from "@/lib/semaineCanonical";
 import { useToast } from "@/hooks/use-toast";
 
 const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
@@ -33,7 +34,7 @@ const DEFAULT_BATIMENTS = ["B1", "B2", "B3", "B4"];
  * batiments is optional; defaults to B1,B2,B3,B4.
  * effectifRestantFinSemaine and totalNbreProduction come from getResumeSummary (same source as Prix de revient).
  * INDICE EAU/ALIMENT (résumé) = Σ CONSO. EAU (L) sur la semaine / CONSOMME ALIMENT semaine (kg).
- * MORTALITE DU TRANSPORT (Tous bâtiments) : cumul = somme des mortalités S1 (NBRE) sur chaque bâtiment × sexe ; les CUMUL journaliers ajoutent ce total au cumul de la semaine affichée.
+ * MORTALITE DU TRANSPORT (Tous bâtiments) : somme des valeurs calculées comme sur le suivi par bâtiment (WeeklyTrackingTable) pour chaque bâtiment×sexe actif (effectif mis en place > 0) — S1 : NBRE du 1er jour ; S2+ : cumul fin semaine précédente (transport-cumul). Les CUMUL journaliers ajoutent ce total au cumul de la semaine affichée.
  * « Suivi Hebdomadaire — Tous bâtiments » (dans WeeklyProductionSummaryContent) agrège par date la somme des colonnes
  * sur tous les bâtiments et Mâle+Femelle, avec fusion reporting journalier + suivi hebdo comme par bâtiment.
  * Number display uses grouped thousands in WeeklyProductionSummaryContent and exports (formatGroupedNumber).
@@ -48,7 +49,8 @@ export default function ResumeProductionHebdoPage() {
   const batimentsParam = searchParams.get("batiments");
 
   const farmId = farmIdParam ? parseInt(farmIdParam, 10) : null;
-  
+  const semaineCanon = useMemo(() => canonicalSemaine(semaine), [semaine]);
+
   // Memoize allBatiments to prevent unnecessary re-renders
   const allBatiments = useMemo(
     () =>
@@ -72,7 +74,7 @@ export default function ResumeProductionHebdoPage() {
 
   // Fetch farms and coutSummary in parallel
   useEffect(() => {
-    if (!farmId || !lot || !semaine || allBatiments.length === 0) {
+    if (!farmId || !lot || !semaineCanon || allBatiments.length === 0) {
       setCoutSummary(null);
       setLoading(false);
       return;
@@ -85,7 +87,7 @@ export default function ResumeProductionHebdoPage() {
       api.suiviCoutHebdo.getResumeSummary({
         farmId,
         lot,
-        semaine,
+        semaine: semaineCanon,
         batiments: allBatiments.join(","),
       }).catch(() => null),
     ]).then(([farmsData, summaryData]) => {
@@ -93,7 +95,7 @@ export default function ResumeProductionHebdoPage() {
       setCoutSummary(summaryData ?? null);
       setLoading(false);
     });
-  }, [farmId, lot, semaine, allBatiments]);
+  }, [farmId, lot, semaineCanon, allBatiments]);
 
   const effectifRestantFinSemaine = toOptionalNumber(coutSummary?.effectifRestantFinSemaine);
   const totalNbreProduction = toOptionalNumber(coutSummary?.totalNbreProduction);

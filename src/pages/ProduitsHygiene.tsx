@@ -1030,11 +1030,6 @@ export default function ProduitsHygiene() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
                   <h2 className="text-lg font-display font-bold text-foreground">Vide sanitaire</h2>
-                  {!isReadOnly && (canCreate || canUpdate) && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Une ligne = une livraison. Enregistrez avec ✓ (création / mise à jour).
-                    </p>
-                  )}
                 </div>
                 {!isReadOnly && canCreate && (
                   <button

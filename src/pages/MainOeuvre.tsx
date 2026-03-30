@@ -745,14 +745,13 @@ export default function MainOeuvre() {
             </TooltipProvider>
           )}
         </div>
-        <p>
-          Date, employé et temps de travail (1 jour ou 1/2 demijour)
-          {isReadOnly && (
-            <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+        {isReadOnly && (
+          <p>
+            <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               Consultation seule
             </span>
-          )}
-        </p>
+          </p>
+        )}
       </div>
 
       {showFarmSelector ? (
@@ -946,11 +945,6 @@ export default function MainOeuvre() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
                   <h2 className="text-lg font-display font-bold text-foreground">Main d&apos;œuvre</h2>
-                  {!isReadOnly && canCreate && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Ajoutez un ou plusieurs employés (Confirmer), puis enregistrez la ligne avec ✓. Les lignes déjà enregistrées peuvent être modifiées par les profils autorisés (✓ pour mettre à jour).
-                    </p>
-                  )}
                 </div>
                 {canCreate && (
                   <div className="flex gap-2">

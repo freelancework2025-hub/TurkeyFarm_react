@@ -126,7 +126,7 @@ export default function StockTrackingTable({
             STOCK
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}. B1 : Stock_prev + Livraisons − Stock. B2+ : Stock_transfer − Stock (dernier bâtiment actif du même sexe dans la semaine).
+            Lot {lot} — {semaine} — {sex}{batiment ? ` — ${batiment}` : ""}
           </p>
         </div>
         {canEditStock && (

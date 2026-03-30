@@ -808,14 +808,13 @@ export default function DepensesDivers() {
             </TooltipProvider>
           )}
         </div>
-        <p>
-          Suivi des dépenses divers par lot — date, âge, désignation, fournisseur, N°BL, QTE, prix, montant
-          {isReadOnly && (
-            <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+        {isReadOnly && (
+          <p>
+            <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               Consultation seule
             </span>
-          )}
-        </p>
+          </p>
+        )}
       </div>
 
       {showFarmSelector ? (
@@ -1259,11 +1258,6 @@ export default function DepensesDivers() {
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
                   <h2 className="text-lg font-display font-bold text-foreground">Dépenses divers</h2>
-                  {!isReadOnly && (canCreate || canUpdate) && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Chaque ligne = un jour. Enregistrez avec ✓ ; les lignes déjà enregistrées restent modifiables si vous avez le droit de mise à jour.
-                    </p>
-                  )}
                 </div>
                 {!isReadOnly && canCreate && (
                   <div className="flex gap-2">

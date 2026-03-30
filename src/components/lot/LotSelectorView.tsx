@@ -128,7 +128,9 @@ export default function LotSelectorView({
             {title}
           </h2>
         )}
-        <p className="text-sm text-muted-foreground">{description}</p>
+        {description.trim() ? (
+          <p className="text-sm text-muted-foreground">{description}</p>
+        ) : null}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {items.map(({ lot, closed }) => (
