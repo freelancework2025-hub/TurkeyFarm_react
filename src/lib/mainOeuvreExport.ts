@@ -1,12 +1,18 @@
 /**
  * Export utilities for Main d'œuvre.
  * Uses generic tableExport (ITableExportConfig) per DIP.
- * Columns: AGE, Date, Semaine, Employé (nom complet), Temps de travail, [Montant], Observation.
- * Employé column shows comma-separated list of employers' full names (Prénom Nom).
+ * Employé column: comma-separated full names — shared with MainOeuvre.tsx via mainOeuvreShared.
  */
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import {
+  getMainOeuvreTableHeaders,
+  mainOeuvreEmployeListFromEntries,
+  mainOeuvreRowMontant,
+  mainOeuvreRowTotalJours,
+} from "@/lib/mainOeuvreShared";
+import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 
 export interface EmployerEntryExport {
   employerId: number;
@@ -42,27 +48,20 @@ export interface MainOeuvreExportParams {
   showMontantColumn: boolean;
 }
 
-function formatEmployerNomComplet(prenom: string | null | undefined, nom: string | null | undefined): string {
-  const p = (prenom ?? "").trim();
-  const n = (nom ?? "").trim();
-  if (!p && !n) return "—";
-  return p && n ? `${p} ${n}` : p || n;
-}
-
-function entryJours(fullDay: boolean): number {
-  return fullDay ? 1 : 0.5;
-}
-
-function rowTotalJours(entries: EmployerEntryExport[]): number {
-  return entries.reduce((s, e) => s + entryJours(e.fullDay), 0);
-}
-
-function rowMontant(row: MainOeuvreRowExport, employers: EmployerForMontant[]): number {
-  return row.entries.reduce((sum, e) => {
-    const emp = employers.find((x) => x.id === e.employerId);
-    const sal = emp?.salaire != null ? Number(emp.salaire) : 0;
-    return sum + sal * entryJours(e.fullDay);
-  }, 0);
+function pdfRowMapper(showMontant: boolean): (cells: (string | number)[]) => string[] {
+  const tempsIdx = 4;
+  const montantIdx = 5;
+  return (cells) =>
+    cells.map((v, i) => {
+      if (i === 0) return v === "—" ? "—" : String(v);
+      if (i === tempsIdx && typeof v === "number" && Number.isFinite(v)) {
+        return formatGroupedNumber(v, 2);
+      }
+      if (showMontant && i === montantIdx && typeof v === "number" && Number.isFinite(v)) {
+        return formatGroupedNumber(v, 2);
+      }
+      return String(v);
+    });
 }
 
 function toConfig(params: MainOeuvreExportParams): ITableExportConfig {
@@ -80,28 +79,14 @@ function toConfig(params: MainOeuvreExportParams): ITableExportConfig {
     showMontantColumn,
   } = params;
 
-  const columns = showMontantColumn
-    ? ["AGE", "Date", "Semaine", "Employé (nom complet)", "Temps de travail", "Montant", "Observation"]
-    : ["AGE", "Date", "Semaine", "Employé (nom complet)", "Temps de travail", "Observation"];
+  const columns = [...getMainOeuvreTableHeaders(showMontantColumn)];
 
   const rowToArray = (row: MainOeuvreRowExport, age: string | number): (string | number)[] => {
-    const employeList =
-      row.entries.length > 0
-        ? row.entries
-            .map((e) => formatEmployerNomComplet(e.employerPrenom, e.employerNom))
-            .filter((n) => n !== "—")
-            .join(", ") || "—"
-        : "—";
-    const temps = row.entries.length > 0 ? rowTotalJours(row.entries) : "—";
-    const base: (string | number)[] = [
-      age,
-      row.date || "—",
-      row.sem || "—",
-      employeList,
-      temps,
-    ];
+    const employeList = mainOeuvreEmployeListFromEntries(row.entries);
+    const temps = row.entries.length > 0 ? mainOeuvreRowTotalJours(row.entries) : "—";
+    const base: (string | number)[] = [age, row.date || "—", row.sem || "—", employeList, temps];
     if (showMontantColumn) {
-      const montant = row.entries.length > 0 ? rowMontant(row, employers) : "—";
+      const montant = row.entries.length > 0 ? mainOeuvreRowMontant(row.entries, employers) : "—";
       base.push(montant);
     }
     base.push(row.observation?.trim() || "—");
@@ -122,13 +107,25 @@ function toConfig(params: MainOeuvreExportParams): ITableExportConfig {
   if (showMontantColumn) cumulRow.push(cumulMontant);
   cumulRow.push("");
 
-  const numberFormatColumns: number[] = showMontantColumn
-    ? [4, 5] // Temps (index 4), Montant (index 5)
-    : [4]; // Temps (index 4)
+  const obsIdx = showMontantColumn ? 6 : 5;
+  const weekTotalPdfRow = weekTotalRow.map((v, i) => {
+    if (i === 4 && typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    if (showMontantColumn && i === 5 && typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    if (i === obsIdx && v === "") return "";
+    return String(v);
+  });
+  const cumulPdfRow = cumulRow.map((v, i) => {
+    if (i === 4 && typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    if (showMontantColumn && i === 5 && typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    if (i === obsIdx && v === "") return "";
+    return String(v);
+  });
+
+  const numberFormatColumns: number[] = showMontantColumn ? [4, 5] : [4];
 
   const columnWidths = showMontantColumn
-    ? [12, 14, 10, 42, 14, 12, 22] // AGE, Date, Semaine, Employé, Temps, Montant, Observation
-    : [12, 14, 10, 42, 14, 22]; // AGE, Date, Semaine, Employé, Temps, Observation
+    ? [12, 14, 10, 42, 14, 12, 22]
+    : [12, 14, 10, 42, 14, 22];
 
   return {
     title: "MAIN D'ŒUVRE",
@@ -140,6 +137,9 @@ function toConfig(params: MainOeuvreExportParams): ITableExportConfig {
     rowToArray,
     weekTotalRow,
     cumulRow,
+    weekTotalPdfRow,
+    cumulPdfRow,
+    pdfRowMapper: pdfRowMapper(showMontantColumn),
     ageByRowId,
     fileNamePrefix: "Main_Oeuvre",
     numberFormatColumns,

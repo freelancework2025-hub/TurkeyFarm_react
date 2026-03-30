@@ -9,8 +9,16 @@
 
 import { useState, useMemo } from "react";
 import { api, type SuiviCoutHebdoResponse } from "@/lib/api";
-import { formatGroupedNumber, formatResumeAmount, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { formatResumeAmount, toOptionalNumber } from "@/lib/formatResumeAmount";
 import { buildDisplayRows, getEffectiveCumul, toNum } from "@/lib/resumeCoutsHebdoDisplay";
+import {
+  getResumeCoutsPrixRevientHeaders,
+  RESUME_COUTS_PRIX_REVIENT_HEADER_CLASS,
+  RESUME_COUTS_FOOTER_TOTAL_LABEL,
+  RESUME_COUTS_INDICATEUR_TABLE_HEADERS,
+  RESUME_COUTS_INDICATEUR_HEADER_CLASS,
+  formatResumeCoutsPct,
+} from "@/lib/resumeCoutsHebdoShared";
 import { Loader2 } from "lucide-react";
 
 export interface ResumeCoutsHebdoTableProps {
@@ -49,11 +57,6 @@ const EDITABLE_DESIGNATIONS = [DESIGNATION_AMORTISSEMENT, DESIGNATION_DINDONNEAU
 function isEditableByRespTech(designation: string | null | undefined): boolean {
   const d = designation?.toUpperCase();
   return EDITABLE_DESIGNATIONS.some((ed) => ed === d);
-}
-
-function formatPct(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return `${formatGroupedNumber(value, 2)} %`;
 }
 
 /** Row is saved when it has a persistent id from API (id > 0). Placeholders have id 0; computed rows id < 0. */
@@ -164,21 +167,11 @@ export default function ResumeCoutsHebdoTable({
         <table className="table-farm w-full min-w-[520px] text-sm">
           <thead>
             <tr className="border-b border-border bg-sky-100 dark:bg-sky-950/40">
-              <th className="px-4 py-2.5 text-left font-semibold text-foreground border-r border-border min-w-[180px]">
-                DESIGNATION
-              </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border min-w-[112px] !text-center">
-                {semaine}
-              </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border min-w-[112px] !text-center">
-                CUMUL
-              </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground border-r border-border whitespace-nowrap min-w-[112px] !text-center">
-                CUMUL DH/KG
-              </th>
-              <th className="px-3 py-2.5 text-center font-semibold text-foreground min-w-[88px] !text-center">
-                %
-              </th>
+              {getResumeCoutsPrixRevientHeaders(semaine).map((label, i) => (
+                <th key={`${label}-${i}`} className={RESUME_COUTS_PRIX_REVIENT_HEADER_CLASS[i]}>
+                  {label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -268,7 +261,7 @@ export default function ResumeCoutsHebdoTable({
                     {formatResumeAmount(cumulDhKg)}
                   </td>
                   <td className="px-3 py-2 text-center tabular-nums text-foreground whitespace-nowrap">
-                    {formatPct(pct)}
+                    {formatResumeCoutsPct(pct)}
                   </td>
                 </tr>
               );
@@ -276,7 +269,7 @@ export default function ResumeCoutsHebdoTable({
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-border bg-sky-100 dark:bg-sky-950/40 font-semibold text-foreground">
-              <td className="px-4 py-2.5 border-r border-border">Total</td>
+              <td className="px-4 py-2.5 border-r border-border">{RESUME_COUTS_FOOTER_TOTAL_LABEL}</td>
               <td className="px-3 py-2.5 border-r border-border text-center tabular-nums whitespace-nowrap">
                 {formatResumeAmount(totalS1)}
               </td>
@@ -287,7 +280,7 @@ export default function ResumeCoutsHebdoTable({
                 {formatResumeAmount(totalCumulDhKg)}
               </td>
               <td className="px-3 py-2.5 text-center tabular-nums whitespace-nowrap">
-                {totalCumul > 0 ? formatPct(100) : formatPct(null)}
+                {totalCumul > 0 ? formatResumeCoutsPct(100) : formatResumeCoutsPct(null)}
               </td>
             </tr>
           </tfoot>
@@ -300,12 +293,11 @@ export default function ResumeCoutsHebdoTable({
           <table className="table-farm w-full min-w-[320px] text-sm border-t border-border">
             <thead>
               <tr className="bg-muted/80 border-b border-border">
-                <th className="px-4 py-2.5 text-left font-semibold text-foreground min-w-[200px]">
-                  INDICATEUR
-                </th>
-                <th className="px-3 py-2.5 text-center font-semibold text-foreground border-l border-border min-w-[128px] !text-center">
-                  VALEUR
-                </th>
+                {RESUME_COUTS_INDICATEUR_TABLE_HEADERS.map((h) => (
+                  <th key={h} className={RESUME_COUTS_INDICATEUR_HEADER_CLASS[h]}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>

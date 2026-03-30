@@ -6,6 +6,11 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { EmployerResponse } from "@/lib/api";
+import {
+  EMPLOYES_EXPORT_TITLE,
+  EMPLOYES_TABLE_HEADERS,
+  formatEmployeSalaireDisplay,
+} from "@/lib/employesShared";
 
 export interface EmployesExportParams {
   employers: EmployerResponse[];
@@ -21,11 +26,6 @@ function safeFileName(parts: string[]): string {
   return parts.join("_").replace(/[^\w\-_]/g, "_");
 }
 
-function formatSalaire(s: number | null | undefined): string {
-  if (s == null || Number.isNaN(s)) return "—";
-  return Number(s).toFixed(2).replace(".", ",");
-}
-
 export async function exportToExcel(params: EmployesExportParams): Promise<void> {
   const { employers } = params;
 
@@ -33,8 +33,10 @@ export async function exportToExcel(params: EmployesExportParams): Promise<void>
   workbook.creator = "ElevagePro";
   let currentRow = 1;
 
+  const colCount = EMPLOYES_TABLE_HEADERS.length;
+
   const addTitle = (ws: ExcelJS.Worksheet, text: string) => {
-    ws.mergeCells(currentRow, 1, currentRow, 4);
+    ws.mergeCells(currentRow, 1, currentRow, colCount);
     const cell = ws.getCell(currentRow, 1);
     cell.value = text;
     cell.font = { size: 14, bold: true, color: { argb: HEADER_TEXT } };
@@ -60,17 +62,17 @@ export async function exportToExcel(params: EmployesExportParams): Promise<void>
     views: [{ state: "frozen", ySplit: 8, activeCell: "A9", showGridLines: true }],
   });
   ws.columns = [
-    { width: 18 }, // N° Employé
+    { width: 18 }, // Id (n° employé)
     { width: 24 }, // Nom
     { width: 24 }, // Prénom
     { width: 14 }, // Salaire
   ];
 
-  addTitle(ws, "LISTE DES EMPLOYÉS");
+  addTitle(ws, EMPLOYES_EXPORT_TITLE);
   addInfoBlock(ws, [["Nombre d'employés", employers.length]]);
 
   addTitle(ws, "Employés");
-  const headers = ["N° Employé", "Nom", "Prénom", "Salaire"];
+  const headers = [...EMPLOYES_TABLE_HEADERS];
   for (let c = 0; c < headers.length; c++) {
     const cell = ws.getCell(currentRow, c + 1);
     cell.value = headers[c];
@@ -85,8 +87,14 @@ export async function exportToExcel(params: EmployesExportParams): Promise<void>
     ws.getCell(currentRow, 1).value = e.numeroEmploye ?? "—";
     ws.getCell(currentRow, 2).value = e.nom ?? "—";
     ws.getCell(currentRow, 3).value = e.prenom ?? "—";
-    ws.getCell(currentRow, 4).value = formatSalaire(e.salaire);
-    for (let c = 1; c <= 4; c++) {
+    const salCell = ws.getCell(currentRow, 4);
+    if (e.salaire != null && !Number.isNaN(Number(e.salaire))) {
+      salCell.value = Number(e.salaire);
+      salCell.numFmt = "#,##0.00";
+    } else {
+      salCell.value = "—";
+    }
+    for (let c = 1; c <= colCount; c++) {
       ws.getCell(currentRow, c).border = BORDERS_ALL;
       if (idx % 2 === 1) ws.getCell(currentRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
     }
@@ -116,7 +124,7 @@ export function exportToPdf(params: EmployesExportParams): void {
   doc.setTextColor(247, 246, 243);
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
-  doc.text("LISTE DES EMPLOYÉS", margin, 12);
+  doc.text(EMPLOYES_EXPORT_TITLE, margin, 12);
 
   doc.setFillColor(225, 224, 219);
   doc.setTextColor(38, 36, 21);
@@ -127,12 +135,12 @@ export function exportToPdf(params: EmployesExportParams): void {
   doc.setTextColor(0, 0, 0);
   let y = 32;
 
-  const headers = ["N° Employé", "Nom", "Prénom", "Salaire"];
+  const headers = [...EMPLOYES_TABLE_HEADERS];
   const body = employers.map((e) => [
     e.numeroEmploye ?? "—",
     e.nom ?? "—",
     e.prenom ?? "—",
-    formatSalaire(e.salaire),
+    formatEmployeSalaireDisplay(e.salaire),
   ]);
 
   autoTable(doc, {

@@ -9,6 +9,7 @@ import {
   type EmployerRequest,
 } from "@/lib/api";
 import { exportToExcel, exportToPdf } from "@/lib/employesExport";
+import { EMPLOYES_TABLE_HEADERS, formatEmployeSalaireDisplay } from "@/lib/employesShared";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -55,6 +56,13 @@ import { Label } from "@/components/ui/label";
  * ADMINISTRATEUR / RESPONSABLE_TECHNIQUE: full CRUD.
  * BACKOFFICE_EMPLOYER: read-only (link visible, page view only).
  */
+
+const EMPLOYES_HEADER_CLASS: Record<(typeof EMPLOYES_TABLE_HEADERS)[number], string> = {
+  Id: "min-w-[100px]",
+  Nom: "min-w-[120px]",
+  Prénom: "min-w-[120px]",
+  Salaire: "min-w-[100px]",
+};
 
 export default function Employes() {
   const { isReadOnly, canCreate, canUpdate, canDelete, hasFullAccess } = useAuth();
@@ -223,9 +231,6 @@ export default function Employes() {
     }
   };
 
-  const formatSalaire = (s: number | null | undefined): string =>
-    s != null ? `${Number(s).toFixed(2)}` : "—";
-
   return (
     <AppLayout>
       <div className="page-header">
@@ -304,10 +309,11 @@ export default function Employes() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="min-w-[100px]">Id</TableHead>
-                  <TableHead className="min-w-[120px]">Nom</TableHead>
-                  <TableHead className="min-w-[120px]">Prénom</TableHead>
-                  <TableHead className="min-w-[100px]">Salaire</TableHead>
+                  {EMPLOYES_TABLE_HEADERS.map((label) => (
+                    <TableHead key={label} className={EMPLOYES_HEADER_CLASS[label]}>
+                      {label}
+                    </TableHead>
+                  ))}
                   {!isReadOnly && (
                     <TableHead className="w-[100px] text-right">
                       Actions
@@ -332,7 +338,7 @@ export default function Employes() {
                       <TableCell className="font-medium">{e.nom}</TableCell>
                       <TableCell>{e.prenom}</TableCell>
                       <TableCell>
-                        {formatSalaire(e.salaire ?? undefined)}
+                        {formatEmployeSalaireDisplay(e.salaire ?? undefined)}
                       </TableCell>
                       {!isReadOnly && (
                         <TableCell className="text-right">

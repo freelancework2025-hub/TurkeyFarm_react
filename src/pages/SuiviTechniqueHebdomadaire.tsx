@@ -32,6 +32,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusResponse, getStoredSelectedFarm } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { exportToExcel, exportToPdf } from "@/lib/suiviTechniqueBatimentExport";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { canonicalSemaine } from "@/lib/semaineCanonical";
@@ -87,6 +88,7 @@ const TAB_TO_API_SEX: Record<TabType, string> = { male: "Mâle", femelle: "Femel
  * Permissions: per permission.mdc (all roles; create/update/delete by role).
  * RESPONSABLE_FERME: can add and save new data in child tables; saved rows/cells are read-only.
  * Number display: grouped thousands (space) + dot decimal via formatGroupedNumber (same as Résumé coûts / production).
+ * Colonnes du tableau « Suivi hebdomadaire » (grille + exports Excel/PDF section 3) : `@/lib/suiviTechniqueHebdomadaireShared` — consommé par WeeklyTrackingTable et suiviTechniqueBatimentExport.
  */
 export default function SuiviTechniqueHebdomadaire() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -105,7 +107,15 @@ export default function SuiviTechniqueHebdomadaire() {
   /** For all users: show suivi content only when one batiment is selected. To change batiment, user must return to batiment selection. */
   const hasContentView = hasBatimentInUrl;
 
-  const { isAdministrateur, isResponsableTechnique, isBackofficeEmployer, canAccessAllFarms, isReadOnly, selectedFarmId: authSelectedFarmId } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    isBackofficeEmployer,
+    canAccessAllFarms,
+    isReadOnly,
+    selectedFarmId: authSelectedFarmId,
+  } = useAuth();
   const canAccessResumeCouts = isAdministrateur || isResponsableTechnique || isBackofficeEmployer;
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -116,7 +126,19 @@ export default function SuiviTechniqueHebdomadaire() {
   const [lots, setLots] = useState<string[]>([]);
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
-  const isSelectedLotClosed = Boolean(hasLotInUrl && lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    hasLotInUrl &&
+      lotParam.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotParam.trim()), lotAccessCtx)
+  );
   
   /** Setup info data from InfosSetup page - contains building/sex/effectif configurations */
   const [setupInfoData, setSetupInfoData] = useState<SetupInfoResponse[]>([]);
@@ -560,20 +582,21 @@ export default function SuiviTechniqueHebdomadaire() {
                 loading={lotsLoading}
                 onSelectLot={(lot) => {
                   const status = lotsWithStatus.find((l) => l.lot === lot);
-                  if (status?.closed) {
+                  if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                     toast({
                       title: "Lot fermé",
-                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      description:
+                        "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                       variant: "destructive",
                     });
                     return;
                   }
                   setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot });
                 }}
-                onNewLot={(lot) => setSearchParams(reportingFarmId != null ? { farmId: String(reportingFarmId), lot } : { lot })}
-                canCreate={!isReadOnly}
+                canCreate={false}
                 title="Étape 1 : Choisir un lot"
-                emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
+                description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+                emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
               />
             </>
           ) : !hasSemaineInUrl ? (

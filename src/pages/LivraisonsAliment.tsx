@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Building2, Plus, Check, Trash2, Calendar, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
@@ -25,8 +25,14 @@ import {
   type LivraisonAlimentRequest,
   type LotWithStatusResponse,
 } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
 import { exportLivraisonsAlimentExcel, exportToPdf } from "@/lib/livraisonsAlimentExport";
+import {
+  LIVRAISONS_ALIMENT_TABLE_HEADERS,
+  livraisonsAlimentEffectiveMontantForTotal,
+} from "@/lib/livraisonsAlimentShared";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
@@ -46,6 +52,23 @@ import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount"
 /** Quick-pick S1-S36; same AGE rule as earlier weeks (Sn -> ages after (n-1)*7). S37+ via champ libre ci-dessous. */
 const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
+
+const LIVRAISONS_ALIMENT_HEADER_CLASS: Record<(typeof LIVRAISONS_ALIMENT_TABLE_HEADERS)[number], string> = {
+  AGE: "min-w-[70px]",
+  DATE: "min-w-[100px]",
+  SEM: "min-w-[60px]",
+  DÉSIGNATION: "min-w-[180px]",
+  FOURNISSEUR: "min-w-[120px]",
+  "N° BL": "min-w-[90px]",
+  "N° BR": "min-w-[90px]",
+  QTE: "min-w-[128px] w-[8.5rem] !text-center",
+  SEX: "min-w-[150px] w-[9.5rem] !text-center",
+  PRIX: "min-w-[80px] !text-center",
+  MONTANT: "min-w-[90px] !text-center",
+};
+
+/** 11 data columns + ✓ + actions */
+const LIVRAISONS_ALIMENT_TABLE_COL_COUNT = LIVRAISONS_ALIMENT_TABLE_HEADERS.length + 2;
 
 interface LivraisonRow {
   id: string;
@@ -92,9 +115,9 @@ function formatMoneyDisplay(s: string): string {
 function formatMontantCell(row: LivraisonRow): string {
   const m = toOptionalNumber(row.montant);
   if (m != null) return formatGroupedNumber(m, 2);
-  const q = toOptionalNumber(row.qte);
+  const q = resolvedQteFromString(row.qte);
   const p = toOptionalNumber(row.prixPerUnit);
-  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  if (q != null && p != null && p >= 0) return formatGroupedNumber(q * p, 2);
   return "—";
 }
 
@@ -134,7 +157,18 @@ export default function LivraisonsAliment() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    canAccessAllFarms,
+    isReadOnly,
+    canCreate,
+    canUpdate,
+    hasFullAccess,
+    selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
+  } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
   const [newSemaineInput, setNewSemaineInput] = useState("");
@@ -257,7 +291,18 @@ export default function LivraisonsAliment() {
     [rows, previousLotLastDate]
   );
 
-  const isSelectedLotClosed = Boolean(lotFilter.trim() && lotsWithStatus.find((l) => l.lot === lotFilter.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    lotFilter.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotFilter.trim()), lotAccessCtx)
+  );
 
   const loadMovements = useCallback(async () => {
     if (showFarmSelector || !lotFilter.trim() || isSelectedLotClosed) return;
@@ -403,9 +448,9 @@ export default function LivraisonsAliment() {
         const updated = { ...r, [field]: value };
         // QTE is user-entered aliment quantity only; montant = qte * prix
         if (field === "qte" || field === "prixPerUnit") {
-          const qte = toNum(updated.qte);
+          const qte = resolvedQteFromString(updated.qte);
           const prix = toNum(updated.prixPerUnit);
-          if (qte >= 0 && prix >= 0) {
+          if (qte != null && prix >= 0) {
             updated.montant = (qte * prix).toFixed(2);
           }
         }
@@ -414,19 +459,21 @@ export default function LivraisonsAliment() {
         if (field === "sex" || field === "qte") {
           const currentSex = field === "sex" ? value : r.sex;
           const currentQteStr = field === "qte" ? value : r.qte;
-          const currentQte = toNum(currentQteStr);
+          const currentQte =
+            resolvedQteFromString(currentQteStr.trim()) ?? toNum(currentQteStr);
 
           if (currentSex === "MALE") {
-            updated.maleQty = currentQte > 0 ? currentQte.toString() : "";
+            updated.maleQty = currentQte !== 0 ? String(Math.round(currentQte)) : "";
             updated.femaleQty = "";
           } else if (currentSex === "FEMELLE") {
-            updated.femaleQty = currentQte > 0 ? currentQte.toString() : "";
+            updated.femaleQty = currentQte !== 0 ? String(Math.round(currentQte)) : "";
             updated.maleQty = "";
           } else if (currentSex === "MALE & FEMELLE") {
-            const maleHalf = Math.floor(currentQte / 2);
-            const femaleHalf = currentQte - maleHalf;
-            updated.maleQty = maleHalf > 0 ? maleHalf.toString() : "";
-            updated.femaleQty = femaleHalf > 0 ? femaleHalf.toString() : "";
+            const rounded = Math.round(currentQte);
+            const maleHalf = Math.floor(rounded / 2);
+            const femaleHalf = rounded - maleHalf;
+            updated.maleQty = maleHalf !== 0 ? maleHalf.toString() : "";
+            updated.femaleQty = femaleHalf !== 0 ? femaleHalf.toString() : "";
           } else if (!currentSex) {
             // Option to clear out the split if none is selected, or leave manual intact
             // Leaving it intact is safer if users manually fill them without picking sex
@@ -472,7 +519,9 @@ export default function LivraisonsAliment() {
   const rowToRequest = (r: LivraisonRow, computedAge?: number): LivraisonAlimentRequest => {
     const male = toNum(r.maleQty);
     const female = toNum(r.femaleQty);
-    const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const qteResolved = r.qte.trim() !== "" ? resolvedQteFromString(r.qte) : null;
+    const qte =
+      qteResolved != null && Number.isFinite(qteResolved) ? Math.round(qteResolved) : null;
     const prix = toNum(r.prixPerUnit);
     const montant = r.montant.trim() !== "" ? toNum(r.montant) : (qte != null && prix >= 0 ? qte * prix : null);
     // SEM = S1, S2... (semaine label); AGE = sequential 1,2,3… (computed when saving, like Électricité)
@@ -495,10 +544,10 @@ export default function LivraisonsAliment() {
       numeroBonReception: r.numeroBonReception.trim() || null,
       qte: qte ?? null,
       sex: r.sex.trim() !== "" ? r.sex.trim() : null,
-      maleQty: male > 0 ? male : null,
-      femaleQty: female > 0 ? female : null,
+      maleQty: Number.isFinite(male) && Math.round(male) !== 0 ? Math.round(male) : null,
+      femaleQty: Number.isFinite(female) && Math.round(female) !== 0 ? Math.round(female) : null,
       prixPerUnit: prix > 0 ? prix : null,
-      montant: montant != null && montant >= 0 ? montant : null,
+      montant: montant != null && Number.isFinite(montant) ? montant : null,
       movementType: r.movementType || "DELIVERY",
       notes: r.notes.trim() || null,
     };
@@ -598,9 +647,9 @@ export default function LivraisonsAliment() {
   const weekTotal = (() => {
     const t = { qte: 0, prix: 0, montant: 0, maleQty: 0, femaleQty: 0 };
     for (const r of currentRows) {
-      t.qte += toNum(r.qte);
+      t.qte += resolvedQteFromString(r.qte) ?? 0;
       t.prix += toNum(r.prixPerUnit);
-      t.montant += toNum(r.montant);
+      t.montant += livraisonsAlimentEffectiveMontantForTotal(r);
       t.maleQty += toNum(r.maleQty);
       t.femaleQty += toNum(r.femaleQty);
     }
@@ -617,9 +666,9 @@ export default function LivraisonsAliment() {
     for (const sem of semsUpTo) {
       const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
-        running.qte += toNum(r.qte);
+        running.qte += resolvedQteFromString(r.qte) ?? 0;
         running.prix += toNum(r.prixPerUnit);
-        running.montant += toNum(r.montant);
+        running.montant += livraisonsAlimentEffectiveMontantForTotal(r);
         running.maleQty += toNum(r.maleQty);
         running.femaleQty += toNum(r.femaleQty);
       }
@@ -780,18 +829,20 @@ export default function LivraisonsAliment() {
             loading={lotsLoading}
             onSelectLot={(lot) => {
               const status = lotsWithStatus.find((l) => l.lot === lot);
-              if (status?.closed) {
+              if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                 toast({
                   title: "Lot fermé",
-                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  description:
+                    "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                   variant: "destructive",
                 });
                 return;
               }
               setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
             }}
-            onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-            canCreate={canCreate}
+            canCreate={false}
+            description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+            emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
             title="Choisir un lot — Livraisons Aliment"
           />
         </>
@@ -923,17 +974,21 @@ export default function LivraisonsAliment() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…) sur tout le lot">AGE</th>
-                      <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
-                      <th className="min-w-[180px]">DÉSIGNATION</th>
-                      <th className="min-w-[120px]">FOURNISSEUR</th>
-                      <th className="min-w-[90px]">N° BL</th>
-                      <th className="min-w-[90px]">N° BR</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[150px] w-[9.5rem] !text-center">SEX</th>
-                      <th className="min-w-[80px] !text-center">PRIX</th>
-                      <th className="min-w-[90px] !text-center">MONTANT</th>
+                      {LIVRAISONS_ALIMENT_TABLE_HEADERS.map((label) => (
+                        <th
+                          key={label}
+                          className={LIVRAISONS_ALIMENT_HEADER_CLASS[label]}
+                          title={
+                            label === "AGE"
+                              ? "Âge séquentiel (1, 2, 3…) sur tout le lot"
+                              : label === "SEM"
+                                ? "Semaine (S1, S2…)"
+                                : undefined
+                          }
+                        >
+                          {label}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">✓</th>
                       <th className="w-10"></th>
                     </tr>
@@ -941,7 +996,7 @@ export default function LivraisonsAliment() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={15} className="p-8 text-center text-muted-foreground">
+                        <td colSpan={LIVRAISONS_ALIMENT_TABLE_COL_COUNT} className="p-8 text-center text-muted-foreground">
                           Chargement…
                         </td>
                       </tr>
@@ -1036,8 +1091,8 @@ export default function LivraisonsAliment() {
                                         updateRow(row.id, "qte", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null || !Number.isFinite(n)) {
                                         updateRow(row.id, "qte", "");
                                       } else {
                                         updateRow(row.id, "qte", n.toFixed(2));

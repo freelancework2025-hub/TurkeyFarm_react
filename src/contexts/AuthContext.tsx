@@ -37,12 +37,12 @@ type AuthState = {
 
 /**
  * Permission Matrix:
- * | Role                    | Read | Create | Update | Delete |
- * |-------------------------|------|--------|--------|--------|
- * | ADMINISTRATEUR          |  ✓   |   ✓    |   ✓    |   ✓    |
- * | RESPONSABLE_TECHNIQUE   |  ✓   |   ✓    |   ✓    |   ✓    |
- * | BACKOFFICE_EMPLOYER     |  ✓   |   ✗    |   ✗    |   ✗    |
- * | RESPONSABLE_FERME       |  ✓   |   ✓    |   ✗    |   ✗    |
+ * | Role                    | Read | Create rows | New lot (InfosSetup only) | Update | Delete |
+ * |-------------------------|------|-------------|---------------------------|--------|--------|
+ * | ADMINISTRATEUR          |  ✓   |     ✓       |            ✓              |   ✓    |   ✓    |
+ * | RESPONSABLE_TECHNIQUE   |  ✓   |     ✓       |            ✓              |   ✓    |   ✓    |
+ * | BACKOFFICE_EMPLOYER     |  ✓   |     ✗       |            ✗              |   ✗    |   ✗    |
+ * | RESPONSABLE_FERME       |  ✓   |     ✓       |            ✗              |   ✗    |   ✗    |
  */
 type AuthContextValue = AuthState & {
   /**
@@ -75,6 +75,12 @@ type AuthContextValue = AuthState & {
    * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME
    */
   canCreate: boolean;
+
+  /**
+   * True if user may add a new lot from the lot selector (Nouveau lot).
+   * Intended for the InfosSetup page only (Nouveau lot) — RT/Admin. Other pages list existing lots only.
+   */
+  canCreateNewLot: boolean;
   
   /** 
    * True if user can UPDATE existing platform data records.
@@ -346,6 +352,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * BACKOFFICE_EMPLOYER cannot create
    */
   const canCreate = hasFullAccess || isResponsableFerme;
+
+  /** New lot registration in UI: RT and Admin only (RF / back-office use existing lots). */
+  const canCreateNewLot = hasFullAccess;
   
   /** 
    * Can UPDATE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only
@@ -392,6 +401,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       farmName,
       // Permission properties
       canCreate,
+      canCreateNewLot,
       canUpdate,
       canDelete,
       hasFullAccess,
@@ -404,7 +414,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }),
     [
       state, login, logout, isUserManager, selectedFarmId, selectedFarmName, farmId, farmName,
-      canCreate, canUpdate, canDelete, hasFullAccess, canAccessAllFarms, isReadOnly,
+      canCreate, canCreateNewLot, canUpdate, canDelete, hasFullAccess, canAccessAllFarms, isReadOnly,
       isResponsableFerme, isBackofficeEmployer, isAdministrateur, isResponsableTechnique
     ]
   );

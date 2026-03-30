@@ -10,6 +10,10 @@ import autoTable from "jspdf-autotable";
 import { api } from "@/lib/api";
 import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import {
+  SUIVI_HEBDO_DATA_COLUMN_COUNT,
+  SUIVI_HEBDO_EXPORT_HEADERS,
+} from "@/lib/suiviTechniqueHebdomadaireShared";
 
 export interface SuiviTechniqueBatimentExportParams {
   farmName: string;
@@ -98,7 +102,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   ];
 
   let row = 1;
-  const addTitle = (text: string, colSpan = 12) => {
+  const addTitle = (text: string, colSpan = SUIVI_HEBDO_DATA_COLUMN_COUNT) => {
     ws.mergeCells(row, 1, row, colSpan);
     const cell = ws.getCell(row, 1);
     cell.value = text;
@@ -169,20 +173,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   row++;
 
   addTitle(`3. Suivi hebdomadaire — ${sex} — ${semaine}`);
-  const hebdoHeaders = [
-    "DATE",
-    "ÂGE EN J",
-    "MORT. NBRE",
-    "MORT. %",
-    "MORT. CUMUL",
-    "MORT. % CUMUL",
-    "CONSO. EAU (L)",
-    "T° MIN",
-    "T° MAX",
-    "VACCINATION",
-    "TRAITEMENT",
-    "OBSERVATION",
-  ];
+  const hebdoHeaders = [...SUIVI_HEBDO_EXPORT_HEADERS];
   addTableHeader(hebdoHeaders);
   const transportPctExport = mortaliteTransportPctStr(semaine, transportCumulExport, effectifDepart);
   const TRANSPORT_CUMUL_BG = "FFFEF9C4";
@@ -190,7 +181,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   ws.getCell(row, 1).value = "MORTALITE DU TRANSPORT";
   ws.getCell(row, 1).font = { bold: true };
   ws.getCell(row, 1).alignment = { horizontal: "center", vertical: "middle" };
-  for (let c = 1; c <= 12; c++) {
+  for (let c = 1; c <= SUIVI_HEBDO_DATA_COLUMN_COUNT; c++) {
     ws.getCell(row, c).border = BORDERS_ALL;
   }
   ws.getCell(row, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
@@ -199,7 +190,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   ws.getCell(row, 5).alignment = { horizontal: "center", vertical: "middle" };
   ws.getCell(row, 6).value = transportPctExport;
   ws.getCell(row, 6).alignment = { horizontal: "center", vertical: "middle" };
-  for (let c = 7; c <= 12; c++) {
+  for (let c = 7; c <= SUIVI_HEBDO_DATA_COLUMN_COUNT; c++) {
     ws.getCell(row, c).value = "";
   }
   row++;
@@ -408,20 +399,7 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   doc.setFont("helvetica", "bold");
   doc.text(`3. Suivi hebdomadaire — ${sex} — ${semaine}`, margin, y);
   y += 6;
-  const hebdoHeaders = [
-    "DATE",
-    "ÂGE EN J",
-    "MORT. NBRE",
-    "MORT. %",
-    "MORT. CUMUL",
-    "MORT. % CUMUL",
-    "CONSO. EAU (L)",
-    "T° MIN",
-    "T° MAX",
-    "VACCINATION",
-    "TRAITEMENT",
-    "OBSERVATION",
-  ];
+  const hebdoHeaders = [...SUIVI_HEBDO_EXPORT_HEADERS];
   const transportPctPdf = mortaliteTransportPctStr(semaine, transportCumulPdf, effectifDepart);
   const transportRowPdf: string[] = [
     "MORTALITE DU TRANSPORT",

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Building2, Calendar, Loader2, Plus, Check, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
@@ -25,7 +25,14 @@ import {
   type DepenseDiversRequest,
   type LotWithStatusResponse,
 } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
+import {
+  DEPENSES_DIVERS_MAIN_HEADERS,
+  DEPENSES_DIVERS_VS_HEADERS,
+  effectiveMontantForTotal,
+  resolvedQteFromString,
+} from "@/lib/depensesDiversShared";
 import { exportToExcel, exportToPdf } from "@/lib/depensesDiversExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
@@ -41,6 +48,31 @@ import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount"
 /** Quick-pick S1–S36; S37+ via champ libre. */
 const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
+
+const VS_HEADER_CLASS = {
+  DATE: "min-w-[90px]",
+  DÉSIGNATION: "min-w-[120px]",
+  FOURNISSEUR: "min-w-[100px]",
+  "N° BL": "min-w-[80px]",
+  "N° BR": "min-w-[80px]",
+  UG: "min-w-[60px]",
+  QTE: "min-w-[128px] w-[8.5rem] !text-center",
+  PRIX: "min-w-[80px] !text-center",
+  MONTANT: "min-w-[90px] !text-center",
+} as const satisfies Record<(typeof DEPENSES_DIVERS_VS_HEADERS)[number], string>;
+
+const MAIN_HEADER_CLASS = {
+  AGE: "min-w-[70px]",
+  DATE: "min-w-[100px]",
+  SEM: "min-w-[60px]",
+  DÉSIGNATION: "min-w-[180px]",
+  FOURNISSEUR: "min-w-[120px]",
+  "N° BL": "min-w-[90px]",
+  "N° BR": "min-w-[90px]",
+  QTE: "min-w-[128px] w-[8.5rem] !text-center",
+  PRIX: "min-w-[80px] !text-center",
+  MONTANT: "min-w-[90px] !text-center",
+} as const satisfies Record<(typeof DEPENSES_DIVERS_MAIN_HEADERS)[number], string>;
 
 /** Options de désignation : l'utilisateur peut sélectionner ou saisir librement. */
 const DESIGNATION_OPTIONS = ["ENTRETIEN ET REP"];
@@ -86,9 +118,9 @@ function formatMoneyDisplay(s: string): string {
 function formatMontantCell(row: Pick<DepenseDiversRow, "qte" | "prixPerUnit" | "montant">): string {
   const m = toOptionalNumber(row.montant);
   if (m != null) return formatGroupedNumber(m, 2);
-  const q = toOptionalNumber(row.qte);
+  const q = resolvedQteFromString(row.qte);
   const p = toOptionalNumber(row.prixPerUnit);
-  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  if (q != null && p != null && p >= 0) return formatGroupedNumber(q * p, 2);
   return "—";
 }
 
@@ -106,8 +138,8 @@ function getSemFromRow(r: DepenseDiversRow): string {
 /** Aligné sur DepenseDiversService.isFilledRow ; vide sanitaire exige au moins un champ métier (pas seulement l’âge VS). */
 function isFilledDepenseRequest(req: DepenseDiversRequest, isVs: boolean): boolean {
   if (!req.date?.trim()) return false;
-  const qteOk = req.qte != null && req.qte > 0;
-  const montantOk = req.montant != null && req.montant > 0;
+  const qteOk = req.qte != null && req.qte !== 0;
+  const montantOk = req.montant != null && req.montant !== 0;
   const meaningful =
     !!(req.designation?.trim()) ||
     !!(req.supplier?.trim()) ||
@@ -144,7 +176,18 @@ export default function DepensesDivers() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    canAccessAllFarms,
+    isReadOnly,
+    canCreate,
+    canUpdate,
+    hasFullAccess,
+    selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
+  } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -156,7 +199,18 @@ export default function DepensesDivers() {
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    lotParam.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotParam.trim()), lotAccessCtx)
+  );
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** QTE: raw while focused, grouped when blurred (Livraisons Aliment). */
   const [qteFocusVsRowId, setQteFocusVsRowId] = useState<string | null>(null);
@@ -422,9 +476,9 @@ export default function DepensesDivers() {
         if (r.id !== id) return r;
         const updated = { ...r, [field]: value };
         if (field === "qte" || field === "prixPerUnit") {
-          const qte = toNum(updated.qte);
+          const qte = resolvedQteFromString(updated.qte);
           const prix = toNum(updated.prixPerUnit);
-          if (qte >= 0 && prix >= 0) {
+          if (qte != null && prix >= 0) {
             updated.montant = (qte * prix).toFixed(2);
           }
         }
@@ -434,7 +488,7 @@ export default function DepensesDivers() {
   };
 
   const rowToRequest = (r: DepenseDiversRow): DepenseDiversRequest => {
-    const qteParsed = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const qteParsed = r.qte.trim() !== "" ? resolvedQteFromString(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant =
       r.montant.trim() !== ""
@@ -457,7 +511,7 @@ export default function DepensesDivers() {
       ug: r.ug?.trim() || null,
       qte: qteParsed ?? null,
       prixPerUnit: prix > 0 ? prix : null,
-      montant: montant != null && montant >= 0 ? montant : null,
+      montant: montant != null && Number.isFinite(montant) ? montant : null,
     };
   };
 
@@ -570,9 +624,12 @@ export default function DepensesDivers() {
   const videSanitaireRows = [...rows.filter((r) => getSemFromRow(r) === VS_AGE)].sort((a, b) =>
     (a.date || "").localeCompare(b.date || "")
   );
-  const videSanitaireTotalQte = videSanitaireRows.reduce((acc, r) => acc + toNum(r.qte), 0);
+  const videSanitaireTotalQte = videSanitaireRows.reduce(
+    (acc, r) => acc + (resolvedQteFromString(r.qte) ?? 0),
+    0
+  );
   const videSanitaireTotalPrix = videSanitaireRows.reduce((acc, r) => acc + toNum(r.prixPerUnit), 0);
-  const videSanitaireTotalMontant = videSanitaireRows.reduce((acc, r) => acc + toNum(r.montant), 0);
+  const videSanitaireTotalMontant = videSanitaireRows.reduce((acc, r) => acc + effectiveMontantForTotal(r), 0);
 
   const currentRows = selectedSemaine
     ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
@@ -584,9 +641,9 @@ export default function DepensesDivers() {
         return (a.date || "").localeCompare(b.date || "");
       })
     : [];
-  const weekTotalQte = currentRows.reduce((acc, r) => acc + toNum(r.qte), 0);
+  const weekTotalQte = currentRows.reduce((acc, r) => acc + (resolvedQteFromString(r.qte) ?? 0), 0);
   const weekTotalPrix = currentRows.reduce((acc, r) => acc + toNum(r.prixPerUnit), 0);
-  const weekTotalMontant = currentRows.reduce((acc, r) => acc + toNum(r.montant), 0);
+  const weekTotalMontant = currentRows.reduce((acc, r) => acc + effectiveMontantForTotal(r), 0);
   const semainesOnly = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_AGE));
   const semOrder = sortSemaines([...semainesOnly]);
   const idx = semOrder.indexOf(selectedSemaine ?? "");
@@ -594,7 +651,8 @@ export default function DepensesDivers() {
   const cumulQte =
     videSanitaireTotalQte +
     semsUpTo.reduce(
-      (sum, sem) => sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + toNum(r.qte), 0),
+      (sum, sem) =>
+        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + (resolvedQteFromString(r.qte) ?? 0), 0),
       0
     );
   const cumulPrix =
@@ -606,7 +664,8 @@ export default function DepensesDivers() {
   const cumulMontant =
     videSanitaireTotalMontant +
     semsUpTo.reduce(
-      (sum, sem) => sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + toNum(r.montant), 0),
+      (sum, sem) =>
+        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((a, r) => a + effectiveMontantForTotal(r), 0),
       0
     );
   const colCount = 12;
@@ -830,18 +889,20 @@ export default function DepensesDivers() {
             loading={lotsLoading}
             onSelectLot={(lot) => {
               const status = lotsWithStatus.find((l) => l.lot === lot);
-              if (status?.closed) {
+              if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                 toast({
                   title: "Lot fermé",
-                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  description:
+                    "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                   variant: "destructive",
                 });
                 return;
               }
               setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
             }}
-            onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-            canCreate={canCreate}
+            canCreate={false}
+            description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+            emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
             title="Choisir un lot — Dépenses divers"
           />
         </>
@@ -969,15 +1030,11 @@ export default function DepensesDivers() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[90px]">DATE</th>
-                      <th className="min-w-[120px]">DÉSIGNATION</th>
-                      <th className="min-w-[100px]">FOURNISSEUR</th>
-                      <th className="min-w-[80px]">N° BL</th>
-                      <th className="min-w-[80px]">N° BR</th>
-                      <th className="min-w-[60px]">UG</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[80px] !text-center">PRIX</th>
-                      <th className="min-w-[90px] !text-center">MONTANT</th>
+                      {DEPENSES_DIVERS_VS_HEADERS.map((label) => (
+                        <th key={label} className={VS_HEADER_CLASS[label]}>
+                          {label}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
                         ✓
                       </th>
@@ -1088,8 +1145,8 @@ export default function DepensesDivers() {
                                         updateRow(row.id, "qte", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null || !Number.isFinite(n)) {
                                         updateRow(row.id, "qte", "");
                                       } else {
                                         updateRow(row.id, "qte", n.toFixed(2));
@@ -1225,16 +1282,21 @@ export default function DepensesDivers() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…)">AGE</th>
-                      <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
-                      <th className="min-w-[180px]">DÉSIGNATION</th>
-                      <th className="min-w-[120px]">FOURNISSEUR</th>
-                      <th className="min-w-[90px]">N° BL</th>
-                      <th className="min-w-[90px]">N° BR</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[80px] !text-center">PRIX</th>
-                      <th className="min-w-[90px] !text-center">MONTANT</th>
+                      {DEPENSES_DIVERS_MAIN_HEADERS.map((label) => (
+                        <th
+                          key={label}
+                          className={MAIN_HEADER_CLASS[label]}
+                          title={
+                            label === "AGE"
+                              ? "Âge séquentiel (1, 2, 3…)"
+                              : label === "SEM"
+                                ? "Semaine (S1, S2…)"
+                                : undefined
+                          }
+                        >
+                          {label}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
                         ✓
                       </th>
@@ -1348,8 +1410,8 @@ export default function DepensesDivers() {
                                         updateRow(row.id, "qte", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null || !Number.isFinite(n)) {
                                         updateRow(row.id, "qte", "");
                                       } else {
                                         updateRow(row.id, "qte", n.toFixed(2));

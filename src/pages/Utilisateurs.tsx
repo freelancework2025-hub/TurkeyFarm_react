@@ -2,7 +2,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type UserResponse, type UserRequest, type RoleResponse, type FarmResponse } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState } from "react";
 import { Plus, Pencil, Trash2, ShieldAlert, Camera, Loader2, User } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { Button } from "@/components/ui/button";
@@ -143,16 +143,6 @@ export default function Utilisateurs() {
 
   const isResponsableFerme = form.roleNames?.[0] === "RESPONSABLE_FERME";
 
-  useEffect(() => {
-    if (
-      editingUser &&
-      form.email?.trim() &&
-      (form.username?.trim() || "") === (editingUser.email ?? "").trim()
-    ) {
-      setForm((f) => ({ ...f, username: form.email }));
-    }
-  }, [form.email, form.username, editingUser]);
-
   const createMutation = useMutation({
     mutationFn: (body: UserRequest) => api.users.create(body),
     onSuccess: async (newUser) => {
@@ -252,11 +242,8 @@ export default function Utilisateurs() {
       return;
     }
     
-    const wasIdentifiantFromEmail = editingUser
-      && (form.username?.trim() || "") === (editingUser.email ?? "").trim();
-    const effectiveUsername = editingUser && wasIdentifiantFromEmail && form.email?.trim()
-      ? form.email.trim()
-      : (form.username?.trim() || form.email?.trim() || undefined);
+    // Email is the canonical login id when present (matches backend UserService.update).
+    const effectiveUsername = form.email?.trim() || form.username?.trim() || undefined;
     const body: UserRequest = {
       username: effectiveUsername,
       displayName: form.displayName?.trim() || undefined,
@@ -506,7 +493,11 @@ export default function Utilisateurs() {
               </div>
             )}
             <div>
-              <Label>Identifiant (ou laisser vide pour utiliser l’email)</Label>
+              <Label>
+                {editingUser
+                  ? "Identifiant de connexion (suit l’email)"
+                  : "Identifiant (ou laisser vide pour utiliser l’email)"}
+              </Label>
               <Input
                 value={form.username ?? ""}
                 onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
@@ -527,9 +518,17 @@ export default function Utilisateurs() {
               <Input
                 type="email"
                 value={form.email ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setForm((f) => (editingUser ? { ...f, email: v, username: v } : { ...f, email: v }));
+                }}
                 placeholder="email@exemple.com"
               />
+              {editingUser && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Modifier l’email met à jour l’identifiant de connexion. L’utilisateur devra se connecter avec cette adresse.
+                </p>
+              )}
             </div>
             <div>
               <Label>Téléphone</Label>

@@ -3,6 +3,10 @@ import { Loader2, Info } from "lucide-react";
 import { api, type SetupInfoResponse } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import {
+  REPORTING_EFFECTIF_TABLE_HEADERS,
+  REPORTING_EFFECTIF_HEADER_CLASS,
+} from "@/lib/reportingJournalierShared";
 
 function toNum(s: string): number {
   const n = parseFloat(String(s).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
@@ -135,14 +139,11 @@ export default function EffectifMisEnPlace({ farmId, lot }: EffectifMisEnPlacePr
         <table className="table-farm">
           <thead>
             <tr>
-              <th className="min-w-[110px]">DATE MISE EN PLACE</th>
-              <th className="min-w-[72px]">HEURE</th>
-              <th className="min-w-[120px]">BÂTIMENT</th>
-              <th className="min-w-[88px]">SEXE</th>
-              <th className="min-w-[112px] !text-center">EFFECTIF INITIAL</th>
-              <th className="min-w-[120px]">TYPE D&apos;ÉLEVAGE</th>
-              <th className="min-w-[120px]">FOURNISSEUR</th>
-              <th className="min-w-[100px]">SOUCHE</th>
+              {REPORTING_EFFECTIF_TABLE_HEADERS.map((h) => (
+                <th key={h} className={REPORTING_EFFECTIF_HEADER_CLASS[h]}>
+                  {h}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>

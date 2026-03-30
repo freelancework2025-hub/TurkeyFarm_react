@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Building2, Download, FileSpreadsheet, FileText, Loader2 } from "lucide-react";
 import {
@@ -21,6 +21,7 @@ import DailyReportTable from "@/components/reporting/DailyReportTable";
 import SavedDaysOverview from "@/components/reporting/SavedDaysOverview";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse, type LotWithStatusResponse } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { exportToExcel, exportToPdf } from "@/lib/reportingJournalierExport";
 import { useToast } from "@/hooks/use-toast";
 
@@ -37,7 +38,16 @@ export default function ReportingJournalier() {
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
   const hasLotInUrl = lotParam.trim() !== "";
 
-  const { isAdministrateur, isResponsableTechnique, isBackofficeEmployer, canAccessAllFarms, isReadOnly, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    isBackofficeEmployer,
+    canAccessAllFarms,
+    isReadOnly,
+    selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
+  } = useAuth();
   // Admin, Responsable technique and Backoffice: see farm list first; on click, only that farm's data is shown.
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
 
@@ -47,7 +57,19 @@ export default function ReportingJournalier() {
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const { toast } = useToast();
-  const isSelectedLotClosed = Boolean(hasLotInUrl && lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    hasLotInUrl &&
+      lotParam.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotParam.trim()), lotAccessCtx)
+  );
 
   const [viewMode, setViewMode] = useState<"overview" | "form">("overview");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -266,20 +288,21 @@ export default function ReportingJournalier() {
                 loading={lotsLoading}
                 onSelectLot={(lot) => {
                   const status = lotsWithStatus.find((l) => l.lot === lot);
-                  if (status?.closed) {
+                  if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                     toast({
                       title: "Lot fermé",
-                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      description:
+                        "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                       variant: "destructive",
                     });
                     return;
                   }
                   setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot });
                 }}
-                onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
-                canCreate={!isReadOnly}
+                canCreate={false}
                 title="Choisir un lot — Reporting Journalier"
-                emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
+                description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+                emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
               />
             </>
           ) : (

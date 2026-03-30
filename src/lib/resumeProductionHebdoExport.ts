@@ -6,6 +6,17 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import {
+  RESUME_PRODUCTION_WEEKLY_EXPORT_HEADERS,
+  RESUME_PRODUCTION_WEEKLY_COLUMN_COUNT,
+  getResumeProductionWeeklyTotalLabel,
+  RESUME_PRODUCTION_LIVRAISON_TABLE_HEADERS,
+  RESUME_PRODUCTION_SETUP_KV_HEADERS,
+  RESUME_PRODUCTION_KV_TABLE_HEADERS,
+  RESUME_PRODUCTION_TRANSPORT_ROW_LABEL,
+  RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL,
+  formatResumeProductionHebdoPct,
+} from "@/lib/resumeProductionHebdoShared";
 
 export interface ResumeProductionHebdoExportParams {
   farmName: string;
@@ -62,10 +73,6 @@ function formatVal(value: number | null | undefined, unit?: string): string {
   return unit ? `${s} ${unit}` : s;
 }
 
-function formatPctExport(p: number): string {
-  return `${formatGroupedNumber(p, 2)} %`;
-}
-
 function safeFileName(parts: string[]): string {
   return parts.join("_").replace(/[^\w\-_]/g, "_");
 }
@@ -93,7 +100,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   let currentRow = 1;
 
   const addTitle = (ws: ExcelJS.Worksheet, text: string) => {
-    ws.mergeCells(currentRow, 1, currentRow, 5);
+    ws.mergeCells(currentRow, 1, currentRow, RESUME_PRODUCTION_WEEKLY_COLUMN_COUNT);
     const cell = ws.getCell(currentRow, 1);
     cell.value = text;
     cell.font = { size: 14, bold: true, color: { argb: HEADER_TEXT } };
@@ -145,15 +152,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   addInfoBlock(ws, [["Effectif départ", formatGroupedNumber(totalEffectifDepart, 0)]]);
 
   addTitle(ws, `3. Suivi hebdomadaire — Tous bâtiments — ${semaine}`);
-  const weeklyHeaders = [
-    "DATE",
-    "ÂGE (J)",
-    "MORTALITÉ NBRE",
-    "MORTALITÉ %",
-    "CUMUL",
-    "CUMUL %",
-    "CONSO. EAU (L)",
-  ];
+  const weeklyHeaders = [...RESUME_PRODUCTION_WEEKLY_EXPORT_HEADERS];
   const weeklyColCount = weeklyHeaders.length;
   for (let c = 0; c < weeklyColCount; c++) {
     const cell = ws.getCell(currentRow, c + 1);
@@ -165,7 +164,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   currentRow++;
   const TRANSPORT_CUMUL_BG = "FFFEF9C4";
   ws.mergeCells(currentRow, 1, currentRow, 4);
-  ws.getCell(currentRow, 1).value = "MORTALITE DU TRANSPORT";
+  ws.getCell(currentRow, 1).value = RESUME_PRODUCTION_TRANSPORT_ROW_LABEL;
   ws.getCell(currentRow, 1).font = { bold: true };
   ws.getCell(currentRow, 1).alignment = { horizontal: "center", vertical: "middle" };
   for (let c = 1; c <= weeklyColCount; c++) {
@@ -176,7 +175,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   ws.getCell(currentRow, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TRANSPORT_CUMUL_BG } };
   ws.getCell(currentRow, 5).alignment = { horizontal: "center", vertical: "middle" };
   ws.getCell(currentRow, 6).value =
-    mortaliteTransportPct != null ? formatPctExport(mortaliteTransportPct) : "—";
+    mortaliteTransportPct != null ? formatResumeProductionHebdoPct(mortaliteTransportPct) : "—";
   ws.getCell(currentRow, 6).alignment = { horizontal: "center", vertical: "middle" };
   ws.getCell(currentRow, 7).value = "";
   currentRow++;
@@ -185,9 +184,9 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     ws.getCell(currentRow, 1).value = r.recordDate;
     ws.getCell(currentRow, 2).value = r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—";
     ws.getCell(currentRow, 3).value = formatGroupedNumber(r.mortaliteNbre, 0);
-    ws.getCell(currentRow, 4).value = formatPctExport(r.mortalitePct);
+    ws.getCell(currentRow, 4).value = formatResumeProductionHebdoPct(r.mortalitePct);
     ws.getCell(currentRow, 5).value = formatGroupedNumber(r.mortaliteCumul, 0);
-    ws.getCell(currentRow, 6).value = formatPctExport(r.mortaliteCumulPct);
+    ws.getCell(currentRow, 6).value = formatResumeProductionHebdoPct(r.mortaliteCumulPct);
     ws.getCell(currentRow, 7).value = formatGroupedNumber(r.consoEauL, 2);
     for (let c = 1; c <= weeklyColCount; c++) {
       ws.getCell(currentRow, c).border = BORDERS_ALL;
@@ -198,7 +197,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   }
   const totalPctMortaliteVsDepart =
     totalEffectifDepart > 0
-      ? formatPctExport((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
+      ? formatResumeProductionHebdoPct((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
       : "—";
   const finalMortaliteCumul =
     weeklyRows.length > 0
@@ -206,13 +205,13 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
       : mortaliteTransportTousBatiments;
   const finalMortaliteCumulPct =
     setup.effectifMisEnPlace > 0 ? (finalMortaliteCumul / setup.effectifMisEnPlace) * 100 : null;
-  ws.getCell(currentRow, 1).value = `TOTAL ${semaine}`;
+  ws.getCell(currentRow, 1).value = getResumeProductionWeeklyTotalLabel(semaine);
   ws.getCell(currentRow, 2).value = "—";
   ws.getCell(currentRow, 3).value = formatGroupedNumber(weeklyTotals.totalMortality, 0);
   ws.getCell(currentRow, 4).value = totalPctMortaliteVsDepart;
   ws.getCell(currentRow, 5).value = formatGroupedNumber(finalMortaliteCumul, 0);
   ws.getCell(currentRow, 6).value =
-    finalMortaliteCumulPct != null ? formatPctExport(finalMortaliteCumulPct) : "—";
+    finalMortaliteCumulPct != null ? formatResumeProductionHebdoPct(finalMortaliteCumulPct) : "—";
   ws.getCell(currentRow, 7).value = formatGroupedNumber(weeklyTotals.totalWater, 2);
   for (let c = 1; c <= weeklyColCount; c++) {
     ws.getCell(currentRow, c).font = { bold: true };
@@ -235,7 +234,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   addInfoBlock(ws, perfRows);
 
   addTitle(ws, `5. Suivi de la livraison — Tous bâtiments — ${semaine}`);
-  const prodHeaders = ["INDICATEUR", "NB", "POIDS (kg)"];
+  const prodHeaders = [...RESUME_PRODUCTION_LIVRAISON_TABLE_HEADERS];
   for (let c = 0; c < prodHeaders.length; c++) {
     const cell = ws.getCell(currentRow, c + 1);
     cell.value = prodHeaders[c];
@@ -249,7 +248,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     ["VENTE", production.venteNbre, production.ventePoids],
     ["CONSOMMATION employeur", production.consoNbre, production.consoPoids],
     ["AUTRE gratuit", production.autreNbre, production.autrePoids],
-    ["TOTAL", production.totalNbre, production.totalPoids],
+    [RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL, production.totalNbre, production.totalPoids],
   ];
   let prodIdx = 0;
   for (const [label, nb, poids] of prodBody) {
@@ -258,7 +257,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     ws.getCell(currentRow, 3).value = formatGroupedNumber(Number.isFinite(poids) ? poids : 0, 2);
     for (let c = 1; c <= 3; c++) {
       ws.getCell(currentRow, c).border = BORDERS_ALL;
-      if (label === "TOTAL") {
+      if (label === RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL) {
         ws.getCell(currentRow, c).font = { bold: true };
         ws.getCell(currentRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
       } else if (prodIdx % 2 === 1) {
@@ -344,7 +343,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
     ["Effectif mis en place", formatGroupedNumber(setup.effectifMisEnPlace, 0)],
   ];
   autoTable(doc, {
-    head: [["CHAMP", "VALEUR"]],
+    head: [[...RESUME_PRODUCTION_SETUP_KV_HEADERS]],
     body: setupBody,
     startY: y,
     margin: { left: margin, right: margin },
@@ -359,7 +358,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   doc.text(`2. Effectif départ de ${semaine}`, margin, y);
   y += 6;
   autoTable(doc, {
-    head: [["INDICATEUR", "VALEUR"]],
+    head: [[...RESUME_PRODUCTION_KV_TABLE_HEADERS]],
     body: [["Effectif départ", formatGroupedNumber(totalEffectifDepart, 0)]],
     startY: y,
     margin: { left: margin, right: margin },
@@ -372,22 +371,14 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   doc.setFont("helvetica", "bold");
   doc.text(`3. Suivi hebdomadaire — Tous bâtiments — ${semaine}`, margin, y);
   y += 6;
-  const weeklyHeaders = [
-    "DATE",
-    "ÂGE (J)",
-    "MORT. NBRE",
-    "MORT. %",
-    "CUMUL",
-    "CUMUL %",
-    "CONSO. EAU (L)",
-  ];
+  const weeklyHeaders = [...RESUME_PRODUCTION_WEEKLY_EXPORT_HEADERS];
   const transportRowPdf: (string | number)[] = [
-    "MORTALITE DU TRANSPORT",
+    RESUME_PRODUCTION_TRANSPORT_ROW_LABEL,
     "",
     "",
     "",
     formatGroupedNumber(mortaliteTransportTousBatiments, 0),
-    mortaliteTransportPct != null ? formatPctExport(mortaliteTransportPct) : "—",
+    mortaliteTransportPct != null ? formatResumeProductionHebdoPct(mortaliteTransportPct) : "—",
     "—",
   ];
   const weeklyBody = [
@@ -396,15 +387,15 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
       r.recordDate,
       r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—",
       formatGroupedNumber(r.mortaliteNbre, 0),
-      formatPctExport(r.mortalitePct),
+      formatResumeProductionHebdoPct(r.mortalitePct),
       formatGroupedNumber(r.mortaliteCumul, 0),
-      formatPctExport(r.mortaliteCumulPct),
+      formatResumeProductionHebdoPct(r.mortaliteCumulPct),
       formatGroupedNumber(r.consoEauL, 2),
     ]),
   ];
   const totalPctMortaliteVsDepart =
     totalEffectifDepart > 0
-      ? formatPctExport((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
+      ? formatResumeProductionHebdoPct((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
       : "—";
   const finalMortaliteCumulPdf =
     weeklyRows.length > 0
@@ -412,10 +403,10 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
       : mortaliteTransportTousBatiments;
   const finalMortaliteCumulPctPdf =
     setup.effectifMisEnPlace > 0
-      ? formatPctExport((finalMortaliteCumulPdf / setup.effectifMisEnPlace) * 100)
+      ? formatResumeProductionHebdoPct((finalMortaliteCumulPdf / setup.effectifMisEnPlace) * 100)
       : "—";
   weeklyBody.push([
-    `TOTAL ${semaine}`,
+    getResumeProductionWeeklyTotalLabel(semaine),
     "—",
     formatGroupedNumber(weeklyTotals.totalMortality, 0),
     totalPctMortaliteVsDepart,
@@ -456,7 +447,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
     ["CONSO ALIMENT Kg/J", formatVal(performance.consoAlimentKgParJ, "Kg/J")],
   ];
   autoTable(doc, {
-    head: [["INDICATEUR", "VALEUR"]],
+    head: [[...RESUME_PRODUCTION_KV_TABLE_HEADERS]],
     body: perfBody,
     startY: y,
     margin: { left: margin, right: margin },
@@ -475,10 +466,10 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
     ["VENTE", formatGroupedNumber(production.venteNbre, 0), formatGroupedNumber(production.ventePoids, 2)],
     ["CONSOMMATION employeur", formatGroupedNumber(production.consoNbre, 0), formatGroupedNumber(production.consoPoids, 2)],
     ["AUTRE gratuit", formatGroupedNumber(production.autreNbre, 0), formatGroupedNumber(production.autrePoids, 2)],
-    ["TOTAL", formatGroupedNumber(production.totalNbre, 0), formatGroupedNumber(production.totalPoids, 2)],
+    [RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL, formatGroupedNumber(production.totalNbre, 0), formatGroupedNumber(production.totalPoids, 2)],
   ];
   autoTable(doc, {
-    head: [["INDICATEUR", "NB", "POIDS (kg)"]],
+    head: [[...RESUME_PRODUCTION_LIVRAISON_TABLE_HEADERS]],
     body: prodBody,
     startY: y,
     margin: { left: margin, right: margin },
@@ -504,7 +495,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
     ["Stock aliment", formatVal(stock.stockAliment)],
   ];
   autoTable(doc, {
-    head: [["INDICATEUR", "VALEUR"]],
+    head: [[...RESUME_PRODUCTION_KV_TABLE_HEADERS]],
     body: stockBody,
     startY: y,
     margin: { left: margin, right: margin },
@@ -524,7 +515,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
     ["Écart", formatVal(controleStock.ecart)],
   ];
   autoTable(doc, {
-    head: [["INDICATEUR", "VALEUR"]],
+    head: [[...RESUME_PRODUCTION_KV_TABLE_HEADERS]],
     body: controleBody,
     startY: y,
     margin: { left: margin, right: margin },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Building2, Plus, Check, Calendar, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
@@ -25,9 +25,18 @@ import {
   type LivraisonProduitVeterinaireRequest,
   type LotWithStatusResponse,
 } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/produitsVeterinairesExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  PRODUITS_VETERINAIRES_TABLE_HEADERS,
+  PRODUITS_VETERINAIRES_HEADER_CLASS,
+  PRODUITS_VETERINAIRES_MAIN_HEADER_TITLE,
+  produitsVeterinairesResolvedMontant,
+  produitsVeterinairesEffectiveMontantForTotal,
+} from "@/lib/produitsVeterinairesShared";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS PRODUITS VETERINAIRES
@@ -70,14 +79,10 @@ function formatMoneyDisplay(s: string): string {
   return n != null ? formatGroupedNumber(n, 2) : "—";
 }
 
-/** MONTANT column: stored value or qte × prix when empty (same as Livraisons Aliment). */
+/** MONTANT column — même règle que export / totaux. */
 function formatMontantCell(row: VetRow): string {
-  const m = toOptionalNumber(row.montant);
-  if (m != null) return formatGroupedNumber(m, 2);
-  const q = toOptionalNumber(row.qte);
-  const p = toOptionalNumber(row.prixPerUnit);
-  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
-  return "—";
+  const m = produitsVeterinairesResolvedMontant(row);
+  return m != null ? formatGroupedNumber(m, 2) : "—";
 }
 
 function fromNum(n: number | null | undefined): string {
@@ -115,6 +120,21 @@ function sortLots(lotList: string[]): string[] {
 const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
 const MIN_TABLE_ROWS = 7;
 
+function isFilledVetLivraison(req: LivraisonProduitVeterinaireRequest): boolean {
+  if (!req.date?.trim()) return false;
+  const qteOk = req.qte != null && req.qte !== 0;
+  const montantOk = req.montant != null && req.montant !== 0;
+  return (
+    !!(req.designation?.trim()) ||
+    !!(req.supplier?.trim()) ||
+    !!(req.ug?.trim()) ||
+    qteOk ||
+    !!(req.deliveryNoteNumber?.trim()) ||
+    montantOk ||
+    (req.prixPerUnit != null && req.prixPerUnit !== 0)
+  );
+}
+
 export default function ProduitsVeterinaires() {
   const [searchParams, setSearchParams] = useSearchParams();
   const farmIdParam = searchParams.get("farmId");
@@ -127,7 +147,18 @@ export default function ProduitsVeterinaires() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    canAccessAllFarms,
+    isReadOnly,
+    canCreate,
+    canUpdate,
+    hasFullAccess,
+    selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
+  } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -139,7 +170,18 @@ export default function ProduitsVeterinaires() {
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const isSelectedLotClosed = Boolean(lotFilter.trim() && lotsWithStatus.find((l) => l.lot === lotFilter.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    lotFilter.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotFilter.trim()), lotAccessCtx)
+  );
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** While focused, QTE shows raw editable string; blurred shows grouped + .00 (Livraisons Aliment). */
   const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
@@ -385,9 +427,9 @@ export default function ProduitsVeterinaires() {
         if (r.id !== id) return r;
         const updated = { ...r, [field]: value };
         if (field === "qte" || field === "prixPerUnit") {
-          const qte = toNum(updated.qte);
+          const qte = resolvedQteFromString(updated.qte);
           const prix = toNum(updated.prixPerUnit);
-          if (qte >= 0 && prix >= 0) {
+          if (qte != null && prix >= 0) {
             updated.montant = (qte * prix).toFixed(2);
           }
         }
@@ -440,9 +482,9 @@ export default function ProduitsVeterinaires() {
   const weekTotal = (() => {
     const t = { qte: 0, prix: 0, montant: 0 };
     for (const r of currentRows) {
-      t.qte += toNum(r.qte);
+      t.qte += resolvedQteFromString(r.qte) ?? 0;
       t.prix += toNum(r.prixPerUnit);
-      t.montant += toNum(r.montant);
+      t.montant += produitsVeterinairesEffectiveMontantForTotal(r);
     }
     return t;
   })();
@@ -456,16 +498,16 @@ export default function ProduitsVeterinaires() {
     for (const sem of semsUpTo) {
       const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
-        running.qte += toNum(r.qte);
+        running.qte += resolvedQteFromString(r.qte) ?? 0;
         running.prix += toNum(r.prixPerUnit);
-        running.montant += toNum(r.montant);
+        running.montant += produitsVeterinairesEffectiveMontantForTotal(r);
       }
     }
     return running;
   })();
 
   const rowToRequest = (r: VetRow, computedAge?: number): LivraisonProduitVeterinaireRequest => {
-    const qteParsed = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const qteParsed = r.qte.trim() !== "" ? resolvedQteFromString(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant =
       r.montant.trim() !== ""
@@ -492,7 +534,7 @@ export default function ProduitsVeterinaires() {
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
       qte: qteParsed ?? null,
       prixPerUnit: prix > 0 ? prix : null,
-      montant: montant != null && montant >= 0 ? montant : null,
+      montant: montant != null && Number.isFinite(montant) ? montant : null,
     };
   };
 
@@ -524,16 +566,13 @@ export default function ProduitsVeterinaires() {
       });
       return;
     }
-    const hasContent =
-      (row.designation?.trim() ?? "") !== "" ||
-      (row.supplier?.trim() ?? "") !== "" ||
-      (row.ug?.trim() ?? "") !== "" ||
-      (row.qte?.trim() ?? "") !== "" ||
-      (row.deliveryNoteNumber?.trim() ?? "") !== "";
-    if (!hasContent) {
+    const computedAge = ageByRowId.get(row.id) ?? undefined;
+    const req = rowToRequest(row, computedAge);
+    if (!isFilledVetLivraison(req)) {
       toast({
         title: "Ligne incomplète",
-        description: "Remplissez au moins un champ (désignation, fournisseur, UG, quantité ou N° BR).",
+        description:
+          "Remplissez au moins un champ (désignation, fournisseur, UG, quantité, prix, montant ou N° BR).",
         variant: "destructive",
       });
       return;
@@ -541,8 +580,6 @@ export default function ProduitsVeterinaires() {
 
     setSavingRowId(row.id);
     try {
-      const computedAge = ageByRowId.get(row.id) ?? undefined;
-      const req = rowToRequest(row, computedAge);
       if (row.serverId != null) {
         await api.livraisonsProduitsVeterinaires.update(row.serverId, req);
         toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
@@ -575,7 +612,7 @@ export default function ProduitsVeterinaires() {
     }
   };
 
-  const colCount = 12;
+  const colCount = PRODUITS_VETERINAIRES_TABLE_HEADERS.length + 2;
 
   const canShowExport = hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && pageFarmId != null;
   const exportFarmName =
@@ -730,18 +767,20 @@ export default function ProduitsVeterinaires() {
             loading={lotsLoading}
             onSelectLot={(lot) => {
               const status = lotsWithStatus.find((l) => l.lot === lot);
-              if (status?.closed) {
+              if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                 toast({
                   title: "Lot fermé",
-                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  description:
+                    "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                   variant: "destructive",
                 });
                 return;
               }
               setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
             }}
-            onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-            canCreate={canCreate}
+            canCreate={false}
+            description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+            emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
             title="Choisir un lot — Produits Vétérinaires"
           />
         </>
@@ -873,16 +912,15 @@ export default function ProduitsVeterinaires() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…) sur tout le lot">AGE</th>
-                      <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
-                      <th className="min-w-[180px]">DÉSIGNATION</th>
-                      <th className="min-w-[120px]">FOURNISSEUR</th>
-                      <th className="min-w-[80px]">UG</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[80px] !text-center">PRIX</th>
-                      <th className="min-w-[90px] !text-center">MONTANT</th>
-                      <th className="min-w-[90px]">N° BR</th>
+                      {PRODUITS_VETERINAIRES_TABLE_HEADERS.map((h) => (
+                        <th
+                          key={h}
+                          className={PRODUITS_VETERINAIRES_HEADER_CLASS[h]}
+                          title={PRODUITS_VETERINAIRES_MAIN_HEADER_TITLE[h]}
+                        >
+                          {h}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">✓</th>
                       <th className="w-10"></th>
                     </tr>
@@ -976,8 +1014,8 @@ export default function ProduitsVeterinaires() {
                                         updateRow(row.id, "qte", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null) {
                                         updateRow(row.id, "qte", "");
                                       } else {
                                         updateRow(row.id, "qte", n.toFixed(2));

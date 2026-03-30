@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Building2, Plus, Check, Calendar, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
@@ -26,8 +26,17 @@ import {
   type LotWithStatusResponse,
   type VideSanitaireResponse,
 } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/produitsHygieneExport";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  PRODUITS_HYGIENE_TABLE_HEADERS,
+  PRODUITS_HYGIENE_HEADER_CLASS,
+  PRODUITS_HYGIENE_MAIN_HEADER_TITLE,
+  produitsHygieneResolvedMontant,
+  produitsHygieneEffectiveMontantForTotal,
+} from "@/lib/produitsHygieneShared";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
@@ -84,14 +93,10 @@ function formatCountDisplay(s: string): string {
   return n != null ? formatGroupedNumber(n, 0) : "—";
 }
 
-/** MONTANT column: stored value or qte × prix when empty (same as Produits vétérinaires). */
+/** MONTANT column: stored value or qte × prix when empty — same rule as export / totals. */
 function formatMontantCell(row: HygieneRow): string {
-  const m = toOptionalNumber(row.montant);
-  if (m != null) return formatGroupedNumber(m, 2);
-  const q = toOptionalNumber(row.qte);
-  const p = toOptionalNumber(row.prixPerUnit);
-  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
-  return "—";
+  const m = produitsHygieneResolvedMontant(row);
+  return m != null ? formatGroupedNumber(m, 2) : "—";
 }
 
 /** Add one day to a YYYY-MM-DD date string. */
@@ -115,25 +120,25 @@ function legacyVsHasData(vs: VideSanitaireResponse): boolean {
     (vs.supplier?.trim() ?? "") !== "" ||
     (vs.deliveryNoteNumber?.trim() ?? "") !== "" ||
     (vs.numeroBR?.trim() ?? "") !== "" ||
-    (vs.qte != null && vs.qte > 0) ||
-    (vs.prixPerUnit != null && vs.prixPerUnit > 0) ||
-    (vs.montant != null && vs.montant > 0)
+    (vs.qte != null && vs.qte !== 0) ||
+    (vs.prixPerUnit != null && vs.prixPerUnit !== 0) ||
+    (vs.montant != null && vs.montant !== 0)
   );
 }
 
 /** Vide sanitaire: au moins un champ métier (pas seulement sem VS). */
 function isFilledHygieneLivraison(req: LivraisonProduitHygieneRequest, isVs: boolean): boolean {
   if (!req.date?.trim()) return false;
-  const qteOk = req.qte != null && req.qte > 0;
-  const montantOk = req.montant != null && req.montant > 0;
+  const qteOk = req.qte != null && req.qte !== 0;
+  const montantOk = req.montant != null && req.montant !== 0;
   const meaningful =
     !!(req.designation?.trim()) ||
     !!(req.supplier?.trim()) ||
     qteOk ||
     !!(req.deliveryNoteNumber?.trim()) ||
     !!(req.numeroBR?.trim()) ||
-    (req.male != null && req.male > 0) ||
-    (req.femelle != null && req.femelle > 0) ||
+    (req.male != null && req.male !== 0) ||
+    (req.femelle != null && req.femelle !== 0) ||
     montantOk;
   if (isVs) return meaningful;
   return meaningful || !!(req.sem?.trim()) || !!(req.age?.trim());
@@ -163,7 +168,18 @@ export default function ProduitsHygiene() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    canAccessAllFarms,
+    isReadOnly,
+    canCreate,
+    canUpdate,
+    hasFullAccess,
+    selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
+  } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -175,7 +191,18 @@ export default function ProduitsHygiene() {
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const isSelectedLotClosed = Boolean(lotFilter.trim() && lotsWithStatus.find((l) => l.lot === lotFilter.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    lotFilter.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotFilter.trim()), lotAccessCtx)
+  );
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** While focused, QTE shows raw editable string; blurred shows grouped + .00 (Produits vétérinaires). */
   const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
@@ -475,9 +502,9 @@ export default function ProduitsHygiene() {
         if (r.id !== id) return r;
         const updated = { ...r, [field]: value };
         if (field === "qte" || field === "prixPerUnit") {
-          const qte = toNum(updated.qte);
+          const qte = resolvedQteFromString(updated.qte);
           const prix = toNum(updated.prixPerUnit);
-          if (qte >= 0 && prix >= 0) {
+          if (qte != null && prix >= 0) {
             updated.montant = (qte * prix).toFixed(2);
           }
         }
@@ -527,9 +554,9 @@ export default function ProduitsHygiene() {
   );
   const videSanitaireTotals = videSanitaireRows.reduce(
     (acc, r) => ({
-      qte: acc.qte + toNum(r.qte),
+      qte: acc.qte + (resolvedQteFromString(r.qte) ?? 0),
       prix: acc.prix + toNum(r.prixPerUnit),
-      montant: acc.montant + toNum(r.montant),
+      montant: acc.montant + produitsHygieneEffectiveMontantForTotal(r),
       male: acc.male + toNum(r.male),
       femelle: acc.femelle + toNum(r.femelle),
     }),
@@ -550,9 +577,9 @@ export default function ProduitsHygiene() {
   const weekTotal = (() => {
     const t = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
     for (const r of currentRows) {
-      t.qte += toNum(r.qte);
+      t.qte += resolvedQteFromString(r.qte) ?? 0;
       t.prix += toNum(r.prixPerUnit);
-      t.montant += toNum(r.montant);
+      t.montant += produitsHygieneEffectiveMontantForTotal(r);
       t.male += toNum(r.male);
       t.femelle += toNum(r.femelle);
     }
@@ -567,9 +594,9 @@ export default function ProduitsHygiene() {
     for (const sem of semsUpTo) {
       const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
-        running.qte += toNum(r.qte);
+        running.qte += resolvedQteFromString(r.qte) ?? 0;
         running.prix += toNum(r.prixPerUnit);
-        running.montant += toNum(r.montant);
+        running.montant += produitsHygieneEffectiveMontantForTotal(r);
         running.male += toNum(r.male);
         running.femelle += toNum(r.femelle);
       }
@@ -579,7 +606,7 @@ export default function ProduitsHygiene() {
 
   const rowToRequest = (r: HygieneRow, computedAge?: number): LivraisonProduitHygieneRequest => {
     const isVs = getSemFromRow(r) === VS_AGE;
-    const qteParsed = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const qteParsed = r.qte.trim() !== "" ? resolvedQteFromString(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant =
       r.montant.trim() !== ""
@@ -608,10 +635,10 @@ export default function ProduitsHygiene() {
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
       qte: qteParsed ?? null,
       prixPerUnit: prix > 0 ? prix : null,
-      montant: montant != null && montant >= 0 ? montant : null,
+      montant: montant != null && Number.isFinite(montant) ? montant : null,
       numeroBR: r.numeroBR.trim() || null,
-      male: male != null && male >= 0 ? Math.round(male) : null,
-      femelle: femelle != null && femelle >= 0 ? Math.round(femelle) : null,
+      male: Number.isFinite(male) && Math.round(male) !== 0 ? Math.round(male) : null,
+      femelle: Number.isFinite(femelle) && Math.round(femelle) !== 0 ? Math.round(femelle) : null,
     };
   };
 
@@ -708,8 +735,8 @@ export default function ProduitsHygiene() {
     }
   };
 
-  const colCount = 14;
-  const vsColCount = 14;
+  const colCount = PRODUITS_HYGIENE_TABLE_HEADERS.length + 2;
+  const vsColCount = colCount;
 
   const canShowExport = hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && pageFarmId != null;
   const exportFarmName =
@@ -882,18 +909,20 @@ export default function ProduitsHygiene() {
             loading={lotsLoading}
             onSelectLot={(lot) => {
               const status = lotsWithStatus.find((l) => l.lot === lot);
-              if (status?.closed) {
+              if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                 toast({
                   title: "Lot fermé",
-                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  description:
+                    "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                   variant: "destructive",
                 });
                 return;
               }
               setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
             }}
-            onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-            canCreate={canCreate}
+            canCreate={false}
+            description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+            emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
             title="Choisir un lot — Produits Hygiène"
           />
         </>
@@ -1021,18 +1050,11 @@ export default function ProduitsHygiene() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]">AGE</th>
-                      <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[60px]">SEM</th>
-                      <th className="min-w-[180px]">DÉSIGNATION</th>
-                      <th className="min-w-[120px]">FOURNISSEUR</th>
-                      <th className="min-w-[90px]">N° BL</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[80px] !text-center">PRIX</th>
-                      <th className="min-w-[90px] !text-center">MONTANT</th>
-                      <th className="min-w-[90px]">N° BR</th>
-                      <th className="min-w-[70px] !text-center">MALE</th>
-                      <th className="min-w-[80px] !text-center">FEMELLE</th>
+                      {PRODUITS_HYGIENE_TABLE_HEADERS.map((h) => (
+                        <th key={h} className={PRODUITS_HYGIENE_HEADER_CLASS[h]}>
+                          {h}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
                         ✓
                       </th>
@@ -1124,8 +1146,8 @@ export default function ProduitsHygiene() {
                                         updateRow(row.id, "qte", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null || !Number.isFinite(n)) {
                                         updateRow(row.id, "qte", "");
                                       } else {
                                         updateRow(row.id, "qte", n.toFixed(2));
@@ -1296,18 +1318,15 @@ export default function ProduitsHygiene() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…) sur tout le lot">AGE</th>
-                      <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
-                      <th className="min-w-[180px]">DÉSIGNATION</th>
-                      <th className="min-w-[120px]">FOURNISSEUR</th>
-                      <th className="min-w-[90px]">N° BL</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[80px] !text-center">PRIX</th>
-                      <th className="min-w-[90px] !text-center">MONTANT</th>
-                      <th className="min-w-[90px]">N° BR</th>
-                      <th className="min-w-[70px] !text-center">MALE</th>
-                      <th className="min-w-[80px] !text-center">FEMELLE</th>
+                      {PRODUITS_HYGIENE_TABLE_HEADERS.map((h) => (
+                        <th
+                          key={h}
+                          className={PRODUITS_HYGIENE_HEADER_CLASS[h]}
+                          title={PRODUITS_HYGIENE_MAIN_HEADER_TITLE[h]}
+                        >
+                          {h}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">✓</th>
                       <th className="w-10"></th>
                     </tr>
@@ -1401,8 +1420,8 @@ export default function ProduitsHygiene() {
                                         updateRow(row.id, "qte", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null || !Number.isFinite(n)) {
                                         updateRow(row.id, "qte", "");
                                       } else {
                                         updateRow(row.id, "qte", n.toFixed(2));

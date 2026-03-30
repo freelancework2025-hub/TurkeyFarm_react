@@ -45,6 +45,7 @@ import {
   FileText,
 } from "lucide-react";
 import { api, type DailyDashboardSummary, type LotWithStatusResponse } from "@/lib/api";
+import { canReadClosedLot, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { MagicCard } from "@/components/ui/magic-card";
@@ -178,10 +179,11 @@ function batimentsBySexFromSetupInfo(rows: { building: string; sex: string; effe
 }
 
 export default function Dashboard() {
-  const { 
-    canAccessAllFarms, 
-    isResponsableFerme, 
-    selectedFarmId, 
+  const {
+    user,
+    canAccessAllFarms,
+    isResponsableFerme,
+    selectedFarmId,
     selectedFarm,
     isResponsableTechnique,
     isAdministrateur,
@@ -230,7 +232,14 @@ export default function Dashboard() {
   const [dailyLotsWithStatus, setDailyLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
 
   const { toast } = useToast();
-  const canAccessClosedLot = isResponsableTechnique || isAdministrateur;
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
 
   const showFarmSelector = canAccessAllFarms;
   const fixedFarmId = isResponsableFerme ? selectedFarmId : null;
@@ -323,9 +332,14 @@ export default function Dashboard() {
     }
   }, [isInDailyView, effectiveFarmIdForDaily]);
 
-  /** When the last day's lot (from getDashboardSummary) is closed, show empty dashboard for all users */
+  /** When the last day's lot is closed for this user, show empty daily dashboard */
+  const dailyLotStatusRow = dailySummary?.lot
+    ? dailyLotsWithStatus.find((l) => l.lot === dailySummary.lot)
+    : undefined;
   const isDailyLotClosed = Boolean(
-    dailySummary?.lot && dailyLotsWithStatus.some((l) => l.lot === dailySummary.lot && l.closed)
+    dailySummary?.lot &&
+      dailyLotStatusRow?.closed &&
+      !canReadClosedLot(true, dailyLotStatusRow.closedByUserId, lotAccessCtx)
   );
 
   useEffect(() => {
@@ -915,29 +929,51 @@ export default function Dashboard() {
                     Choisissez un lot pour <strong>{farms.find((f) => f.id === hebdoFarmId)?.name ?? "cette ferme"}</strong>
                   </p>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {lotsForHebdoWithStatus.map(({ lot: lotName, closed }) => (
-                      <button
-                        key={lotName}
-                        type="button"
-                        onClick={() => { setHebdoLot(lotName); setHebdoStep("week"); }}
-                        className="group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl"
-                      >
-                        <MagicCard className={`rounded-xl border p-5 transition-all duration-300 group-hover:shadow-md ${
-                          closed ? "border-muted-foreground/30 bg-muted/60" : "border-border bg-card group-hover:border-primary/50"
-                        }`}>
-                          <div className="flex items-center gap-3">
-                            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${closed ? "bg-muted-foreground/20" : "bg-emerald-500/10"}`}>
-                              <Layers className={`h-6 w-6 ${closed ? "text-muted-foreground" : "text-emerald-600"}`} />
+                    {lotsForHebdoWithStatus.map(({ lot: lotName, closed, closedByUserId }) => {
+                      const hebdoLotDisabled =
+                        closed && !canReadClosedLot(true, closedByUserId, lotAccessCtx);
+                      return (
+                        <button
+                          key={lotName}
+                          type="button"
+                          onClick={() => {
+                            if (hebdoLotDisabled) {
+                              toast({
+                                title: "Lot fermé",
+                                description:
+                                  "Ce lot n'est pas accessible pour votre compte. L'administrateur ou le responsable technique qui l'a fermé peut encore le consulter.",
+                                variant: "destructive",
+                              });
+                              return;
+                            }
+                            setHebdoLot(lotName);
+                            setHebdoStep("week");
+                          }}
+                          className={`group w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-xl ${
+                            hebdoLotDisabled ? "cursor-not-allowed" : ""
+                          }`}
+                        >
+                          <MagicCard className={`rounded-xl border p-5 transition-all duration-300 group-hover:shadow-md ${
+                            closed ? "border-muted-foreground/30 bg-muted/60" : "border-border bg-card group-hover:border-primary/50"
+                          } ${hebdoLotDisabled ? "opacity-90" : ""}`}>
+                            <div className="flex items-center gap-3">
+                              <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${closed ? "bg-muted-foreground/20" : "bg-emerald-500/10"}`}>
+                                <Layers className={`h-6 w-6 ${closed ? "text-muted-foreground" : "text-emerald-600"}`} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className={`font-semibold ${closed ? "text-muted-foreground" : "text-foreground"}`}>{lotName}</p>
+                                {closed && (
+                                  <p className="text-xs text-muted-foreground">
+                                    {hebdoLotDisabled ? "Lot fermé — accès restreint" : "Lot fermé"}
+                                  </p>
+                                )}
+                              </div>
+                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                             </div>
-                            <div className="min-w-0 flex-1">
-                              <p className={`font-semibold ${closed ? "text-muted-foreground" : "text-foreground"}`}>{lotName}</p>
-                              {closed && <p className="text-xs text-muted-foreground">Lot fermé</p>}
-                            </div>
-                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          </div>
-                        </MagicCard>
-                      </button>
-                    ))}
+                          </MagicCard>
+                        </button>
+                      );
+                    })}
                   </div>
                   {lotsForHebdoWithStatus.length === 0 && (
                     <div className="rounded-xl border border-dashed border-border bg-muted/20 py-8 text-center text-sm text-muted-foreground">
@@ -1409,8 +1445,9 @@ export default function Dashboard() {
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">Choisissez un lot</p>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {lotsWithStatus.map(({ lot: lotName, closed }) => {
-                      const disabled = closed && !canAccessClosedLot;
+                    {lotsWithStatus.map(({ lot: lotName, closed, closedByUserId }) => {
+                      const disabled =
+                        closed && !canReadClosedLot(true, closedByUserId, lotAccessCtx);
                       return (
                         <button
                           key={lotName}
@@ -1419,7 +1456,8 @@ export default function Dashboard() {
                             if (disabled) {
                               toast({
                                 title: "Lot fermé",
-                                description: "Seuls le responsable technique et l'administrateur peuvent accéder à un lot fermé.",
+                                description:
+                                  "Ce lot n'est pas accessible pour votre compte. L'administrateur ou le responsable technique qui l'a fermé peut encore le consulter.",
                                 variant: "destructive",
                               });
                               return;

@@ -14,6 +14,28 @@ import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumeP
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { mergeHebdoRowsWithDailyReports } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
 import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
+import type { ResumeProductionHebdoExportParams } from "@/lib/resumeProductionHebdoExport";
+import {
+  RESUME_PRODUCTION_WEEKLY_UI_DATE,
+  RESUME_PRODUCTION_WEEKLY_UI_AGE,
+  RESUME_PRODUCTION_WEEKLY_UI_GROUP_MORTALITE,
+  RESUME_PRODUCTION_WEEKLY_UI_CONSO_EAU,
+  RESUME_PRODUCTION_WEEKLY_SUB_NBRE,
+  RESUME_PRODUCTION_WEEKLY_SUB_PCT,
+  RESUME_PRODUCTION_WEEKLY_SUB_CUMUL,
+  RESUME_PRODUCTION_TRANSPORT_ROW_LABEL,
+  RESUME_PRODUCTION_WEEKLY_COLUMN_COUNT,
+  RESUME_PRODUCTION_TRANSPORT_LABEL_COLSPAN,
+  RESUME_PRODUCTION_WEEKLY_TOTAL_LABEL_COLSPAN,
+  getResumeProductionWeeklyTotalLabel,
+  RESUME_PRODUCTION_LIVRAISON_TABLE_HEADERS,
+  RESUME_PRODUCTION_LIVRAISON_HEADER_CLASS,
+  RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL,
+  RESUME_PRODUCTION_KV_TABLE_HEADERS,
+  RESUME_PRODUCTION_KV_HEADER_CLASS,
+  RESUME_PRODUCTION_CONTROLE_ECART_LABEL,
+  formatResumeProductionHebdoPct,
+} from "@/lib/resumeProductionHebdoShared";
 
 const SEXES = ["Mâle", "Femelle"] as const;
 
@@ -33,7 +55,7 @@ export interface WeeklyProductionSummaryContentProps {
   /** From getResumeSummary — report + vente + conso + autre (preferred over local computation) */
   totalNbreProduction?: number | null;
   /** Callback to pass export params to parent */
-  onExportParamsReady?: (params: any) => void;
+  onExportParamsReady?: (params: ResumeProductionHebdoExportParams) => void;
 }
 
 interface AggregatedRow {
@@ -604,11 +626,6 @@ export default function WeeklyProductionSummaryContent({
     return Number.isInteger(value) ? formatGroupedNumber(value, 0) : formatGroupedNumber(value, 2);
   }
 
-  function formatPct(value: number | null | undefined): string {
-    if (value == null || Number.isNaN(value)) return "—";
-    return `${formatGroupedNumber(value, 2)} %`;
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
@@ -677,41 +694,59 @@ export default function WeeklyProductionSummaryContent({
             </colgroup>
             <thead>
               <tr className="bg-muted/80 border-b-2 border-border">
-                <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border">DATE</th>
-                <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border">ÂGE EN J</th>
-                <th colSpan={4} className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">
-                  MORTALITÉ
+                <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border">
+                  {RESUME_PRODUCTION_WEEKLY_UI_DATE}
+                </th>
+                <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border">
+                  {RESUME_PRODUCTION_WEEKLY_UI_AGE}
+                </th>
+                <th
+                  colSpan={4}
+                  className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border"
+                >
+                  {RESUME_PRODUCTION_WEEKLY_UI_GROUP_MORTALITE}
                 </th>
                 <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">
-                  CONSO. EAU (L)
+                  {RESUME_PRODUCTION_WEEKLY_UI_CONSO_EAU}
                 </th>
               </tr>
               <tr className="bg-muted/60 border-b border-border">
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">NBRE</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">%</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">CUMUL</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">%</th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">
+                  {RESUME_PRODUCTION_WEEKLY_SUB_NBRE}
+                </th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">
+                  {RESUME_PRODUCTION_WEEKLY_SUB_PCT}
+                </th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">
+                  {RESUME_PRODUCTION_WEEKLY_SUB_CUMUL}
+                </th>
+                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">
+                  {RESUME_PRODUCTION_WEEKLY_SUB_PCT}
+                </th>
                 <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
               </tr>
             </thead>
             <tbody>
               <tr className="border-b border-border bg-muted/40">
-                <td colSpan={4} className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle">
-                  MORTALITE DU TRANSPORT
+                <td
+                  colSpan={RESUME_PRODUCTION_TRANSPORT_LABEL_COLSPAN}
+                  className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle"
+                >
+                  {RESUME_PRODUCTION_TRANSPORT_ROW_LABEL}
                 </td>
                 <td className="border-r border-border px-1 py-2 text-center tabular-nums align-middle bg-amber-100/80 dark:bg-amber-950/40">
                   {formatGroupedNumber(totalMortaliteTransportAllBatiments, 0)}
                 </td>
                 <td className="border-r border-border px-1 py-2 text-center tabular-nums text-muted-foreground align-middle">
-                  {formatPct(mortaliteTransportRowPct)}
+                  {formatResumeProductionHebdoPct(mortaliteTransportRowPct)}
                 </td>
                 <td className="border-r border-border px-1 py-2 align-middle" />
               </tr>
               {aggregatedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={RESUME_PRODUCTION_WEEKLY_COLUMN_COUNT} className="px-4 py-8 text-center text-muted-foreground">
                     Aucune donnée hebdomadaire pour cette semaine.
                   </td>
                 </tr>
@@ -729,13 +764,13 @@ export default function WeeklyProductionSummaryContent({
                       {formatGroupedNumber(row.mortaliteNbre, 0)}
                     </td>
                     <td className="border-r border-border px-1 py-1 text-center text-muted-foreground tabular-nums whitespace-nowrap">
-                      {formatPct(row.mortalitePct)}
+                      {formatResumeProductionHebdoPct(row.mortalitePct)}
                     </td>
                     <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
                       {formatGroupedNumber(row.mortaliteCumul, 0)}
                     </td>
                     <td className="border-r border-border px-1 py-1 text-center text-muted-foreground tabular-nums whitespace-nowrap">
-                      {formatPct(row.mortaliteCumulPct)}
+                      {formatResumeProductionHebdoPct(row.mortaliteCumulPct)}
                     </td>
                     <td className="border-r border-border px-1 py-1 text-center tabular-nums whitespace-nowrap">
                       {formatGroupedNumber(row.consoEauL, 2)}
@@ -746,22 +781,25 @@ export default function WeeklyProductionSummaryContent({
             </tbody>
             <tfoot>
               <tr className="border-t-2 border-border bg-muted font-semibold text-foreground">
-                <td colSpan={2} className="px-1.5 py-2 text-center border-r border-border">
-                  TOTAL {semaine}
+                <td
+                  colSpan={RESUME_PRODUCTION_WEEKLY_TOTAL_LABEL_COLSPAN}
+                  className="px-1.5 py-2 text-center border-r border-border"
+                >
+                  {getResumeProductionWeeklyTotalLabel(semaine)}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-destructive whitespace-nowrap">
                   {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
                 </td>
                 <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
                   {totalEffectifDepart > 0
-                    ? formatPct((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
+                    ? formatResumeProductionHebdoPct((weeklyTotals.totalMortality / totalEffectifDepart) * 100)
                     : "—"}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums whitespace-nowrap">
                   {formatGroupedNumber(totalMortaliteCumulFinSemaine, 0)}
                 </td>
                 <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
-                  {formatPct(totalMortaliteCumulFinSemainePct)}
+                  {formatResumeProductionHebdoPct(totalMortaliteCumulFinSemainePct)}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums text-muted-foreground whitespace-nowrap">
                   {`${formatGroupedNumber(weeklyTotals.totalWater, 2)} L`}
@@ -797,15 +835,11 @@ export default function WeeklyProductionSummaryContent({
           <table className="w-full min-w-[400px] text-sm border-collapse">
             <thead>
               <tr className="bg-muted/80 border-b-2 border-border">
-                <th className="px-4 py-2.5 text-left font-semibold text-foreground border-r border-border w-[220px]">
-                  INDICATEUR
-                </th>
-                <th className="px-4 py-2.5 text-center font-semibold text-foreground border-r border-border min-w-[100px]">
-                  NB
-                </th>
-                <th className="px-4 py-2.5 text-center font-semibold text-foreground min-w-[100px]">
-                  POIDS
-                </th>
+                {RESUME_PRODUCTION_LIVRAISON_TABLE_HEADERS.map((h) => (
+                  <th key={h} className={RESUME_PRODUCTION_LIVRAISON_HEADER_CLASS[h]}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -856,7 +890,9 @@ export default function WeeklyProductionSummaryContent({
                 </td>
               </tr>
               <tr className="border-b border-border font-semibold bg-muted/50">
-                <td className="px-4 py-2 border-r border-border font-medium text-foreground">TOTAL</td>
+                <td className="px-4 py-2 border-r border-border font-medium text-foreground">
+                  {RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL}
+                </td>
                 <td className="px-4 py-2 border-r border-border text-center tabular-nums bg-muted/40 whitespace-nowrap">
                   {formatGroupedNumber(aggregatedProduction.totalNbre, 0)}
                 </td>
@@ -882,12 +918,11 @@ export default function WeeklyProductionSummaryContent({
           <table className="w-full min-w-[320px] text-sm border-collapse">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                <th className="px-4 py-2.5 text-left font-semibold text-foreground w-[280px]">
-                  INDICATEUR
-                </th>
-                <th className="px-3 py-2.5 text-center font-semibold text-foreground border-l border-border">
-                  VALEUR
-                </th>
+                {RESUME_PRODUCTION_KV_TABLE_HEADERS.map((h) => (
+                  <th key={h} className={RESUME_PRODUCTION_KV_HEADER_CLASS[h]}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -931,12 +966,11 @@ export default function WeeklyProductionSummaryContent({
           <table className="w-full min-w-[320px] text-sm border-collapse">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                <th className="px-4 py-2.5 text-left font-semibold text-foreground w-[280px]">
-                  INDICATEUR
-                </th>
-                <th className="px-3 py-2.5 text-center font-semibold text-foreground border-l border-border">
-                  VALEUR
-                </th>
+                {RESUME_PRODUCTION_KV_TABLE_HEADERS.map((h) => (
+                  <th key={h} className={RESUME_PRODUCTION_KV_HEADER_CLASS[h]}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -958,7 +992,7 @@ export default function WeeklyProductionSummaryContent({
               </tr>
               <tr className="border-b border-border bg-card">
                 <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
-                  ECART
+                  {RESUME_PRODUCTION_CONTROLE_ECART_LABEL}
                 </td>
                 <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
                   {formatStockValue(ecart)}

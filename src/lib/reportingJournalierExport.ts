@@ -9,6 +9,14 @@ import { jsPDF } from "jspdf";
 import "jspdf-autotable";
 import { api, type SetupInfoResponse, type DailyReportResponse } from "@/lib/api";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import {
+  REPORTING_DAILY_TABLE_HEADERS,
+  REPORTING_EFFECTIF_TABLE_HEADERS,
+  reportingDailyExportRowToArray,
+  reportingEffectifExportRowToArray,
+  reportingGetEffectivePlacement,
+  reportingGetFirstDayFromSetup,
+} from "@/lib/reportingJournalierShared";
 
 export interface ReportingJournalierExportParams {
   farmName: string;
@@ -18,77 +26,8 @@ export interface ReportingJournalierExportParams {
   selectedDate?: string | null;
 }
 
-/** Get first day (placement) from setup: min dateMiseEnPlace, or null. */
-function getFirstDayFromSetup(setupList: SetupInfoResponse[]): string | null {
-  const dates = setupList
-    .map((r) => r.dateMiseEnPlace)
-    .filter((d): d is string => d != null && String(d).trim() !== "");
-  if (dates.length === 0) return null;
-  return dates.reduce((min, d) => (d < min ? d : min), dates[0]!);
-}
-
-/**
- * Compute age (jours) from placement date — same formula as DailyReportTable and Java backend.
- * age = reportDate - placementDate + 1, minimum 1.
- * Uses UTC dates to avoid DST issues.
- */
-function computeAgeFromPlacement(reportDate: string, placementDate: string): number {
-  const report = new Date(reportDate);
-  const placement = new Date(placementDate);
-  
-  // Set to start of day (midnight) in UTC to ensure consistent calculation
-  report.setUTCHours(0, 0, 0, 0);
-  placement.setUTCHours(0, 0, 0, 0);
-  
-  const diffTime = report.getTime() - placement.getTime();
-  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)); // Use Math.round to handle DST
-  return Math.max(1, diffDays + 1);
-}
-
-/**
- * Effective placement for age computation: min of setup placement and min report date.
- * Matches backend/DailyReportTable so first day always gets age 1.
- */
-function getEffectivePlacement(
-  setupList: SetupInfoResponse[],
-  dailyList: DailyReportResponse[]
-): string | null {
-  const placementFromSetup = getFirstDayFromSetup(setupList);
-  const minReportDate = dailyList
-    .map((r) => r.reportDate)
-    .filter((d): d is string => d != null && String(d).trim() !== "")
-    .reduce<string | null>((min, d) => (min == null || d < min ? d : min), null);
-  if (placementFromSetup != null && minReportDate != null) {
-    return minReportDate < placementFromSetup ? minReportDate : placementFromSetup;
-  }
-  return placementFromSetup ?? minReportDate ?? null;
-}
-
-// Table 1: Effectif Mis en Place — 8 columns (page attributes)
-const EFFECTIF_COLS = [
-  "Date Mise en Place",
-  "Heure",
-  "Bâtiment",
-  "Sexe",
-  "Effectif Initial",
-  "Type d'élevage",
-  "Fournisseur",
-  "Souche",
-];
-
-// Table 2: Reporting Journalier — 10 columns (page attributes, no actions)
-const DAILY_COLS = [
-  "AGE",
-  "Date",
-  "SEM",
-  "Bâtiment",
-  "Désignation",
-  "NBR (Mortalité)",
-  "Conso. Eau (L)",
-  "Temp. Min",
-  "Temp. Max",
-  "Traitement",
-];
+const EFFECTIF_COLS = [...REPORTING_EFFECTIF_TABLE_HEADERS];
+const DAILY_COLS = [...REPORTING_DAILY_TABLE_HEADERS];
 
 const HEADER_PRIMARY = "FF3D2E1A";
 const HEADER_TEXT = "FFF7F6F3";
@@ -96,60 +35,8 @@ const ROW_ALT = "FFE8E6E1";
 const TOTAL_BG = "FFD8D6D0";
 const BORDER_THIN = { style: "thin" as const };
 
-function safeStr(s: string | undefined | null): string {
-  return s != null ? String(s).trim() : "";
-}
-
 function safeFileName(parts: string[]): string {
   return parts.join("_").replace(/[^\w\-_]/g, "_");
-}
-
-function effectifRowToArray(r: SetupInfoResponse): (string | number)[] {
-  return [
-    safeStr(r.dateMiseEnPlace) || "—",
-    safeStr(r.heureMiseEnPlace) || "—",
-    safeStr(r.building) || "—",
-    safeStr(r.sex) || "—",
-    r.effectifMisEnPlace != null ? String(r.effectifMisEnPlace) : "—",
-    safeStr(r.typeElevage) || "—",
-    safeStr(r.origineFournisseur) || "—",
-    safeStr(r.souche) || "—",
-  ];
-}
-
-/**
- * Build row for Table 2 (Reporting Journalier).
- * When effectivePlacement is provided, age and semaine are computed from placement (matches table/backend)
- * so RT and RF both get correct values regardless of API response.
- */
-function dailyRowToArray(
-  r: DailyReportResponse,
-  effectivePlacement: string | null
-): (string | number)[] {
-  const reportDate = safeStr(r.reportDate);
-  const ageNum =
-    effectivePlacement && reportDate
-      ? computeAgeFromPlacement(reportDate, effectivePlacement)
-      : r.ageJour ?? null;
-  const age = ageNum != null ? String(ageNum) : "—";
-  const sem =
-    ageNum != null
-      ? `S${Math.ceil(ageNum / 7)}`
-      : r.semaine != null
-        ? (String(r.semaine).match(/^\d+$/) ? `S${r.semaine}` : String(r.semaine))
-        : "—";
-  return [
-    age,
-    reportDate || "—",
-    sem,
-    safeStr(r.building) || "—",
-    safeStr(r.designation) || "—",
-    r.nbr != null ? String(r.nbr) : "—",
-    r.waterL != null ? String(r.waterL) : "—",
-    r.tempMin != null ? String(r.tempMin) : "—",
-    r.tempMax != null ? String(r.tempMax) : "—",
-    safeStr(r.traitement) || "—",
-  ];
 }
 
 export async function exportToExcel(params: ReportingJournalierExportParams): Promise<void> {
@@ -172,7 +59,7 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
   let dailyList: DailyReportResponse[];
 
   if (selectedDate && selectedDate.trim() !== "") {
-    const placementFromSetup = getFirstDayFromSetup(setupList);
+    const placementFromSetup = reportingGetFirstDayFromSetup(setupList);
     const minReportDate = allDailyList
       .map((r) => r.reportDate)
       .filter((d): d is string => d != null && d.trim() !== "")
@@ -269,7 +156,7 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
 
   const effectifStartRow = dataRow;
   for (let i = 0; i < setupList.length; i++) {
-    const arr = effectifRowToArray(setupList[i]!);
+    const arr = reportingEffectifExportRowToArray(setupList[i]!);
     for (let c = 0; c < arr.length; c++) {
       const cell = ws.getCell(dataRow, c + 1);
       cell.value = arr[c];
@@ -329,10 +216,10 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
   });
   dataRow++;
 
-  const effectivePlacement = getEffectivePlacement(setupList, dailyList);
+  const effectivePlacement = reportingGetEffectivePlacement(setupList, dailyList);
   const dailyStartRow = dataRow;
   for (let i = 0; i < dailyList.length; i++) {
-    const arr = dailyRowToArray(dailyList[i]!, effectivePlacement);
+    const arr = reportingDailyExportRowToArray(dailyList[i]!, effectivePlacement);
     for (let c = 0; c < arr.length; c++) {
       const cell = ws.getCell(dataRow, c + 1);
       cell.value = arr[c];
@@ -395,7 +282,7 @@ export async function exportToPdf(params: ReportingJournalierExportParams): Prom
   let dailyList: DailyReportResponse[];
 
   if (selectedDate && selectedDate.trim() !== "") {
-    const placementFromSetup = getFirstDayFromSetup(setupList);
+    const placementFromSetup = reportingGetFirstDayFromSetup(setupList);
     const minReportDate = allDailyList
       .map((r) => r.reportDate)
       .filter((d): d is string => d != null && d.trim() !== "")
@@ -445,7 +332,7 @@ export async function exportToPdf(params: ReportingJournalierExportParams): Prom
   doc.text("Effectif Mis en Place", margin, startY);
   startY += 6;
 
-  const effectifBody: string[][] = setupList.map((r) => effectifRowToArray(r).map(String));
+  const effectifBody: string[][] = setupList.map((r) => reportingEffectifExportRowToArray(r).map(String));
   effectifBody.push([
     "Total Mâle / Femelle :",
     "",
@@ -503,8 +390,8 @@ export async function exportToPdf(params: ReportingJournalierExportParams): Prom
   doc.text("Reporting Journalier", margin, startY);
   startY += 6;
 
-  const effectivePlacement = getEffectivePlacement(setupList, dailyList);
-  const dailyBody: string[][] = dailyList.map((r) => dailyRowToArray(r, effectivePlacement).map(String));
+  const effectivePlacement = reportingGetEffectivePlacement(setupList, dailyList);
+  const dailyBody: string[][] = dailyList.map((r) => reportingDailyExportRowToArray(r, effectivePlacement).map(String));
   const totalMortality = dailyList.reduce((s, r) => s + (r.nbr ?? 0), 0);
   dailyBody.push(["Total Mortalité :", "", "", "", "", formatGroupedNumber(totalMortality, 0), "", "", "", ""]);
 

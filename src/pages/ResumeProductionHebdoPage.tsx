@@ -17,7 +17,11 @@ import {
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import WeeklyProductionSummaryContent from "@/components/suivi-technique/WeeklyProductionSummaryContent";
 import { api, type FarmResponse, getStoredSelectedFarm } from "@/lib/api";
-import { exportToExcel, exportToPdf } from "@/lib/resumeProductionHebdoExport";
+import {
+  exportToExcel,
+  exportToPdf,
+  type ResumeProductionHebdoExportParams,
+} from "@/lib/resumeProductionHebdoExport";
 import { toOptionalNumber } from "@/lib/formatResumeAmount";
 import { useToast } from "@/hooks/use-toast";
 
@@ -60,9 +64,9 @@ export default function ResumeProductionHebdoPage() {
   const [loading, setLoading] = useState(true);
   
   // Use ref instead of state to avoid extra renders
-  const exportParamsRef = useRef<any>(null);
+  const exportParamsRef = useRef<ResumeProductionHebdoExportParams | null>(null);
 
-  const handleExportParamsReady = useCallback((params: any) => {
+  const handleExportParamsReady = useCallback((params: ResumeProductionHebdoExportParams) => {
     exportParamsRef.current = params;
   }, []);
 

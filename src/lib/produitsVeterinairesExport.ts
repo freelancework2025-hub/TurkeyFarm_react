@@ -5,6 +5,12 @@
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  PRODUITS_VETERINAIRES_TABLE_HEADERS,
+  produitsVeterinairesResolvedMontant,
+} from "@/lib/produitsVeterinairesShared";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface VetRowExport {
   id: string;
@@ -35,24 +41,16 @@ export interface ProduitsVeterinairesExportParams {
   ageByRowId: Map<string, string | number>;
 }
 
-const COLS = [
-  "AGE",
-  "DATE",
-  "SEM",
-  "DÉSIGNATION",
-  "FOURNISSEUR",
-  "UG",
-  "QTE",
-  "PRIX",
-  "MONTANT",
-  "N° BR",
-];
+const COLS = [...PRODUITS_VETERINAIRES_TABLE_HEADERS];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
 function rowToArray(row: VetRowExport, age: string | number): (string | number)[] {
+  const qte = resolvedQteFromString(row.qte);
+  const prix = toOptionalNumber(row.prixPerUnit);
+  const montant = produitsVeterinairesResolvedMontant(row);
   return [
     age ?? "—",
     safeStr(row.date) || "—",
@@ -60,11 +58,22 @@ function rowToArray(row: VetRowExport, age: string | number): (string | number)[
     safeStr(row.designation) || "—",
     safeStr(row.supplier) || "—",
     safeStr(row.ug) || "—",
-    safeStr(row.qte) || "—",
-    safeStr(row.prixPerUnit) || "—",
-    safeStr(row.montant) || "—",
+    qte == null ? "—" : qte,
+    prix == null ? "—" : prix,
+    montant == null ? "—" : montant,
     safeStr(row.deliveryNoteNumber) || "—",
   ];
+}
+
+function pdfRowMapper(cells: (string | number)[]): string[] {
+  return cells.map((v, i) => {
+    if (i === 0) return v === "—" ? "—" : String(v);
+    if (i >= 6 && i <= 8) {
+      if (v === "—") return "—";
+      if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    }
+    return String(v);
+  });
 }
 
 function toConfig(params: ProduitsVeterinairesExportParams): ITableExportConfig {
@@ -89,21 +98,35 @@ function toConfig(params: ProduitsVeterinairesExportParams): ITableExportConfig 
       weekTotal.montant,
       "",
     ],
-    cumulRow: [
+    cumulRow: ["CUMUL", "", "", "", "", "", cumul.qte, cumul.prix, cumul.montant, ""],
+    weekTotalPdfRow: [
+      `TOTAL ${semaine}`,
+      "",
+      "",
+      "",
+      "",
+      "",
+      formatGroupedNumber(weekTotal.qte, 2),
+      formatGroupedNumber(weekTotal.prix, 2),
+      formatGroupedNumber(weekTotal.montant, 2),
+      "",
+    ],
+    cumulPdfRow: [
       "CUMUL",
       "",
       "",
       "",
       "",
       "",
-      cumul.qte,
-      cumul.prix,
-      cumul.montant,
+      formatGroupedNumber(cumul.qte, 2),
+      formatGroupedNumber(cumul.prix, 2),
+      formatGroupedNumber(cumul.montant, 2),
       "",
     ],
+    pdfRowMapper,
     ageByRowId,
     fileNamePrefix: "Livraisons_Produits_Veterinaires",
-    numberFormatColumns: [6, 7, 8], // QTE, PRIX, MONTANT
+    numberFormatColumns: [6, 7, 8],
   };
 }
 

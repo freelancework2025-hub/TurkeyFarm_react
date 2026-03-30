@@ -6,8 +6,15 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
 import type { ResumeCoutsHebdoSummaryResponse } from "@/lib/api";
-import { formatGroupedNumber, formatResumeAmount as formatNum } from "@/lib/formatResumeAmount";
+import { formatResumeAmount as formatNum } from "@/lib/formatResumeAmount";
 import { buildDisplayRows, getEffectiveCumul, toNum } from "@/lib/resumeCoutsHebdoDisplay";
+import {
+  getResumeCoutsPrixRevientHeaders,
+  RESUME_COUTS_PRIX_REVIENT_COLUMN_COUNT,
+  RESUME_COUTS_FOOTER_TOTAL_LABEL,
+  RESUME_COUTS_INDICATEUR_TABLE_HEADERS,
+  formatResumeCoutsPct,
+} from "@/lib/resumeCoutsHebdoShared";
 
 export interface ResumeCoutsHebdoExportParams {
   farmName: string;
@@ -18,19 +25,12 @@ export interface ResumeCoutsHebdoExportParams {
   summary: ResumeCoutsHebdoSummaryResponse;
 }
 
-const COLS = ["DESIGNATION", "S1", "CUMUL", "CUMUL DH/KG", "%"];
-
 const HEADER_PRIMARY = "FF3D2E1A";
 const HEADER_TEXT = "FFF7F6F3";
 const ROW_ALT = "FFE8E6E1";
 const TOTAL_BG = "FFD8D6D0";
 const BORDER_THIN = { style: "thin" as const };
 const BORDERS_ALL = { top: BORDER_THIN, left: BORDER_THIN, bottom: BORDER_THIN, right: BORDER_THIN };
-
-function formatPct(v: number | null | undefined): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  return `${v.toFixed(2).replace(".", ",")} %`;
-}
 
 function safeFileName(parts: string[]): string {
   return parts.join("_").replace(/[^\w\-_]/g, "_");
@@ -52,7 +52,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
   let currentRow = 1;
 
   const addTitle = (ws: ExcelJS.Worksheet, text: string) => {
-    ws.mergeCells(currentRow, 1, currentRow, 5);
+    ws.mergeCells(currentRow, 1, currentRow, RESUME_COUTS_PRIX_REVIENT_COLUMN_COUNT);
     const cell = ws.getCell(currentRow, 1);
     cell.value = text;
     cell.font = { size: 14, bold: true, color: { argb: HEADER_TEXT } };
@@ -93,7 +93,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
 
   // Section 1. Prix de revient — Tous bâtiments — {semaine}
   addTitle(ws, `1. Prix de revient — Tous bâtiments — ${semaine}`);
-  const costHeaders = ["DESIGNATION", semaine, "CUMUL", "CUMUL DH/KG", "%"];
+  const costHeaders = getResumeCoutsPrixRevientHeaders(semaine);
   for (let c = 0; c < costHeaders.length; c++) {
     const cell = ws.getCell(currentRow, c + 1);
     cell.value = costHeaders[c];
@@ -111,7 +111,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
     ws.getCell(currentRow, 2).value = toNum(r.valeurS1) ?? "—";
     ws.getCell(currentRow, 3).value = effectiveCumul ?? "—";
     ws.getCell(currentRow, 4).value = cumulDhKg ?? "—";
-    ws.getCell(currentRow, 5).value = pct != null ? formatPct(pct) : "—";
+    ws.getCell(currentRow, 5).value = pct != null ? formatResumeCoutsPct(pct) : "—";
     for (let c = 1; c <= 5; c++) {
       ws.getCell(currentRow, c).border = BORDERS_ALL;
       if (dataIdx % 2 === 1) ws.getCell(currentRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
@@ -124,11 +124,11 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
     dataIdx++;
   }
   // TOTAL row
-  ws.getCell(currentRow, 1).value = "TOTAL";
+  ws.getCell(currentRow, 1).value = RESUME_COUTS_FOOTER_TOTAL_LABEL;
   ws.getCell(currentRow, 2).value = totalS1;
   ws.getCell(currentRow, 3).value = totalCumul;
   ws.getCell(currentRow, 4).value = totalCumulDhKg ?? "—";
-  ws.getCell(currentRow, 5).value = totalCumul > 0 ? formatPct(100) : "—";
+  ws.getCell(currentRow, 5).value = totalCumul > 0 ? formatResumeCoutsPct(100) : "—";
   for (let c = 1; c <= 5; c++) {
     const cell = ws.getCell(currentRow, c);
     cell.font = { bold: true };
@@ -185,7 +185,7 @@ export function exportToPdf(params: ResumeCoutsHebdoExportParams): void {
   doc.setTextColor(0, 0, 0);
   let startY = 32;
 
-  const headerCols = ["DESIGNATION", semaine, "CUMUL", "CUMUL DH/KG", "%"];
+  const headerCols = getResumeCoutsPrixRevientHeaders(semaine);
   const body: string[][] = displayRows.map((r) => {
     const effectiveCumul = getEffectiveCumul(r);
     const cumulDhKg = poidsVifProduitKg != null && poidsVifProduitKg > 0 && effectiveCumul != null ? effectiveCumul / poidsVifProduitKg : null;
@@ -195,10 +195,16 @@ export function exportToPdf(params: ResumeCoutsHebdoExportParams): void {
       formatNum(toNum(r.valeurS1)),
       formatNum(effectiveCumul),
       formatNum(cumulDhKg),
-      pct != null ? formatPct(pct) : "—",
+      pct != null ? formatResumeCoutsPct(pct) : "—",
     ];
   });
-  body.push(["Total", formatNum(totalS1), formatNum(totalCumul), formatNum(totalCumulDhKg), totalCumul > 0 ? formatPct(100) : "—"]);
+  body.push([
+    RESUME_COUTS_FOOTER_TOTAL_LABEL,
+    formatNum(totalS1),
+    formatNum(totalCumul),
+    formatNum(totalCumulDhKg),
+    totalCumul > 0 ? formatResumeCoutsPct(100) : "—",
+  ]);
 
   (doc as unknown as { autoTable: (opts: object) => void }).autoTable({
     head: [headerCols],
@@ -234,7 +240,7 @@ export function exportToPdf(params: ResumeCoutsHebdoExportParams): void {
     const prixSujet = prixRevientParSujet != null ? prixRevientParSujet : totalCumul > 0 && effectifRestantFinSemaine != null && totalNbreProduction != null && effectifRestantFinSemaine + totalNbreProduction > 0 ? totalCumul / (effectifRestantFinSemaine + totalNbreProduction) : null;
     const prixKg = prixRevientParKg ?? totalCumulDhKg;
     (doc as unknown as { autoTable: (opts: object) => void }).autoTable({
-      head: [["INDICATEUR", "VALEUR"]],
+      head: [[...RESUME_COUTS_INDICATEUR_TABLE_HEADERS]],
       body: [
         ["PRIX DE REVIENT/SUJET", formatNum(prixSujet)],
         ["PRIX DE REVIENT/KG", formatNum(prixKg)],

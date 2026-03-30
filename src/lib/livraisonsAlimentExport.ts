@@ -6,10 +6,15 @@
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  LIVRAISONS_ALIMENT_TABLE_HEADERS,
+  livraisonsAlimentResolvedMontant,
+} from "@/lib/livraisonsAlimentShared";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface LivraisonRowExport {
   id: string;
-  age?: string;
   date: string;
   sem: string;
   designation: string;
@@ -20,8 +25,6 @@ export interface LivraisonRowExport {
   sex: string;
   prixPerUnit: string;
   montant: string;
-  maleQty: string;
-  femaleQty: string;
 }
 
 export interface ExportTotals {
@@ -42,27 +45,24 @@ export interface LivraisonsAlimentExportParams {
   ageByRowId: Map<string, string | number>;
 }
 
-const COLS = [
-  "AGE",
-  "DATE",
-  "SEM",
-  "DÉSIGNATION",
-  "FOURNISSEUR",
-  "N° BL",
-  "N° BR",
-  "QTE",
-  "SEX",
-  "PRIX",
-  "MONTANT",
-  "MALE",
-  "FEMELLE",
-];
+const COLS = [...LIVRAISONS_ALIMENT_TABLE_HEADERS];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
+function sexLabel(sex: string): string {
+  const s = safeStr(sex);
+  if (s === "MALE") return "Male";
+  if (s === "FEMELLE") return "Femelle";
+  if (s === "MALE & FEMELLE") return "Male & Femelle";
+  return s || "—";
+}
+
 function rowToArray(row: LivraisonRowExport, age: string | number): (string | number)[] {
+  const qte = resolvedQteFromString(row.qte);
+  const prix = toOptionalNumber(row.prixPerUnit);
+  const montant = livraisonsAlimentResolvedMontant(row);
   return [
     age ?? "—",
     safeStr(row.date) || "—",
@@ -71,17 +71,52 @@ function rowToArray(row: LivraisonRowExport, age: string | number): (string | nu
     safeStr(row.supplier) || "—",
     safeStr(row.deliveryNoteNumber) || "—",
     safeStr(row.numeroBonReception) || "—",
-    safeStr(row.qte) || "—",
-    safeStr(row.sex) === "MALE" ? "Male" : safeStr(row.sex) === "FEMELLE" ? "Femelle" : safeStr(row.sex) || "—",
-    safeStr(row.prixPerUnit) || "—",
-    safeStr(row.montant) || "—",
-    safeStr(row.maleQty) || "—",
-    safeStr(row.femaleQty) || "—",
+    qte == null ? "—" : qte,
+    sexLabel(row.sex),
+    prix == null ? "—" : prix,
+    montant == null ? "—" : montant,
   ];
+}
+
+function pdfRowMapper(cells: (string | number)[]): string[] {
+  return cells.map((v, i) => {
+    if (i === 0) return v === "—" ? "—" : String(v);
+    if (i === 7 || i === 9 || i === 10) {
+      if (v === "—") return "—";
+      if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    }
+    return String(v);
+  });
 }
 
 function toConfig(params: LivraisonsAlimentExportParams): ITableExportConfig {
   const { farmName, lot, semaine, rows, weekTotal, cumul, ageByRowId } = params;
+  const weekTotalRow: (string | number)[] = [
+    `TOTAL ${semaine}`,
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    weekTotal.qte,
+    "",
+    weekTotal.prix,
+    weekTotal.montant,
+  ];
+  const cumulRow: (string | number)[] = [
+    "CUMUL",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    cumul.qte,
+    "",
+    cumul.prix,
+    cumul.montant,
+  ];
   return {
     title: "FICHE DE SUIVI DES LIVRAISONS D'ALIMENT",
     columns: COLS,
@@ -90,7 +125,9 @@ function toConfig(params: LivraisonsAlimentExportParams): ITableExportConfig {
     semaine,
     rows,
     rowToArray,
-    weekTotalRow: [
+    weekTotalRow,
+    cumulRow,
+    weekTotalPdfRow: [
       `TOTAL ${semaine}`,
       "",
       "",
@@ -98,14 +135,12 @@ function toConfig(params: LivraisonsAlimentExportParams): ITableExportConfig {
       "",
       "",
       "",
-      weekTotal.qte,
+      formatGroupedNumber(weekTotal.qte, 2),
       "",
-      weekTotal.prix,
-      weekTotal.montant,
-      weekTotal.maleQty,
-      weekTotal.femaleQty,
+      formatGroupedNumber(weekTotal.prix, 2),
+      formatGroupedNumber(weekTotal.montant, 2),
     ],
-    cumulRow: [
+    cumulPdfRow: [
       "CUMUL",
       "",
       "",
@@ -113,16 +148,15 @@ function toConfig(params: LivraisonsAlimentExportParams): ITableExportConfig {
       "",
       "",
       "",
-      cumul.qte,
+      formatGroupedNumber(cumul.qte, 2),
       "",
-      cumul.prix,
-      cumul.montant,
-      cumul.maleQty,
-      cumul.femaleQty,
+      formatGroupedNumber(cumul.prix, 2),
+      formatGroupedNumber(cumul.montant, 2),
     ],
+    pdfRowMapper,
     ageByRowId,
     fileNamePrefix: "Livraisons_Aliment",
-    numberFormatColumns: [9, 10], // PRIX, MONTANT
+    numberFormatColumns: [7, 9, 10],
   };
 }
 

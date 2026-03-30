@@ -7,6 +7,11 @@
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
+import {
+  DEPENSES_DIVERS_MAIN_HEADERS,
+  DEPENSES_DIVERS_VS_HEADERS,
+  type DepenseMontantRow,
+} from "@/lib/depensesDiversShared";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface DepenseDiversRowExport {
@@ -53,11 +58,8 @@ export interface DepensesDiversExportParams {
   videSanitaireTotalMontant: number;
 }
 
-// Table 1: Vide sanitaire — align with DepensesDivers.tsx (Vide sanitaire)
-const VS_COLS = ["DATE", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "N° BR", "UG", "QTE", "PRIX", "MONTANT"];
-
-// Table 2: Dépenses divers — AGE, DATE, SEM, … (no UG column on the page)
-const MAIN_COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "N° BR", "QTE", "PRIX", "MONTANT"];
+const VS_COLS = [...DEPENSES_DIVERS_VS_HEADERS];
+const MAIN_COLS = [...DEPENSES_DIVERS_MAIN_HEADERS];
 
 const HEADER_PRIMARY = "FF3D2E1A";
 const HEADER_TEXT = "FFF7F6F3";
@@ -70,8 +72,8 @@ function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
-/** Same rule as formatMontantCell on DepensesDivers.tsx */
-function resolvedMontant(row: { montant: string; qte: string; prixPerUnit: string }): number | null {
+/** Same rule as formatMontantCell on DepensesDivers.tsx (show "—" when no value). */
+function resolvedMontant(row: DepenseMontantRow): number | null {
   const m = toOptionalNumber(row.montant);
   if (m != null) return m;
   const q = toOptionalNumber(row.qte);

@@ -20,13 +20,15 @@ export default function Profile() {
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const profileImageUrl = useProfileImage(user?.id ?? null, imageRefreshKey);
+  /** Profile image API uses email as the canonical user key; falls back to numeric id if email is missing. */
+  const profileUserKey = user ? user.email?.trim() || user.id : null;
+  const profileImageUrl = useProfileImage(profileUserKey, imageRefreshKey);
 
   const handleDeleteImage = async () => {
-    if (!user || !profileImageUrl) return;
+    if (!user || !profileImageUrl || profileUserKey === null) return;
     setDeleting(true);
     try {
-      await api.users.deleteProfileImage(user.id);
+      await api.users.deleteProfileImage(profileUserKey);
       setImageRefreshKey((k) => k + 1);
       toast({ title: "Photo supprimée" });
     } catch {
@@ -96,7 +98,8 @@ export default function Profile() {
                         if (!file || !user) return;
                         setUploading(true);
                         try {
-                          await api.users.uploadProfileImage(user.id, file);
+                          const key = user.email?.trim() || user.id;
+                          await api.users.uploadProfileImage(key, file);
                           setImageRefreshKey((k) => k + 1);
                           toast({ title: "Photo mise à jour" });
                         } catch {
@@ -136,7 +139,9 @@ export default function Profile() {
                 <h2 className="text-lg font-display font-bold text-foreground">
                   {user.displayName || user.username}
                 </h2>
-                <p className="text-sm text-muted-foreground">@{user.username}</p>
+                <p className="text-sm text-muted-foreground">
+                  {user.email?.trim() || `@${user.username}`}
+                </p>
               </div>
             </div>
           </div>

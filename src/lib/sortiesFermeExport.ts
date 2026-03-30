@@ -5,6 +5,12 @@
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  SORTIES_FERME_TABLE_HEADERS,
+  sortiesFermeResolvedMontant,
+} from "@/lib/sortiesFermeShared";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface SortieRowExport {
   id: string;
@@ -38,35 +44,17 @@ export interface SortiesFermeExportParams {
   ageByRowId: Map<string, string | number>;
 }
 
-const COLS = [
-  "AGE",
-  "DATE",
-  "SEM",
-  "CLIENT",
-  "N° BL",
-  "TYPE",
-  "DÉSIGNATION",
-  "NBRE DINDE",
-  "QTÉ BRUTE (KG)",
-  "PRIX/KG",
-  "MONTANT TTC",
-];
+const COLS = [...SORTIES_FERME_TABLE_HEADERS];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
-function parseExportNum(raw: string | undefined | null): number | null {
-  if (raw == null || String(raw).trim() === "") return null;
-  const n = parseFloat(String(raw).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
-  return Number.isNaN(n) ? null : n;
-}
-
 function rowToArray(row: SortieRowExport, age: string | number): (string | number)[] {
-  const nbre = parseExportNum(row.nbre_dinde);
-  const qte = parseExportNum(row.qte_brute_kg);
-  const prix = parseExportNum(row.prix_kg);
-  const montant = parseExportNum(row.montant_ttc);
+  const nbre = toOptionalNumber(row.nbre_dinde);
+  const qte = resolvedQteFromString(row.qte_brute_kg);
+  const prix = toOptionalNumber(row.prix_kg);
+  const montant = sortiesFermeResolvedMontant(row);
   return [
     age ?? "—",
     safeStr(row.date) || "—",
@@ -75,11 +63,25 @@ function rowToArray(row: SortieRowExport, age: string | number): (string | numbe
     safeStr(row.num_bl) || "—",
     safeStr(row.type) || "—",
     safeStr(row.designation) || "—",
-    nbre ?? "—",
-    qte ?? "—",
-    prix ?? "—",
-    montant ?? "—",
+    nbre == null ? "—" : nbre,
+    qte == null ? "—" : qte,
+    prix == null ? "—" : prix,
+    montant == null ? "—" : montant,
   ];
+}
+
+function pdfRowMapper(cells: (string | number)[]): string[] {
+  return cells.map((v, i) => {
+    if (i === 0) return v === "—" ? "—" : String(v);
+    if (i >= 7 && i <= 10) {
+      if (v === "—") return "—";
+      if (typeof v === "number" && Number.isFinite(v)) {
+        const decimals = i === 7 ? 0 : 2;
+        return formatGroupedNumber(v, decimals);
+      }
+    }
+    return String(v);
+  });
 }
 
 function toConfig(params: SortiesFermeExportParams): ITableExportConfig {
@@ -105,7 +107,21 @@ function toConfig(params: SortiesFermeExportParams): ITableExportConfig {
       weekTotal.prix_kg,
       weekTotal.montant_ttc,
     ],
-    cumulRow: [
+    cumulRow: ["CUMUL", "", "", "", "", "", "", cumul.nbre_dinde, cumul.qte_brute_kg, cumul.prix_kg, cumul.montant_ttc],
+    weekTotalPdfRow: [
+      `TOTAL ${semaine}`,
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      formatGroupedNumber(weekTotal.nbre_dinde, 0),
+      formatGroupedNumber(weekTotal.qte_brute_kg, 2),
+      formatGroupedNumber(weekTotal.prix_kg, 2),
+      formatGroupedNumber(weekTotal.montant_ttc, 2),
+    ],
+    cumulPdfRow: [
       "CUMUL",
       "",
       "",
@@ -113,11 +129,12 @@ function toConfig(params: SortiesFermeExportParams): ITableExportConfig {
       "",
       "",
       "",
-      cumul.nbre_dinde,
-      cumul.qte_brute_kg,
-      cumul.prix_kg,
-      cumul.montant_ttc,
+      formatGroupedNumber(cumul.nbre_dinde, 0),
+      formatGroupedNumber(cumul.qte_brute_kg, 2),
+      formatGroupedNumber(cumul.prix_kg, 2),
+      formatGroupedNumber(cumul.montant_ttc, 2),
     ],
+    pdfRowMapper,
     ageByRowId,
     fileNamePrefix: "Sorties_Ferme",
     numberFormatColumns: [7, 8, 9, 10],

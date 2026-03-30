@@ -28,6 +28,7 @@ interface LotSelectorViewProps {
   loading?: boolean;
   onSelectLot: (lot: string) => void;
   onNewLot?: (lot: string) => void;
+  /** When true, show "Nouveau lot". Only InfosSetup passes true (RT/Admin); other pages use false. */
   canCreate?: boolean;
   /** Only RESPONSABLE_TECHNIQUE and ADMINISTRATEUR: show "Fermer le lot" / "Ouvrir le lot" on hover and allow close/open after confirmation */
   canCloseOpen?: boolean;
@@ -224,7 +225,7 @@ export default function LotSelectorView({
           <AlertDialogHeader>
             <AlertDialogTitle>Fermer le lot</AlertDialogTitle>
             <AlertDialogDescription>
-              Voulez-vous fermer le lot <strong>{pendingLot}</strong> ? Les autres utilisateurs (responsable de ferme, back-office) ne pourront plus y accéder. Vous pourrez le rouvrir à tout moment.
+              Voulez-vous fermer le lot <strong>{pendingLot}</strong> ? Les autres utilisateurs (autres responsables techniques, responsable de ferme, back-office) ne pourront plus y accéder. En tant que responsable technique, vous pourrez encore consulter les données de ce lot ; vous pourrez aussi le rouvrir à tout moment.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

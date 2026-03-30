@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Building2, Calendar, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Trash2, UserPlus } from "lucide-react";
 import {
@@ -26,7 +26,17 @@ import {
   type MainOeuvreRequest,
   type LotWithStatusResponse,
 } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { exportToExcel, exportToPdf } from "@/lib/mainOeuvreExport";
+import {
+  formatEmployerNomComplet,
+  getMainOeuvreTableHeaders,
+  MAIN_OEUVRE_HEADER_CLASS,
+  type MainOeuvreHeaderKey,
+  mainOeuvreEntryJours,
+  mainOeuvreRowMontant,
+  mainOeuvreRowTotalJours,
+} from "@/lib/mainOeuvreShared";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 
 /**
@@ -75,14 +85,6 @@ function addOneDay(isoDate: string): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Affiche le nom complet : Prénom Nom */
-function formatEmployerNomComplet(prenom: string | null | undefined, nom: string | null | undefined): string {
-  const p = (prenom ?? "").trim();
-  const n = (nom ?? "").trim();
-  if (!p && !n) return "—";
-  return p && n ? `${p} ${n}` : p || n;
-}
-
 /** Initiales pour avatar : première lettre prenom + nom (ex. JD) */
 function getEmployerInitials(prenom: string | null | undefined, nom: string | null | undefined): string {
   const p = (prenom ?? "").trim();
@@ -95,16 +97,6 @@ function getEmployerInitials(prenom: string | null | undefined, nom: string | nu
 
 function formatTemps(fullDay: boolean | null | undefined): string {
   return fullDay === true ? "1" : fullDay === false ? "1/2" : "—";
-}
-
-/** Jours for one entry: 1 if fullDay, 0.5 otherwise */
-function entryJours(fullDay: boolean): number {
-  return fullDay ? 1 : 0.5;
-}
-
-/** Total jours for a row = sum of all entries */
-function rowTotalJours(entries: EmployerEntry[]): number {
-  return entries.reduce((s, e) => s + entryJours(e.fullDay), 0);
 }
 
 /** Sort lots: Lot1, Lot2, ... (natural order). */
@@ -131,7 +123,19 @@ export default function MainOeuvre() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName, isAdministrateur, isResponsableTechnique, isBackofficeEmployer } = useAuth();
+  const {
+    user,
+    canAccessAllFarms,
+    isReadOnly,
+    canCreate,
+    canUpdate,
+    hasFullAccess,
+    selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
+    isAdministrateur,
+    isResponsableTechnique,
+    isBackofficeEmployer,
+  } = useAuth();
   const showMontantColumn = isAdministrateur || isResponsableTechnique || isBackofficeEmployer;
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
@@ -146,7 +150,18 @@ export default function MainOeuvre() {
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    lotParam.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotParam.trim()), lotAccessCtx)
+  );
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [newSemaineInput, setNewSemaineInput] = useState("");
   const [addingToRowId, setAddingToRowId] = useState<string | null>(null);
@@ -484,7 +499,7 @@ export default function MainOeuvre() {
   ): MainOeuvreRequest => {
     const emp = employers.find((x) => x.id === e.employerId);
     const salaire = emp?.salaire != null ? Number(emp.salaire) : 0;
-    const jours = entryJours(e.fullDay);
+    const jours = mainOeuvreEntryJours(e.fullDay);
     const montant = Math.round(salaire * jours * 100) / 100;
     const age =
       computedAge != null
@@ -594,13 +609,8 @@ export default function MainOeuvre() {
         return (a.date || "").localeCompare(b.date || "");
       })
     : [];
-  const weekTotalJours = currentRows.reduce((sum, r) => sum + rowTotalJours(r.entries), 0);
-  const rowMontant = (r: MainOeuvreRow) =>
-    r.entries.reduce((sum, e) => {
-      const emp = employers.find((x) => x.id === e.employerId);
-      const sal = emp?.salaire != null ? Number(emp.salaire) : 0;
-      return sum + sal * entryJours(e.fullDay);
-    }, 0);
+  const weekTotalJours = currentRows.reduce((sum, r) => sum + mainOeuvreRowTotalJours(r.entries), 0);
+  const rowMontantLine = (r: MainOeuvreRow) => mainOeuvreRowMontant(r.entries, employers);
   const cumulJours = (() => {
     const sems = new Set(rows.map(getSemFromRow).filter(Boolean));
     const semOrder = sortSemaines([...sems]);
@@ -608,7 +618,7 @@ export default function MainOeuvre() {
     const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
     return semsUpTo.reduce(
       (sum, sem) =>
-        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((s, r) => s + rowTotalJours(r.entries), 0),
+        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((s, r) => s + mainOeuvreRowTotalJours(r.entries), 0),
       0
     );
   })();
@@ -619,12 +629,12 @@ export default function MainOeuvre() {
     const semsUpTo = idx < 0 ? [selectedSemaine] : semOrder.slice(0, idx + 1);
     return semsUpTo.reduce(
       (sum, sem) =>
-        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((s, r) => s + rowMontant(r), 0),
+        sum + rows.filter((r) => getSemFromRow(r) === sem).reduce((s, r) => s + rowMontantLine(r), 0),
       0
     );
   })();
 
-  const colCount = showMontantColumn ? 9 : 8; // AGE, date, semaine, employé, temps, [montant], observation, ✓, actions
+  const colCount = getMainOeuvreTableHeaders(showMontantColumn).length + 2;
 
   const canShowExport = pageFarmId != null && hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && !showFarmSelector;
   const exportFarmName =
@@ -655,7 +665,7 @@ export default function MainOeuvre() {
         ageByRowId: displayAgeByRowId,
         weekTotalJours,
         cumulJours,
-        weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontant(r), 0),
+        weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontantLine(r), 0),
         cumulMontant,
         showMontantColumn,
       });
@@ -687,7 +697,7 @@ export default function MainOeuvre() {
       ageByRowId: displayAgeByRowId,
       weekTotalJours,
       cumulJours,
-      weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontant(r), 0),
+      weekTotalMontant: currentRows.reduce((sum, r) => sum + rowMontantLine(r), 0),
       cumulMontant,
       showMontantColumn,
     });
@@ -816,18 +826,20 @@ export default function MainOeuvre() {
             loading={lotsLoading}
             onSelectLot={(lot) => {
               const status = lotsWithStatus.find((l) => l.lot === lot);
-              if (status?.closed) {
+              if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                 toast({
                   title: "Lot fermé",
-                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  description:
+                    "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                   variant: "destructive",
                 });
                 return;
               }
               setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
             }}
-            onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-            canCreate={canCreate}
+            canCreate={false}
+            description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+            emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
             title="Choisir un lot — Main d'œuvre"
           />
         </>
@@ -957,18 +969,21 @@ export default function MainOeuvre() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th
-                        className="w-12 min-w-12 max-w-12 shrink-0 px-1 text-center"
-                        title="Âge séquentiel (1, 2, 3…) sur tout le lot"
-                      >
-                        AGE
-                      </th>
-                      <th className="min-w-[120px]">Date</th>
-                      <th className="min-w-[70px]" title="Semaine (S1, S2…)">Semaine</th>
-                      <th className="min-w-[320px]">Employé (nom complet)</th>
-                      <th className="min-w-[140px]">Temps de travail</th>
-                      {showMontantColumn && <th className="min-w-[100px]">Montant</th>}
-                      <th className="min-w-[180px]">Observation</th>
+                      {getMainOeuvreTableHeaders(showMontantColumn).map((label) => (
+                        <th
+                          key={label}
+                          className={MAIN_OEUVRE_HEADER_CLASS[label as MainOeuvreHeaderKey]}
+                          title={
+                            label === "AGE"
+                              ? "Âge séquentiel (1, 2, 3…) sur tout le lot"
+                              : label === "Semaine"
+                                ? "Semaine (S1, S2…)"
+                                : undefined
+                          }
+                        >
+                          {label}
+                        </th>
+                      ))}
                       <th className="w-10" title="Enregistrer cette ligne">
                         ✓
                       </th>
@@ -1000,7 +1015,7 @@ export default function MainOeuvre() {
                             (hasDraft && canCreate) || (allPersisted && canUpdate && row.entries.length > 0);
                           const isSavingRow = savingRowId === row.id;
                           const isAdding = addingToRowId === row.id;
-                          const montantRow = rowMontant(row);
+                          const montantRow = rowMontantLine(row);
                           return (
                             <tr key={row.id}>
                               <td className="w-12 min-w-12 max-w-12 shrink-0 px-1 text-center text-sm tabular-nums">
@@ -1107,7 +1122,7 @@ export default function MainOeuvre() {
                               <td>
                                 {row.entries.length > 0 ? (
                                   <span className="text-sm tabular-nums">
-                                    {rowTotalJours(row.entries)}
+                                    {mainOeuvreRowTotalJours(row.entries)}
                                   </span>
                                 ) : (
                                   <span className="text-sm text-muted-foreground">—</span>
@@ -1180,7 +1195,7 @@ export default function MainOeuvre() {
                               <td className="font-semibold text-sm">{weekTotalJours}</td>
                               {showMontantColumn && (
                                 <td className="font-semibold text-sm tabular-nums">
-                                  {currentRows.reduce((sum, r) => sum + rowMontant(r), 0).toFixed(2)}
+                                  {currentRows.reduce((sum, r) => sum + rowMontantLine(r), 0).toFixed(2)}
                                 </td>
                               )}
                               <td colSpan={3}></td>

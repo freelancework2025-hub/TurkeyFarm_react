@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Building2, Check, Plus, Trash2, ChevronDown, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
@@ -18,6 +18,7 @@ import {
 import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse, type LotWithStatusResponse, type SetupInfoRequest, type SetupInfoResponse } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { exportToExcel, exportToPdf } from "@/lib/infosSetupExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 import { useToast } from "@/hooks/use-toast";
@@ -310,15 +311,17 @@ export default function InfosSetup() {
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
   const hasLotInUrl = lotParam.trim() !== "";
 
-  const { 
-    isAdministrateur, 
-    isResponsableTechnique, 
-    isBackofficeEmployer, 
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    isBackofficeEmployer,
     canAccessAllFarms,
     selectedFarmId: authSelectedFarmId,
     selectedFarmName,
     allFarmsMode,
     canCreate,
+    canCreateNewLot,
     canUpdate,
     hasFullAccess,
   } = useAuth();
@@ -381,13 +384,27 @@ export default function InfosSetup() {
     refreshLots();
   }, [reportingFarmId, refreshLots]);
 
-  /** When the selected lot is closed, no user can access its data; show message and lot selector only. */
-  const isSelectedLotClosed = Boolean(hasLotInUrl && selectedLot && lotsWithStatus.find((l) => l.lot === selectedLot)?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
 
-  // Load setup information for the selected lot (skip when lot is closed — no data access)
+  /** When the selected lot is closed for this session, show message and lot selector only. */
+  const isSelectedLotClosed = Boolean(
+    hasLotInUrl &&
+      selectedLot &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === selectedLot), lotAccessCtx)
+  );
+
+  // Load setup information for the selected lot (skip when lot is closed for this user)
   const load = useCallback(async () => {
     if (!hasLotInUrl) return;
-    if (lotsWithStatus.find((l) => l.lot === selectedLot)?.closed) {
+    const st = lotsWithStatus.find((l) => l.lot === selectedLot);
+    if (isClosedLotBlockedForSession(st, lotAccessCtx)) {
       setLoading(false);
       return;
     }
@@ -486,7 +503,7 @@ export default function InfosSetup() {
     } finally {
       setLoading(false);
     }
-  }, [reportingFarmId, selectedLot, hasLotInUrl, canFillSetupInfo, lotsWithStatus]);
+  }, [reportingFarmId, selectedLot, hasLotInUrl, canFillSetupInfo, lotsWithStatus, lotAccessCtx]);
 
   useEffect(() => {
     console.log("🔄 InfosSetup - useEffect triggered, calling load()");
@@ -834,18 +851,23 @@ export default function InfosSetup() {
               loading={lotsLoading}
               onSelectLot={(lot) => {
                 const status = lotsWithStatus.find((l) => l.lot === lot);
-                if (status?.closed) {
+                if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                   toast({
                     title: "Lot fermé",
-                    description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                    description:
+                      "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                     variant: "destructive",
                   });
                   return;
                 }
                 setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot });
               }}
-              onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
-              canCreate={canFillSetupInfo}
+              onNewLot={
+                canCreateNewLot
+                  ? (lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })
+                  : undefined
+              }
+              canCreate={canCreateNewLot}
               canCloseOpen={canFillSetupInfo}
               onCloseLot={async (lot) => {
                 if (!reportingFarmId) return;
@@ -860,7 +882,7 @@ export default function InfosSetup() {
                 await refreshLots();
               }}
               title="Choisir un lot — Données mises en place"
-              emptyMessage="Aucun lot. Créez d'abord un lot pour configurer les données mises en place."
+              emptyMessage="Aucun lot sur cette exploitation. Les responsables techniques et administrateurs peuvent en créer un ; sinon choisissez un lot existant."
             />
           ) : isSelectedLotClosed ? (
             <>
@@ -878,18 +900,23 @@ export default function InfosSetup() {
                 loading={lotsLoading}
                 onSelectLot={(lot) => {
                   const status = lotsWithStatus.find((l) => l.lot === lot);
-                  if (status?.closed) {
+                  if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                     toast({
                       title: "Lot fermé",
-                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      description:
+                        "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                       variant: "destructive",
                     });
                     return;
                   }
                   setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot });
                 }}
-                onNewLot={(lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })}
-                canCreate={canFillSetupInfo}
+                onNewLot={
+                  canCreateNewLot
+                    ? (lot) => setSearchParams(urlFarmId != null ? { farmId: String(urlFarmId), lot } : { lot })
+                    : undefined
+                }
+                canCreate={canCreateNewLot}
                 canCloseOpen={canFillSetupInfo}
                 onCloseLot={async (lot) => {
                   if (!reportingFarmId) return;
@@ -904,7 +931,7 @@ export default function InfosSetup() {
                   await refreshLots();
                 }}
                 title="Choisir un lot — Données mises en place"
-                emptyMessage="Aucun lot. Créez d'abord un lot pour configurer les données mises en place."
+                emptyMessage="Aucun lot sur cette exploitation. Les responsables techniques et administrateurs peuvent en créer un ; sinon choisissez un lot existant."
               />
             </>
           ) : (

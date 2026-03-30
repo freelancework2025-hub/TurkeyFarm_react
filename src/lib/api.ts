@@ -246,9 +246,9 @@ export const api = {
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/users/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
     /** Upload profile image (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE only). */
-    uploadProfileImage: async (id: number, file: File, token?: string | null): Promise<UserResponse> => {
+    uploadProfileImage: async (userKey: string | number, file: File, token?: string | null): Promise<UserResponse> => {
       const t = token ?? getStoredToken();
-      const url = `${getApiBase()}/api/users/${id}/profile-image`;
+      const url = `${getApiBase()}/api/users/${encodeURIComponent(String(userKey))}/profile-image`;
       const headers: HeadersInit = t ? { Authorization: `Bearer ${t}` } : {};
       const formData = new FormData();
       formData.append("file", file);
@@ -260,9 +260,9 @@ export const api = {
       return res.json() as Promise<UserResponse>;
     },
     /** Delete profile image (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE only). */
-    deleteProfileImage: async (id: number, token?: string | null): Promise<void> => {
+    deleteProfileImage: async (userKey: string | number, token?: string | null): Promise<void> => {
       const t = token ?? getStoredToken();
-      const url = `${getApiBase()}/api/users/${id}/profile-image`;
+      const url = `${getApiBase()}/api/users/${encodeURIComponent(String(userKey))}/profile-image`;
       const headers: HeadersInit = t ? { Authorization: `Bearer ${t}` } : {};
       const res = await fetch(url, { method: "DELETE", headers, credentials: "include" });
       if (!res.ok) {
@@ -1303,10 +1303,11 @@ export interface FarmResponse {
   code: string;
 }
 
-/** Lot with closed/open status. Closed lots are grey and inaccessible to non-RT/Admin. */
+/** Lot with closed/open status. Closed lots: only ADMIN or the RT who closed (closedByUserId) may read. */
 export interface LotWithStatusResponse {
   lot: string;
   closed: boolean;
+  closedByUserId?: number | null;
 }
 
 export interface UserResponse {

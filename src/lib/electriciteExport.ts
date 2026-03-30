@@ -4,6 +4,8 @@
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import { ELECTRICITE_TABLE_HEADERS } from "@/lib/electriciteShared";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface ElectriciteRowExport {
@@ -35,24 +37,24 @@ export interface ElectriciteExportParams {
   ageByRowId: Map<string, string | number>;
 }
 
-const COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "QTE", "PRIX", "MONTANT", "N° BR"];
+const COLS = [...ELECTRICITE_TABLE_HEADERS];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
-/** Même règle que formatMontantCell sur Electricite.tsx */
+/** Même règle que formatMontantCell sur Electricite.tsx (QTE = resolvedQteFromString). */
 function resolvedMontant(row: Pick<ElectriciteRowExport, "montant" | "qte" | "prixPerUnit">): number | null {
   const m = toOptionalNumber(row.montant);
   if (m != null) return m;
-  const q = toOptionalNumber(row.qte);
+  const q = resolvedQteFromString(row.qte);
   const p = toOptionalNumber(row.prixPerUnit);
-  if (q != null && p != null && q >= 0 && p >= 0) return q * p;
+  if (q != null && p != null && p >= 0) return q * p;
   return null;
 }
 
 function rowToArray(row: ElectriciteRowExport, age: string | number): (string | number)[] {
-  const qte = toOptionalNumber(row.qte);
+  const qte = resolvedQteFromString(row.qte);
   const prix = toOptionalNumber(row.prixPerUnit);
   const montant = resolvedMontant(row);
   return [

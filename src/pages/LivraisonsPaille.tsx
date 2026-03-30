@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Building2, Plus, Check, Calendar, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
@@ -25,8 +25,14 @@ import {
   type LivraisonPailleRequest,
   type LotWithStatusResponse,
 } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
 import { exportToExcel, exportToPdf } from "@/lib/livraisonsPailleExport";
+import {
+  LIVRAISON_PAILLE_TABLE_HEADERS,
+  livraisonPailleEffectiveMontantForTotal,
+} from "@/lib/livraisonsPailleShared";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /**
@@ -90,13 +96,26 @@ function formatMoneyDisplay(s: string): string {
 function formatMontantCell(row: Pick<PailleRow, "qte" | "prixPerUnit" | "montant">): string {
   const m = toOptionalNumber(row.montant);
   if (m != null) return formatGroupedNumber(m, 2);
-  const q = toOptionalNumber(row.qte);
+  const q = resolvedQteFromString(row.qte);
   const p = toOptionalNumber(row.prixPerUnit);
-  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
+  if (q != null && p != null && p >= 0) return formatGroupedNumber(q * p, 2);
   return "—";
 }
 
 const VS_QTE_FOCUS_ID = "__vide_sanitaire_paille__";
+
+const LIVRAISON_PAILLE_HEADER_CLASS: Record<(typeof LIVRAISON_PAILLE_TABLE_HEADERS)[number], string> = {
+  AGE: "min-w-[70px]",
+  DATE: "min-w-[100px]",
+  SEM: "min-w-[60px]",
+  DÉSIGNATION: "min-w-[180px]",
+  FOURNISSEUR: "min-w-[120px]",
+  "N° BL": "min-w-[90px]",
+  "N° BR": "min-w-[90px]",
+  QTE: "min-w-[128px] w-[8.5rem] !text-center",
+  PRIX: "min-w-[80px] !text-center",
+  MONTANT: "min-w-[90px] !text-center",
+};
 
 function addOneDay(isoDate: string): string {
   const d = new Date(isoDate + "T12:00:00");
@@ -136,7 +155,18 @@ export default function LivraisonsPaille() {
   const hasSemaineInUrl = trimmedSemaine !== "";
   const selectedSemaine = trimmedSemaine;
 
-  const { canAccessAllFarms, isReadOnly, canCreate, canUpdate, hasFullAccess, selectedFarmId: authSelectedFarmId, selectedFarmName } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    canAccessAllFarms,
+    isReadOnly,
+    canCreate,
+    canUpdate,
+    hasFullAccess,
+    selectedFarmId: authSelectedFarmId,
+    selectedFarmName,
+  } = useAuth();
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authSelectedFarmId ?? undefined);
 
@@ -158,7 +188,18 @@ export default function LivraisonsPaille() {
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const isSelectedLotClosed = Boolean(lotFilter.trim() && lotsWithStatus.find((l) => l.lot === lotFilter.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    lotFilter.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotFilter.trim()), lotAccessCtx)
+  );
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** QTE: raw while focused, grouped when blurred (Livraisons Aliment). VS row uses VS_QTE_FOCUS_ID. */
   const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
@@ -450,9 +491,9 @@ export default function LivraisonsPaille() {
         if (r.id !== id) return r;
         const updated = { ...r, [field]: value };
         if (field === "qte" || field === "prixPerUnit") {
-          const qte = toNum(updated.qte);
+          const qte = resolvedQteFromString(updated.qte);
           const prix = toNum(updated.prixPerUnit);
-          if (qte >= 0 && prix >= 0) {
+          if (qte != null && prix >= 0) {
             updated.montant = (qte * prix).toFixed(2);
           }
         }
@@ -465,9 +506,9 @@ export default function LivraisonsPaille() {
     setVideSanitaire((prev) => {
       const updated = { ...prev, [field]: value };
       if (field === "qte" || field === "prixPerUnit") {
-        const qte = toNum(updated.qte);
+        const qte = resolvedQteFromString(updated.qte);
         const prix = toNum(updated.prixPerUnit);
-        if (qte >= 0 && prix >= 0) {
+        if (qte != null && prix >= 0) {
           updated.montant = (qte * prix).toFixed(2);
         }
       }
@@ -506,7 +547,7 @@ export default function LivraisonsPaille() {
   }, [rows, ageByRowId, loading]);
 
   const rowToRequest = (r: PailleRow, computedAge?: number): LivraisonPailleRequest => {
-    const qte = r.qte.trim() !== "" ? toNum(r.qte) : null;
+    const qte = r.qte.trim() !== "" ? resolvedQteFromString(r.qte) : null;
     const prix = toNum(r.prixPerUnit);
     const montant =
       r.montant.trim() !== ""
@@ -531,7 +572,7 @@ export default function LivraisonsPaille() {
       supplier: r.supplier.trim() || null,
       qte: qte ?? null,
       prixPerUnit: prix > 0 ? prix : null,
-      montant: montant != null && montant >= 0 ? montant : null,
+      montant: montant != null && Number.isFinite(montant) ? montant : null,
       deliveryNoteNumber: r.deliveryNoteNumber.trim() || null,
       numeroBR: r.numeroBR.trim() || null,
     };
@@ -549,7 +590,10 @@ export default function LivraisonsPaille() {
           supplier: videSanitaire.supplier.trim() || null,
           deliveryNoteNumber: videSanitaire.deliveryNoteNumber.trim() || null,
           numeroBR: videSanitaire.numeroBR.trim() || null,
-          qte: toNum(videSanitaire.qte) || null,
+          qte:
+            videSanitaire.qte.trim() !== ""
+              ? resolvedQteFromString(videSanitaire.qte)
+              : null,
           prixPerUnit: toNum(videSanitaire.prixPerUnit) || null,
         },
         pageFarmId ?? undefined
@@ -662,16 +706,16 @@ export default function LivraisonsPaille() {
   const videSanitaireReadOnly = isReadOnly || (hasExistingVideSanitaire && !canUpdate);
   const hasVideSanitaireToSave = (videSanitaire.qte.trim() !== "" || videSanitaire.prixPerUnit.trim() !== "") && !videSanitaireReadOnly;
   const videSanitaireTotals = {
-    qte: toNum(videSanitaire.qte),
+    qte: resolvedQteFromString(videSanitaire.qte) ?? 0,
     prix: toNum(videSanitaire.prixPerUnit),
-    montant: toNum(videSanitaire.montant),
+    montant: livraisonPailleEffectiveMontantForTotal(videSanitaire),
   };
   const weekTotal = (() => {
     const t = { qte: 0, prix: 0, montant: 0 };
     for (const r of currentRows) {
-      t.qte += toNum(r.qte);
+      t.qte += resolvedQteFromString(r.qte) ?? 0;
       t.prix += toNum(r.prixPerUnit);
-      t.montant += toNum(r.montant);
+      t.montant += livraisonPailleEffectiveMontantForTotal(r);
     }
     return t;
   })();
@@ -684,15 +728,15 @@ export default function LivraisonsPaille() {
     for (const sem of semsUpTo) {
       const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
       for (const r of weekRows) {
-        running.qte += toNum(r.qte);
+        running.qte += resolvedQteFromString(r.qte) ?? 0;
         running.prix += toNum(r.prixPerUnit);
-        running.montant += toNum(r.montant);
+        running.montant += livraisonPailleEffectiveMontantForTotal(r);
       }
     }
     return running;
   })();
 
-  const colCount = 12;
+  const colCount = LIVRAISON_PAILLE_TABLE_HEADERS.length + 2;
 
   const canShowExport = hasLotInUrl && hasSemaineInUrl && !isSelectedLotClosed && pageFarmId != null;
   const exportFarmName =
@@ -849,19 +893,21 @@ export default function LivraisonsPaille() {
             loading={lotsLoading}
             onSelectLot={(lot) => {
               const status = lotsWithStatus.find((l) => l.lot === lot);
-              if (status?.closed) {
+              if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                 toast({
                   title: "Lot fermé",
-                  description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                  description:
+                    "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                   variant: "destructive",
                 });
                 return;
               }
               setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
             }}
-            onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-            canCreate={canCreate}
+            canCreate={false}
             title="Choisir un lot — Livraisons Paille"
+            description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+            emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
           />
         </>
       ) : !hasSemaineInUrl ? (
@@ -992,16 +1038,21 @@ export default function LivraisonsPaille() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th className="min-w-[70px]" title="Âge séquentiel (1, 2, 3…) sur tout le lot">AGE</th>
-                      <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[60px]" title="Semaine (S1, S2…)">SEM</th>
-                      <th className="min-w-[180px]">DÉSIGNATION</th>
-                      <th className="min-w-[120px]">FOURNISSEUR</th>
-                      <th className="min-w-[90px]">N° BL</th>
-                      <th className="min-w-[90px]">N° BR</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTE</th>
-                      <th className="min-w-[80px] !text-center">PRIX</th>
-                      <th className="min-w-[90px] !text-center">MONTANT</th>
+                      {LIVRAISON_PAILLE_TABLE_HEADERS.map((label) => (
+                        <th
+                          key={label}
+                          className={LIVRAISON_PAILLE_HEADER_CLASS[label]}
+                          title={
+                            label === "AGE"
+                              ? "Âge séquentiel (1, 2, 3…) sur tout le lot"
+                              : label === "SEM"
+                                ? "Semaine (S1, S2…)"
+                                : undefined
+                          }
+                        >
+                          {label}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer">
                         ✓
                       </th>
@@ -1084,8 +1135,8 @@ export default function LivraisonsPaille() {
                                     updateVideSanitaire("qte", "");
                                     return;
                                   }
-                                  const n = toOptionalNumber(raw);
-                                  if (n == null || n < 0) {
+                                  const n = resolvedQteFromString(raw);
+                                  if (n == null || !Number.isFinite(n)) {
                                     updateVideSanitaire("qte", "");
                                   } else {
                                     updateVideSanitaire("qte", n.toFixed(2));
@@ -1227,8 +1278,8 @@ export default function LivraisonsPaille() {
                                         updateRow(row.id, "qte", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null || !Number.isFinite(n)) {
                                         updateRow(row.id, "qte", "");
                                       } else {
                                         updateRow(row.id, "qte", n.toFixed(2));

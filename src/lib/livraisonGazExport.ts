@@ -5,6 +5,12 @@
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  LIVRAISON_GAZ_TABLE_HEADERS,
+  livraisonGazResolvedMontant,
+} from "@/lib/livraisonGazShared";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface GazRowExport {
   id: string;
@@ -48,14 +54,16 @@ export interface LivraisonGazExportParams {
   videSanitaire?: VideSanitaireGaz;
 }
 
-/** Same order as Livraisons Aliment (sans SEX): N° BL, N° BR before QTE, PRIX, MONTANT. */
-const COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "N° BR", "QTE", "PRIX", "MONTANT"];
+const COLS = [...LIVRAISON_GAZ_TABLE_HEADERS];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
 function rowToArray(row: GazRowExport, age: string | number): (string | number)[] {
+  const qte = resolvedQteFromString(row.qte);
+  const prix = toOptionalNumber(row.prixPerUnit);
+  const montant = livraisonGazResolvedMontant(row);
   return [
     age ?? "—",
     safeStr(row.date) || "—",
@@ -64,24 +72,30 @@ function rowToArray(row: GazRowExport, age: string | number): (string | number)[
     safeStr(row.supplier) || "—",
     safeStr(row.deliveryNoteNumber) || "—",
     safeStr(row.numeroBR) || "—",
-    safeStr(row.qte) || "—",
-    safeStr(row.prixPerUnit) || "—",
-    safeStr(row.montant) || "—",
+    qte == null ? "—" : qte,
+    prix == null ? "—" : prix,
+    montant == null ? "—" : montant,
   ];
+}
+
+function pdfRowMapper(cells: (string | number)[]): string[] {
+  return cells.map((v, i) => {
+    if (i === 0) return v === "—" ? "—" : String(v);
+    if (i >= 7 && i <= 9) {
+      if (v === "—") return "—";
+      if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    }
+    return String(v);
+  });
 }
 
 function toConfig(params: LivraisonGazExportParams): ITableExportConfig {
   const { farmName, lot, semaine, rows, weekTotal, cumul, ageByRowId, videSanitaire } = params;
   const prefixRows: (string | number)[][] = [];
   if (videSanitaire) {
-    const qte = parseFloat(String(videSanitaire.qte).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
-    const prix = parseFloat(String(videSanitaire.prixPerUnit).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."));
-    const montant =
-      (videSanitaire.montant ?? "").trim() !== ""
-        ? parseFloat(String(videSanitaire.montant).replace(/[\s\u00A0\u202F]/g, "").replace(",", "."))
-        : !Number.isNaN(qte) && !Number.isNaN(prix)
-          ? qte * prix
-          : NaN;
+    const qte = resolvedQteFromString(videSanitaire.qte);
+    const prix = toOptionalNumber(videSanitaire.prixPerUnit);
+    const montant = livraisonGazResolvedMontant(videSanitaire);
     prefixRows.push([
       "—",
       safeStr(videSanitaire.date) || "—",
@@ -90,9 +104,9 @@ function toConfig(params: LivraisonGazExportParams): ITableExportConfig {
       safeStr(videSanitaire.supplier) || "—",
       safeStr(videSanitaire.deliveryNoteNumber) || "—",
       safeStr(videSanitaire.numeroBR) || "—",
-      Number.isNaN(qte) ? "—" : qte,
-      Number.isNaN(prix) ? "—" : prix,
-      Number.isNaN(montant) ? "—" : montant,
+      qte == null ? "—" : qte,
+      prix == null ? "—" : prix,
+      montant == null ? "—" : montant,
     ]);
   }
   return {
@@ -106,6 +120,31 @@ function toConfig(params: LivraisonGazExportParams): ITableExportConfig {
     prefixRows: prefixRows.length > 0 ? prefixRows : undefined,
     weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant],
     cumulRow: ["CUMUL", "", "", "", "", "", "", cumul.qte, cumul.prix, cumul.montant],
+    weekTotalPdfRow: [
+      `TOTAL ${semaine}`,
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      formatGroupedNumber(weekTotal.qte, 2),
+      formatGroupedNumber(weekTotal.prix, 2),
+      formatGroupedNumber(weekTotal.montant, 2),
+    ],
+    cumulPdfRow: [
+      "CUMUL",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      formatGroupedNumber(cumul.qte, 2),
+      formatGroupedNumber(cumul.prix, 2),
+      formatGroupedNumber(cumul.montant, 2),
+    ],
+    pdfRowMapper,
     ageByRowId,
     fileNamePrefix: "Livraisons_Gaz",
     numberFormatColumns: [7, 8, 9],

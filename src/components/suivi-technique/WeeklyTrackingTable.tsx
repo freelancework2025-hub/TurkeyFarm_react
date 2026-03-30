@@ -9,6 +9,14 @@ import {
 import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
 import { canonicalSemaine } from "@/lib/semaineCanonical";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import {
+  SUIVI_HEBDO_EXPORT_HEADERS,
+  SUIVI_HEBDO_HEADER_TITLE,
+  SUIVI_HEBDO_PRIMARY_HEADER_GROUPS,
+  SUIVI_HEBDO_SUBHEADER_LABEL,
+  SUIVI_HEBDO_SUBHEADER_TH_CLASS,
+  suiviHebdoTransportRowLabelColSpan,
+} from "@/lib/suiviTechniqueHebdomadaireShared";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -924,27 +932,11 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             </colgroup>
             <thead>
               <tr className="bg-muted/80 border-b-2 border-border">
-                <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border w-[100px]">
-                  DATE
-                </th>
-                <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border w-[70px]">
-                  ÂGE EN J
-                </th>
-                <th colSpan={4} className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border min-w-[220px]">
-                  MORTALITÉ
-                </th>
-                <th className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border min-w-[84px]">
-                  CONSO. EAU (L)
-                </th>
-                <th colSpan={2} className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border w-[96px]">
-                  T°
-                </th>
-                <th colSpan={2} className="px-1.5 py-2 text-center font-semibold text-foreground border-r border-border">
-                  INTERVENTION
-                </th>
-                <th className="px-1.5 py-2 text-left font-semibold text-foreground border-r border-border">
-                  OBSERVATION
-                </th>
+                {SUIVI_HEBDO_PRIMARY_HEADER_GROUPS.map((g) => (
+                  <th key={g.label} colSpan={g.colSpan} className={g.className}>
+                    {g.label}
+                  </th>
+                ))}
                 {showSaveCol ? (
                   <th className="w-10 border-l border-border text-center text-xs font-semibold text-foreground" title="Enregistrer la ligne">
                     ✓
@@ -953,25 +945,25 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                 {showDeleteCol ? <th className="w-10 border-l border-border"></th> : null}
               </tr>
               <tr className="bg-muted/60 border-b border-border">
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border min-w-[72px]">NBRE</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border min-w-[56px]">%</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border min-w-[56px]">CUMUL</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border min-w-[56px]">%</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border"></th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border w-12">MIN</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border w-12">MAX</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">VACCINATION</th>
-                <th className="px-1 py-1 text-xs font-medium text-muted-foreground border-r border-border">TRAITEMENT</th>
-                <th className="px-1 py-1 border-r border-border"></th>
+                {SUIVI_HEBDO_EXPORT_HEADERS.map((h) => (
+                  <th
+                    key={h}
+                    className={SUIVI_HEBDO_SUBHEADER_TH_CLASS[h]}
+                    title={SUIVI_HEBDO_HEADER_TITLE[h]}
+                  >
+                    {SUIVI_HEBDO_SUBHEADER_LABEL[h]}
+                  </th>
+                ))}
                 {showSaveCol ? <th className="border-l border-border"></th> : null}
                 {showDeleteCol ? <th className="border-l border-border"></th> : null}
               </tr>
             </thead>
             <tbody>
               <tr className="border-b border-border bg-muted/40 hover:bg-muted/50 transition-colors">
-                <td colSpan={4} className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle">
+                <td
+                  colSpan={suiviHebdoTransportRowLabelColSpan()}
+                  className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle"
+                >
                   MORTALITE DU TRANSPORT
                 </td>
                 <td className="border-r border-border px-1 py-2 text-center tabular-nums align-middle bg-amber-100/80 dark:bg-amber-950/40">

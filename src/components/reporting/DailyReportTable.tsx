@@ -4,6 +4,14 @@ import { api, type DailyReportResponse, type DailyReportRequest, type SetupInfoR
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import {
+  REPORTING_DAILY_TABLE_HEADERS,
+  REPORTING_DAILY_HEADER_CLASS,
+  REPORTING_DAILY_MAIN_HEADER_TITLE,
+  computeReportingAgeAndSemaine,
+  reportingDailyTrailColSpanAfterNbr,
+  reportingDailyTotalMortalityLabelColSpan,
+} from "@/lib/reportingJournalierShared";
 
 const BUILDINGS_FALLBACK = ["Bâtiment 01", "Bâtiment 02", "Bâtiment 03", "Bâtiment 04"];
 const DESIGNATIONS_FALLBACK = ["Mâle", "Femelle"];
@@ -112,7 +120,7 @@ function createRowsForConfigs(
       verified: false,
     };
     if (placement) {
-      const { age, semaine } = computeAgeAndSemaine(row.report_date, placement);
+      const { age, semaine } = computeReportingAgeAndSemaine(row.report_date, placement);
       row = { ...row, age_jour: String(age), semaine: String(semaine) };
     }
     return row;
@@ -212,33 +220,6 @@ function addDays(isoDate: string, n: number): string {
 }
 
 /** Age (days) starts at 1 on placement date; semaine = week number (S1=1–7, S2=8–14, …). Per lot, age resets to 1. */
-function computeAgeAndSemaine(reportDate: string, placementDate: string): { age: number; semaine: number } {
-  // Use UTC dates to avoid DST issues
-  const report = new Date(reportDate);
-  const placement = new Date(placementDate);
-  
-  // Set to start of day (midnight) in UTC to ensure consistent calculation
-  report.setUTCHours(0, 0, 0, 0);
-  placement.setUTCHours(0, 0, 0, 0);
-  
-  const diffTime = report.getTime() - placement.getTime();
-  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)); // Use Math.round to handle DST
-  const age = Math.max(1, diffDays + 1);
-  const semaine = Math.ceil(age / 7);
-  
-  console.log("🔢 computeAgeAndSemaine:", {
-    reportDate,
-    placementDate,
-    reportTime: report.getTime(),
-    placementTime: placement.getTime(),
-    diffTime,
-    diffDays,
-    age,
-    semaine
-  });
-  return { age, semaine };
-}
-
 function isRowValidForSave(r: DailyRow): boolean {
   return Boolean(
     r.report_date &&
@@ -282,7 +263,7 @@ async function checkAgeWeekConsistency(
   for (const existing of existingReports) {
     if (updatingIds.has(existing.id)) continue;
     if (!existing.reportDate || existing.ageJour == null) continue;
-    const { semaine } = computeAgeAndSemaine(existing.reportDate, placementDateForLot);
+    const { semaine } = computeReportingAgeAndSemaine(existing.reportDate, placementDateForLot);
     if (!weekAgeData.has(semaine)) weekAgeData.set(semaine, new Map());
     const ageMap = weekAgeData.get(semaine)!;
     if (!ageMap.has(existing.ageJour)) ageMap.set(existing.ageJour, new Set());
@@ -291,7 +272,7 @@ async function checkAgeWeekConsistency(
   for (const row of rowsWithCalculatedAge) {
     if (!row.report_date || !row.age_jour || row.age_jour.trim() === "") continue;
     const age = parseInt(row.age_jour, 10);
-    const { semaine } = computeAgeAndSemaine(row.report_date, placementDateForLot);
+    const { semaine } = computeReportingAgeAndSemaine(row.report_date, placementDateForLot);
     if (!weekAgeData.has(semaine)) weekAgeData.set(semaine, new Map());
     const ageMap = weekAgeData.get(semaine)!;
     if (!ageMap.has(age)) ageMap.set(age, new Set());
@@ -405,7 +386,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
     if (setupConfigs.length === 0) {
       let empty = emptyRow(forDate);
       if (placement) {
-        const { age, semaine } = computeAgeAndSemaine(empty.report_date, placement);
+        const { age, semaine } = computeReportingAgeAndSemaine(empty.report_date, placement);
         empty = { ...empty, age_jour: String(age), semaine: String(semaine) };
       }
       return [empty];
@@ -459,7 +440,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       effectivePlacementRef.current = effectivePlacement;
       if (effectivePlacement) {
         mapped = mapped.map((r) => {
-          const { age, semaine } = computeAgeAndSemaine(r.report_date, effectivePlacement);
+          const { age, semaine } = computeReportingAgeAndSemaine(r.report_date, effectivePlacement);
           return { ...r, age_jour: String(age), semaine: String(semaine) };
         });
       }
@@ -534,7 +515,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         semaine: "",
       };
       if (placement && newRow.report_date) {
-        const { age, semaine } = computeAgeAndSemaine(newRow.report_date, placement);
+        const { age, semaine } = computeReportingAgeAndSemaine(newRow.report_date, placement);
         newRow = { ...newRow, age_jour: String(age), semaine: String(semaine) };
       }
       setRows((prev) => [...prev, newRow]);
@@ -562,7 +543,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       if (field === "report_date" && placementDateForLot && typeof value === "string") {
         const row = next.find((r) => r.id === id);
         if (row && row.report_date) {
-          const { age, semaine } = computeAgeAndSemaine(row.report_date, placementDateForLot);
+          const { age, semaine } = computeReportingAgeAndSemaine(row.report_date, placementDateForLot);
           return next.map((r) =>
             r.id === id ? { ...r, age_jour: String(age), semaine: String(semaine) } : r
           );
@@ -621,7 +602,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
 
     const rowsWithCalculatedAge = validRows.map((r) => {
       if (placementDateForLot && r.report_date) {
-        const { age, semaine } = computeAgeAndSemaine(r.report_date, placementDateForLot);
+        const { age, semaine } = computeReportingAgeAndSemaine(r.report_date, placementDateForLot);
         return { ...r, age_jour: String(age), semaine: String(semaine) };
       }
       return r;
@@ -733,16 +714,15 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
         <table className="table-farm">
           <thead>
             <tr>
-              <th className="min-w-[70px]" title="Âge (jours)">AGE</th>
-              <th className="min-w-[100px]">DATE</th>
-              <th className="min-w-[56px]">SEM</th>
-              <th className="min-w-[120px]">BÂTIMENT</th>
-              <th className="min-w-[100px]">DÉSIGNATION</th>
-              <th className="min-w-[96px] !text-center">NBR (MORTALITÉ)</th>
-              <th className="min-w-[128px] w-[8.5rem] !text-center">CONSO. EAU (L)</th>
-              <th className="min-w-[88px] !text-center">TEMP. MIN</th>
-              <th className="min-w-[88px] !text-center">TEMP. MAX</th>
-              <th className="min-w-[120px]">TRAITEMENT</th>
+              {REPORTING_DAILY_TABLE_HEADERS.map((h) => (
+                <th
+                  key={h}
+                  className={REPORTING_DAILY_HEADER_CLASS[h]}
+                  title={REPORTING_DAILY_MAIN_HEADER_TITLE[h]}
+                >
+                  {h}
+                </th>
+              ))}
               {showSaveCol ? (
                 <th className="w-9 min-w-0 !px-1" title="Enregistrer la ligne">
                   ✓
@@ -1000,13 +980,16 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
           </tbody>
           <tfoot>
             <tr className="bg-muted/60">
-              <td colSpan={5} className="text-right font-semibold text-sm px-3 py-2 text-muted-foreground">
+              <td
+                colSpan={reportingDailyTotalMortalityLabelColSpan()}
+                className="text-right font-semibold text-sm px-3 py-2 text-muted-foreground"
+              >
                 Total Mortalité du jour :
               </td>
               <td className="px-3 py-2 text-center tabular-nums whitespace-nowrap font-bold text-sm text-destructive">
                 {formatGroupedNumber(totalMortality, 0)}
               </td>
-              <td colSpan={4 + (showSaveCol ? 1 : 0) + (showDeleteCol ? 1 : 0)}></td>
+              <td colSpan={reportingDailyTrailColSpanAfterNbr(showSaveCol, showDeleteCol)}></td>
             </tr>
           </tfoot>
         </table>

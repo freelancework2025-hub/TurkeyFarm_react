@@ -3,7 +3,7 @@
  * Table: Age, Date, Motif, Vaccin / Traitement, Quantité, Administration, Remarques.
  * Date defaults from Date Mise en Place (InfosSetup) for the selected lot.
  */
-import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Building2, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Trash2 } from "lucide-react";
@@ -46,6 +46,7 @@ import {
   type VaccinationPlanningNoteRequest,
   type VaccinationPlanningNoteResponse,
 } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { dispatchVaccinationAlertsRefresh } from "@/lib/vaccinationAlertsEvents";
 import { exportToExcel, exportToPdf } from "@/lib/planningVaccinationExport";
 
@@ -604,7 +605,14 @@ export default function PlanningVaccination() {
   const lotParam = searchParams.get("lot") ?? "";
   const selectedFarmId = farmIdParam ? parseInt(farmIdParam, 10) : null;
   const isValidFarmId = selectedFarmId != null && !Number.isNaN(selectedFarmId);
-  const { canAccessAllFarms, selectedFarmId: authFarmId, hasFullAccess } = useAuth();
+  const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
+    canAccessAllFarms,
+    selectedFarmId: authFarmId,
+    hasFullAccess,
+  } = useAuth();
   const pageFarmId = isValidFarmId ? selectedFarmId : (canAccessAllFarms ? undefined : authFarmId ?? undefined);
   const showFarmSelector = canAccessAllFarms && !isValidFarmId;
   /** Only RT and Admin can edit; Backoffice and Responsable Ferme see the table in read-only. */
@@ -642,6 +650,21 @@ export default function PlanningVaccination() {
 
   const selectedLot = lotParam.trim() || null;
   const { toast } = useToast();
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const planningLotBlocked = Boolean(
+    selectedLot &&
+      isClosedLotBlockedForSession(
+        lotsWithStatus.find((l) => l.lot === selectedLot),
+        lotAccessCtx
+      )
+  );
 
   const farmName =
     (pageFarmId != null && farms.find((f) => f.id === pageFarmId)?.name) ||
@@ -810,6 +833,18 @@ export default function PlanningVaccination() {
       setNotes([{ id: "note-1", label: "Note 1", content: "", selected: false }]);
       return;
     }
+    if (
+      isClosedLotBlockedForSession(
+        lotsWithStatus.find((l) => l.lot === selectedLot),
+        lotAccessCtx
+      )
+    ) {
+      setDateMiseEnPlace(null);
+      setRows([]);
+      setNotes([{ id: "note-1", label: "Note 1", content: "", selected: false }]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       let setupDate: string | null = null;
@@ -829,7 +864,7 @@ export default function PlanningVaccination() {
     return () => {
       cancelled = true;
     };
-  }, [selectedLot, pageFarmId, loadPlanning, loadNotes]);
+  }, [selectedLot, pageFarmId, loadPlanning, loadNotes, lotsWithStatus, lotAccessCtx]);
 
   const updateRow = (id: string, field: keyof VaccinationRow, value: string) => {
     setRows((prev) =>
@@ -1121,8 +1156,19 @@ export default function PlanningVaccination() {
     }
   };
 
-  const onSelectLot = (lot: string) =>
+  const onSelectLot = (lot: string) => {
+    const status = lotsWithStatus.find((l) => l.lot === lot);
+    if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
+      toast({
+        title: "Lot fermé",
+        description:
+          "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
+        variant: "destructive",
+      });
+      return;
+    }
     setSearchParams(pageFarmId != null ? { farmId: String(pageFarmId), lot } : { lot });
+  };
   const selectFarm = (id: number) => setSearchParams({ farmId: String(id) });
   const clearFarmSelection = () => setSearchParams({});
 
@@ -1167,7 +1213,7 @@ export default function PlanningVaccination() {
     );
   }
 
-  if (!selectedLot) {
+  if (!selectedLot || planningLotBlocked) {
     return (
       <AppLayout>
         <div className="p-6">
@@ -1181,14 +1227,25 @@ export default function PlanningVaccination() {
               Changer d&apos;exploitation
             </button>
           )}
+          {planningLotBlocked && selectedLot && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-4 mb-6">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                Ce lot est fermé. Le planning n&apos;est pas accessible pour votre compte.
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                Choisissez un autre lot ci-dessous.
+              </p>
+            </div>
+          )}
           <LotSelectorView
             existingLots={lots}
             lotsWithStatus={lotsWithStatus}
             loading={lotsLoading}
             onSelectLot={onSelectLot}
+            canCreate={false}
             title="Choisir un lot"
-            description="Choisissez un lot pour afficher ou modifier son planning de vaccination. Chaque lot a son propre planning. La date de mise en place (Données mises en place) sera utilisée pour les dates par défaut."
-            emptyMessage="Aucun lot pour cette exploitation. Créez d'abord un lot (Données mises en place) puis revenez ici."
+            description="Choisissez un lot existant pour le planning de vaccination. Les nouveaux lots se créent uniquement dans Données mises en place. La date de mise en place servira aux dates par défaut."
+            emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
           />
         </div>
       </AppLayout>

@@ -19,9 +19,20 @@ import LotSelectorView from "@/components/lot/LotSelectorView";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse, type SortieRequest, type SortieResponse, type LotWithStatusResponse } from "@/lib/api";
+import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/sortiesFermeExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  SORTIES_FERME_TABLE_HEADERS,
+  SORTIES_FERME_HEADER_CLASS,
+  SORTIES_FERME_MAIN_HEADER_TITLE,
+  getSortiesFermeAgeHeaderTitle,
+  sortiesFermeTotalRowLabelColSpan,
+  sortiesFermeResolvedMontant,
+  sortiesFermeEffectiveMontantForTotal,
+} from "@/lib/sortiesFermeShared";
 
 /**
  * Permissions alignées sur Livraisons Aliment : canCreate / canUpdate / hasFullAccess.
@@ -82,14 +93,10 @@ function formatMoneyDisplay(s: string): string {
   return n != null ? formatGroupedNumber(n, 2) : "—";
 }
 
-/** Montant: stored value or qté × prix (Livraisons Aliment). */
+/** Montant — même règle que export / totaux. */
 function formatMontantCell(row: Pick<SortieRow, "qte_brute_kg" | "prix_kg" | "montant_ttc">): string {
-  const m = toOptionalNumber(row.montant_ttc);
-  if (m != null) return formatGroupedNumber(m, 2);
-  const q = toOptionalNumber(row.qte_brute_kg);
-  const p = toOptionalNumber(row.prix_kg);
-  if (q != null && p != null && q >= 0 && p >= 0) return formatGroupedNumber(q * p, 2);
-  return "—";
+  const m = sortiesFermeResolvedMontant(row);
+  return m != null ? formatGroupedNumber(m, 2) : "—";
 }
 
 /** Vide sanitaire (API `semaine` = 0) ; puis S1–S36 comme Livraisons Aliment. */
@@ -100,6 +107,22 @@ const SEMAINES = [VS_SEMAINE, ...SEMAINES_NUMEROTEES];
 
 /** Minimum table rows to display (7 default rows for sequential save workflow) */
 const MIN_TABLE_ROWS = 7;
+
+function isFilledSortie(req: SortieRequest): boolean {
+  if (!req.date?.trim()) return false;
+  const qteOk = req.qte_brute_kg != null && req.qte_brute_kg !== 0;
+  const montantOk = req.montant_ttc != null && req.montant_ttc !== 0;
+  return (
+    !!(req.client?.trim()) ||
+    !!(req.num_bl?.trim()) ||
+    !!(req.type?.trim()) ||
+    !!(req.designation?.trim()) ||
+    (req.nbre_dinde != null && req.nbre_dinde !== 0) ||
+    qteOk ||
+    montantOk ||
+    (req.prix_kg != null && req.prix_kg !== 0)
+  );
+}
 
 /** Libellé semaine (VS, S1…) → entier API : VS = 0, S1 = 1, … */
 function semaineLabelToApi(s: string): number | null {
@@ -184,6 +207,9 @@ export default function SortiesFerme() {
   const selectedSemaine = trimmedSemaine;
 
   const {
+    user,
+    isAdministrateur,
+    isResponsableTechnique,
     canAccessAllFarms,
     isReadOnly,
     canCreate,
@@ -201,7 +227,18 @@ export default function SortiesFerme() {
   const [lotsWithStatus, setLotsWithStatus] = useState<LotWithStatusResponse[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [rows, setRows] = useState<SortieRow[]>([]);
-  const isSelectedLotClosed = Boolean(lotParam.trim() && lotsWithStatus.find((l) => l.lot === lotParam.trim())?.closed);
+  const lotAccessCtx: ClosedLotSessionContext = useMemo(
+    () => ({
+      currentUserId: user?.id ?? null,
+      isAdministrateur,
+      isResponsableTechnique,
+    }),
+    [user?.id, isAdministrateur, isResponsableTechnique]
+  );
+  const isSelectedLotClosed = Boolean(
+    lotParam.trim() &&
+      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotParam.trim()), lotAccessCtx)
+  );
   const [loading, setLoading] = useState(false);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** Qté brute: raw while focused, grouped when blurred (Livraisons Aliment). */
@@ -428,33 +465,47 @@ export default function SortiesFerme() {
       prev.map((r) => {
         if (r.id !== id) return r;
         const updated = { ...r, [field]: value };
-        const qStr = updated.qte_brute_kg.trim();
-        const pStr = updated.prix_kg.trim();
-        if (qStr === "" && pStr === "") {
-          updated.montant_ttc = "";
-        } else {
-          const qty = toNum(updated.qte_brute_kg);
-          const price = toNum(updated.prix_kg);
-          updated.montant_ttc = (qty * price).toFixed(2);
+        if (field === "qte_brute_kg" || field === "prix_kg") {
+          const qStr = updated.qte_brute_kg.trim();
+          const pStr = updated.prix_kg.trim();
+          const qResolved = resolvedQteFromString(updated.qte_brute_kg);
+          const price = pStr !== "" ? toNum(updated.prix_kg) : null;
+          if (qStr === "" && pStr === "") {
+            updated.montant_ttc = "";
+          } else if (qResolved != null && price != null && price >= 0) {
+            updated.montant_ttc = (qResolved * price).toFixed(2);
+          }
         }
         return updated;
       })
     );
   };
 
-  const rowToRequest = (r: SortieRow): SortieRequest => ({
-    date: r.date || null,
-    semaine: semaineLabelToApi(r.semaine),
-    lot: r.lot || null,
-    client: r.client || null,
-    num_bl: r.num_bl || null,
-    type: r.type || null,
-    designation: r.designation || null,
-    nbre_dinde: r.nbre_dinde.trim() !== "" ? Math.round(toNum(r.nbre_dinde)) : null,
-    qte_brute_kg: r.qte_brute_kg.trim() !== "" ? toNum(r.qte_brute_kg) : null,
-    prix_kg: r.prix_kg.trim() !== "" ? toNum(r.prix_kg) : null,
-    montant_ttc: r.montant_ttc.trim() !== "" ? toNum(r.montant_ttc) : null,
-  });
+  const rowToRequest = (r: SortieRow): SortieRequest => {
+    const qParsed = r.qte_brute_kg.trim() !== "" ? resolvedQteFromString(r.qte_brute_kg) : null;
+    const prix = r.prix_kg.trim() !== "" ? toNum(r.prix_kg) : NaN;
+    const montantExplicit = r.montant_ttc.trim() !== "" ? toNum(r.montant_ttc) : null;
+    const montant =
+      montantExplicit != null && Number.isFinite(montantExplicit)
+        ? montantExplicit
+        : qParsed != null && Number.isFinite(prix) && prix >= 0
+          ? qParsed * prix
+          : null;
+    const nbreRaw = r.nbre_dinde.trim() !== "" ? Math.round(toNum(r.nbre_dinde)) : null;
+    return {
+      date: r.date || null,
+      semaine: semaineLabelToApi(r.semaine),
+      lot: r.lot || null,
+      client: r.client || null,
+      num_bl: r.num_bl || null,
+      type: r.type || null,
+      designation: r.designation || null,
+      nbre_dinde: nbreRaw != null && Number.isFinite(nbreRaw) && nbreRaw !== 0 ? nbreRaw : null,
+      qte_brute_kg: qParsed ?? null,
+      prix_kg: Number.isFinite(prix) && prix > 0 ? prix : null,
+      montant_ttc: montant != null && Number.isFinite(montant) ? montant : null,
+    };
+  };
 
   /** Save one row: create (batch d’un élément) ou update — même logique que LivraisonsAliment. */
   const saveRow = async (row: SortieRow) => {
@@ -481,17 +532,13 @@ export default function SortiesFerme() {
       toast({ title: "Date requise", description: "Remplissez la date pour enregistrer la ligne.", variant: "destructive" });
       return;
     }
-    const hasContent =
-      (row.client?.trim() ?? "") !== "" ||
-      (row.num_bl?.trim() ?? "") !== "" ||
-      (row.nbre_dinde?.trim() ?? "") !== "" ||
-      (row.qte_brute_kg?.trim() ?? "") !== "";
-
+    const req = rowToRequest(row);
     if (row.serverId == null) {
-      if (!hasContent) {
+      if (!isFilledSortie(req)) {
         toast({
           title: "Ligne incomplète",
-          description: "Remplissez au moins un champ (client, N° BL, nombre de dindes ou quantité).",
+          description:
+            "Remplissez au moins un champ (client, N° BL, type, désignation, nombre de dindes, quantité, prix ou montant).",
           variant: "destructive",
         });
         return;
@@ -511,7 +558,7 @@ export default function SortiesFerme() {
     setSavingRowId(row.id);
     try {
       if (row.serverId == null) {
-        const createdList = await api.sorties.createBatch([rowToRequest(row)], pageFarmId ?? undefined);
+        const createdList = await api.sorties.createBatch([req], pageFarmId ?? undefined);
         const created = createdList[0];
         if (!created) {
           toast({ title: "Erreur", description: "Réponse serveur inattendue.", variant: "destructive" });
@@ -528,7 +575,7 @@ export default function SortiesFerme() {
         return;
       }
 
-      await api.sorties.update(row.serverId, rowToRequest(row), undefined);
+      await api.sorties.update(row.serverId, req, undefined);
       originalSavedRowsRef.current.set(row.serverId, { ...row });
       toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
       loadSorties();
@@ -578,9 +625,9 @@ export default function SortiesFerme() {
       t.nbre_dinde += toNum(r.nbre_dinde);
       // Only include qte_brute_kg, prix_kg, and montant_ttc for rows that have nbre_dinde
       if (r.nbre_dinde.trim() !== "") {
-        t.qte_brute_kg += toNum(r.qte_brute_kg);
+        t.qte_brute_kg += resolvedQteFromString(r.qte_brute_kg) ?? 0;
         t.prix_kg += toNum(r.prix_kg);
-        t.montant_ttc += toNum(r.montant_ttc);
+        t.montant_ttc += sortiesFermeEffectiveMontantForTotal(r);
       }
     }
     return t;
@@ -602,9 +649,9 @@ export default function SortiesFerme() {
         t.nbre_dinde += toNum(r.nbre_dinde);
         // Only include qte_brute_kg, prix_kg, and montant_ttc for rows that have nbre_dinde
         if (r.nbre_dinde.trim() !== "") {
-          t.qte_brute_kg += toNum(r.qte_brute_kg);
+          t.qte_brute_kg += resolvedQteFromString(r.qte_brute_kg) ?? 0;
           t.prix_kg += toNum(r.prix_kg);
-          t.montant_ttc += toNum(r.montant_ttc);
+          t.montant_ttc += sortiesFermeEffectiveMontantForTotal(r);
         }
       }
     }
@@ -793,20 +840,21 @@ export default function SortiesFerme() {
                 loading={lotsLoading}
                 onSelectLot={(lot) => {
                   const status = lotsWithStatus.find((l) => l.lot === lot);
-                  if (status?.closed) {
+                  if (isClosedLotBlockedForSession(status, lotAccessCtx)) {
                     toast({
                       title: "Lot fermé",
-                      description: "Les données de ce lot ne sont pas accessibles. Choisissez un lot ouvert.",
+                      description:
+                        "Les données de ce lot ne sont pas accessibles pour votre compte. Choisissez un lot ouvert.",
                       variant: "destructive",
                     });
                     return;
                   }
                   setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot });
                 }}
-                onNewLot={(lot) => setSearchParams(selectedFarmId != null ? { farmId: String(selectedFarmId), lot } : { lot })}
-                canCreate={canCreate}
+                canCreate={false}
                 title="Choisir un lot — Sorties Ferme"
-                emptyMessage="Aucun lot. Créez d'abord un effectif mis en place (placement) avec un numéro de lot."
+                description="Sélectionnez un lot existant. La création d'un nouveau lot se fait uniquement dans Données mises en place."
+                emptyMessage="Aucun lot. Créez d'abord un lot dans Données mises en place."
               />
             </>
           ) : !hasSemaineInUrl ? (
@@ -936,26 +984,19 @@ export default function SortiesFerme() {
                 <table className="table-farm">
                   <thead>
                     <tr>
-                      <th
-                        className="min-w-[70px]"
-                        title={
-                          selectedSemKey === VS_SEMAINE
-                            ? "Pas d’âge en vide sanitaire"
-                            : "Âge séquentiel depuis S1 (jours), comme Livraisons aliment"
-                        }
-                      >
-                        AGE
-                      </th>
-                      <th className="min-w-[100px]">DATE</th>
-                      <th className="min-w-[60px]" title="Semaine (VS, S1…)">SEM</th>
-                      <th className="min-w-[120px]">CLIENT</th>
-                      <th className="min-w-[90px]">N° BL</th>
-                      <th className="min-w-[140px]">TYPE</th>
-                      <th className="min-w-[120px]">DÉSIGNATION</th>
-                      <th className="min-w-[96px] !text-center">NBRE DINDE</th>
-                      <th className="min-w-[128px] w-[8.5rem] !text-center">QTÉ BRUTE (KG)</th>
-                      <th className="min-w-[80px] !text-center">PRIX/KG</th>
-                      <th className="min-w-[90px] !text-center">MONTANT TTC</th>
+                      {SORTIES_FERME_TABLE_HEADERS.map((h) => (
+                        <th
+                          key={h}
+                          className={SORTIES_FERME_HEADER_CLASS[h]}
+                          title={
+                            h === "AGE"
+                              ? getSortiesFermeAgeHeaderTitle(selectedSemKey === VS_SEMAINE)
+                              : SORTIES_FERME_MAIN_HEADER_TITLE[h]
+                          }
+                        >
+                          {h}
+                        </th>
+                      ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">
                         ✓
                       </th>
@@ -965,7 +1006,7 @@ export default function SortiesFerme() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={13} className="p-8 text-center text-muted-foreground">
+                        <td colSpan={SORTIES_FERME_TABLE_HEADERS.length + 2} className="p-8 text-center text-muted-foreground">
                           Chargement…
                         </td>
                       </tr>
@@ -1101,8 +1142,8 @@ export default function SortiesFerme() {
                                         updateRow(row.id, "qte_brute_kg", "");
                                         return;
                                       }
-                                      const n = toOptionalNumber(raw);
-                                      if (n == null || n < 0) {
+                                      const n = resolvedQteFromString(raw);
+                                      if (n == null) {
                                         updateRow(row.id, "qte_brute_kg", "");
                                       } else {
                                         updateRow(row.id, "qte_brute_kg", n.toFixed(2));
@@ -1170,7 +1211,10 @@ export default function SortiesFerme() {
                         {currentRows.length > 0 && (
                           <>
                             <tr className="bg-muted/60">
-                              <td colSpan={7} className="text-sm font-medium text-muted-foreground">
+                              <td
+                                colSpan={sortiesFermeTotalRowLabelColSpan()}
+                                className="text-sm font-medium text-muted-foreground"
+                              >
                                 TOTAL {selectedSemaine}
                               </td>
                               <td className="text-center tabular-nums whitespace-nowrap">
@@ -1189,7 +1233,10 @@ export default function SortiesFerme() {
                               <td />
                             </tr>
                             <tr className="bg-muted/50">
-                              <td colSpan={7} className="text-sm font-medium text-muted-foreground">
+                              <td
+                                colSpan={sortiesFermeTotalRowLabelColSpan()}
+                                className="text-sm font-medium text-muted-foreground"
+                              >
                                 CUMUL
                               </td>
                               <td className="text-center tabular-nums whitespace-nowrap">

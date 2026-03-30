@@ -5,6 +5,12 @@
 
 import type { ITableExportConfig } from "./tableExport";
 import { exportTableToExcel, exportTableToPdf } from "./tableExport";
+import { resolvedQteFromString } from "@/lib/depensesDiversShared";
+import {
+  PRODUITS_HYGIENE_TABLE_HEADERS,
+  produitsHygieneResolvedMontant,
+} from "@/lib/produitsHygieneShared";
+import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 
 export interface HygieneRowExport {
   id: string;
@@ -54,13 +60,18 @@ export interface ProduitsHygieneExportParams {
   videSanitaire?: VideSanitaireHygiene;
 }
 
-const COLS = ["AGE", "DATE", "SEM", "DÉSIGNATION", "FOURNISSEUR", "N° BL", "QTE", "PRIX", "MONTANT", "N° BR", "MALE", "FEMELLE"];
+const COLS = [...PRODUITS_HYGIENE_TABLE_HEADERS];
 
 function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
 function rowToArray(row: HygieneRowExport, age: string | number): (string | number)[] {
+  const qte = resolvedQteFromString(row.qte);
+  const prix = toOptionalNumber(row.prixPerUnit);
+  const montant = produitsHygieneResolvedMontant(row);
+  const male = toOptionalNumber(row.male);
+  const femelle = toOptionalNumber(row.femelle);
   return [
     age ?? "—",
     safeStr(row.date) || "—",
@@ -68,13 +79,28 @@ function rowToArray(row: HygieneRowExport, age: string | number): (string | numb
     safeStr(row.designation) || "—",
     safeStr(row.supplier) || "—",
     safeStr(row.deliveryNoteNumber) || "—",
-    safeStr(row.qte) || "—",
-    safeStr(row.prixPerUnit) || "—",
-    safeStr(row.montant) || "—",
+    qte == null ? "—" : qte,
+    prix == null ? "—" : prix,
+    montant == null ? "—" : montant,
     safeStr(row.numeroBR) || "—",
-    safeStr(row.male) || "—",
-    safeStr(row.femelle) || "—",
+    male == null ? "—" : male,
+    femelle == null ? "—" : femelle,
   ];
+}
+
+function pdfRowMapper(cells: (string | number)[]): string[] {
+  return cells.map((v, i) => {
+    if (i === 0) return v === "—" ? "—" : String(v);
+    if (i >= 6 && i <= 8) {
+      if (v === "—") return "—";
+      if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
+    }
+    if (i === 10 || i === 11) {
+      if (v === "—") return "—";
+      if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 0);
+    }
+    return String(v);
+  });
 }
 
 function toConfig(params: ProduitsHygieneExportParams): ITableExportConfig {
@@ -87,14 +113,9 @@ function toConfig(params: ProduitsHygieneExportParams): ITableExportConfig {
         ? [videSanitaire]
         : [];
   for (const vs of vsLines) {
-    const qte = parseFloat(String(vs.qte).replace(",", "."));
-    const prix = parseFloat(String(vs.prixPerUnit).replace(",", "."));
-    const montant =
-      vs.montant.trim() !== ""
-        ? parseFloat(String(vs.montant).replace(",", "."))
-        : !Number.isNaN(qte) && !Number.isNaN(prix)
-          ? qte * prix
-          : 0;
+    const qte = resolvedQteFromString(vs.qte);
+    const prix = toOptionalNumber(vs.prixPerUnit);
+    const montant = produitsHygieneResolvedMontant(vs);
     prefixRows.push([
       "—",
       safeStr(vs.date) || "—",
@@ -102,9 +123,9 @@ function toConfig(params: ProduitsHygieneExportParams): ITableExportConfig {
       "Vide sanitaire",
       safeStr(vs.supplier) || "—",
       safeStr(vs.deliveryNoteNumber) || "—",
-      Number.isNaN(qte) ? "—" : qte,
-      Number.isNaN(prix) ? "—" : prix,
-      Number.isNaN(montant) ? "—" : montant,
+      qte == null ? "—" : qte,
+      prix == null ? "—" : prix,
+      montant == null ? "—" : montant,
       safeStr(vs.numeroBR) || "—",
       "—",
       "—",
@@ -119,8 +140,50 @@ function toConfig(params: ProduitsHygieneExportParams): ITableExportConfig {
     rows,
     rowToArray,
     prefixRows: prefixRows.length > 0 ? prefixRows : undefined,
-    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant, "", weekTotal.male, weekTotal.femelle],
+    weekTotalRow: [
+      `TOTAL ${semaine}`,
+      "",
+      "",
+      "",
+      "",
+      "",
+      weekTotal.qte,
+      weekTotal.prix,
+      weekTotal.montant,
+      "",
+      weekTotal.male,
+      weekTotal.femelle,
+    ],
     cumulRow: ["CUMUL", "", "", "", "", "", cumul.qte, cumul.prix, cumul.montant, "", cumul.male, cumul.femelle],
+    weekTotalPdfRow: [
+      `TOTAL ${semaine}`,
+      "",
+      "",
+      "",
+      "",
+      "",
+      formatGroupedNumber(weekTotal.qte, 2),
+      formatGroupedNumber(weekTotal.prix, 2),
+      formatGroupedNumber(weekTotal.montant, 2),
+      "",
+      formatGroupedNumber(weekTotal.male, 0),
+      formatGroupedNumber(weekTotal.femelle, 0),
+    ],
+    cumulPdfRow: [
+      "CUMUL",
+      "",
+      "",
+      "",
+      "",
+      "",
+      formatGroupedNumber(cumul.qte, 2),
+      formatGroupedNumber(cumul.prix, 2),
+      formatGroupedNumber(cumul.montant, 2),
+      "",
+      formatGroupedNumber(cumul.male, 0),
+      formatGroupedNumber(cumul.femelle, 0),
+    ],
+    pdfRowMapper,
     ageByRowId,
     fileNamePrefix: "Livraisons_Produits_Hygiene",
     numberFormatColumns: [6, 7, 8],
