@@ -41,7 +41,7 @@ export interface SortiesFermeExportParams {
   rows: SortieRowExport[];
   weekTotal: SortiesFermeExportTotals;
   cumul: SortiesFermeExportTotals;
-  ageByRowId: Map<string, string | number>;
+  ageByRowId?: Map<string, string | number>;
 }
 
 const COLS = [...SORTIES_FERME_TABLE_HEADERS];
@@ -50,13 +50,12 @@ function safeStr(s: string | undefined | null): string {
   return s != null ? String(s).trim() : "";
 }
 
-function rowToArray(row: SortieRowExport, age: string | number): (string | number)[] {
+function rowToArray(row: SortieRowExport): (string | number)[] {
   const nbre = toOptionalNumber(row.nbre_dinde);
   const qte = resolvedQteFromString(row.qte_brute_kg);
   const prix = toOptionalNumber(row.prix_kg);
   const montant = sortiesFermeResolvedMontant(row);
   return [
-    age ?? "—",
     safeStr(row.date) || "—",
     safeStr(row.semaine) || "—",
     safeStr(row.client) || "—",
@@ -72,11 +71,10 @@ function rowToArray(row: SortieRowExport, age: string | number): (string | numbe
 
 function pdfRowMapper(cells: (string | number)[]): string[] {
   return cells.map((v, i) => {
-    if (i === 0) return v === "—" ? "—" : String(v);
-    if (i >= 7 && i <= 10) {
+    if (i >= 6 && i <= 9) {
       if (v === "—") return "—";
       if (typeof v === "number" && Number.isFinite(v)) {
-        const decimals = i === 7 ? 0 : 2;
+        const decimals = i === 6 ? 0 : 2;
         return formatGroupedNumber(v, decimals);
       }
     }
@@ -135,9 +133,9 @@ function toConfig(params: SortiesFermeExportParams): ITableExportConfig {
       formatGroupedNumber(cumul.montant_ttc, 2),
     ],
     pdfRowMapper,
-    ageByRowId,
+    ageByRowId: ageByRowId ?? new Map<string, string | number>(),
     fileNamePrefix: "Sorties_Ferme",
-    numberFormatColumns: [7, 8, 9, 10],
+    numberFormatColumns: [6, 7, 8, 9],
   };
 }
 

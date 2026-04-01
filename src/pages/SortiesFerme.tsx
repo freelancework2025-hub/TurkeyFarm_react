@@ -20,7 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, type FarmResponse, type SortieRequest, type SortieResponse, type LotWithStatusResponse } from "@/lib/api";
 import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
-import { sortSemaines, computeAgeByRowId } from "@/utils/semaineAgeUtils";
+import { sortSemaines } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/sortiesFermeExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
 import { resolvedQteFromString } from "@/lib/depensesDiversShared";
@@ -28,7 +28,6 @@ import {
   SORTIES_FERME_TABLE_HEADERS,
   SORTIES_FERME_HEADER_CLASS,
   SORTIES_FERME_MAIN_HEADER_TITLE,
-  getSortiesFermeAgeHeaderTitle,
   sortiesFermeTotalRowLabelColSpan,
   sortiesFermeResolvedMontant,
   sortiesFermeEffectiveMontantForTotal,
@@ -46,7 +45,7 @@ const TYPES = [
   "Gratuite (kg)",
   "Vente Dinde Vive",
   "Vente Aliment",
-  "Fumier",
+  "Vente Fumier",
 ];
 
 /** Désignation options when type is Consommation Employés, Gratuite, or Vente Dinde Vive */
@@ -56,16 +55,35 @@ const TYPES_WITH_DESIGNATION_DROPDOWN = [
   "Consommation Employés (kg)",
   "Gratuite (kg)",
   "Vente Dinde Vive",
+  "Vente Aliment",
+  "Vente Fumier",
 ];
 
 const TYPES_WITHOUT_NBRE_DINDE = [
   "Vente Aliment",
-  "Fumier",
+  "Vente Fumier",
   "Divers",
 ];
 
+function typeHasDefaultDesignation(type: string): boolean {
+  return type === "Vente Aliment" || type === "Vente Fumier";
+}
+
+function typeDefaultDesignation(type: string): string {
+  if (type === "Vente Aliment") return "ALIMENT";
+  if (type === "Vente Fumier") return "FUMIER";
+  return "";
+}
+
 function typeUsesDesignationDropdown(type: string): boolean {
   return TYPES_WITH_DESIGNATION_DROPDOWN.includes(type);
+}
+
+function getDesignationOptions(type: string): string[] {
+  if (type === "Vente Aliment") {
+    return ["ALIMENT"];
+  }
+  return DESIGNATION_OPTIONS;
 }
 
 function typeDisablesNbreDinde(type: string): boolean {
@@ -483,6 +501,9 @@ export default function SortiesFerme() {
       prev.map((r) => {
         if (r.id !== id) return r;
         const updated = { ...r, [field]: value };
+        if (field === "type" && typeHasDefaultDesignation(value) && !updated.designation.trim()) {
+          updated.designation = typeDefaultDesignation(value);
+        }
         if (field === "qte_brute_kg" || field === "prix_kg") {
           const qStr = updated.qte_brute_kg.trim();
           const pStr = updated.prix_kg.trim();
@@ -607,32 +628,13 @@ export default function SortiesFerme() {
   const selectedSemKey = normalizeSemaineKey(selectedSemaine || "");
 
   /** Âge séquentiel : uniquement S1, S2… (comme Livraisons Aliment). VS n’a pas d’âge ; la chaîne repart à S1. */
-  const ageByRowId = useMemo(() => {
-    const rowsForAge = rows.filter((r) => getSemFromRow(r) !== VS_SEMAINE);
-    return computeAgeByRowId(rowsForAge, (r) => getSemFromRow(r), (r) => r.date);
-  }, [rows]);
 
-  const displayAgeByRowId = useMemo(() => {
-    const m = new Map<string, number | string>();
-    if (loading) return m;
-    for (const r of rows) {
-      if (getSemFromRow(r) === VS_SEMAINE) {
-        m.set(r.id, "—");
-        continue;
-      }
-      m.set(r.id, ageByRowId.get(r.id) ?? "—");
-    }
-    return m;
-  }, [rows, ageByRowId, loading]);
+
+
 
   /** Comme LivraisonsAliment : tri par AGE (nombre), puis date ; VS = pas d’âge → tri effectif par date. */
   const currentRows = selectedSemaine
     ? [...rows.filter((r) => getSemFromRow(r) === selectedSemKey)].sort((a, b) => {
-        const ageA = displayAgeByRowId.get(a.id);
-        const ageB = displayAgeByRowId.get(b.id);
-        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
-        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
-        if (numA !== numB) return numA - numB;
         return (a.date || "").localeCompare(b.date || "");
       })
     : [];
@@ -715,7 +717,6 @@ export default function SortiesFerme() {
         })),
         weekTotal,
         cumul: cumulForSelectedSemaine,
-        ageByRowId: displayAgeByRowId,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
     } catch {
@@ -745,7 +746,6 @@ export default function SortiesFerme() {
       })),
       weekTotal,
       cumul: cumulForSelectedSemaine,
-      ageByRowId: displayAgeByRowId,
     });
     toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
   };
@@ -1016,11 +1016,7 @@ export default function SortiesFerme() {
                         <th
                           key={h}
                           className={SORTIES_FERME_HEADER_CLASS[h]}
-                          title={
-                            h === "AGE"
-                              ? getSortiesFermeAgeHeaderTitle(selectedSemKey === VS_SEMAINE)
-                              : SORTIES_FERME_MAIN_HEADER_TITLE[h]
-                          }
+                          title={SORTIES_FERME_MAIN_HEADER_TITLE[h]}
                         >
                           {h}
                         </th>
@@ -1051,9 +1047,7 @@ export default function SortiesFerme() {
                           const isSaving = savingRowId === row.id;
                           return (
                             <tr key={row.id}>
-                              <td className="text-sm font-medium text-muted-foreground">
-                                {displayAgeByRowId.get(row.id) ?? "—"}
-                              </td>
+
                               <td>
                                 <input
                                   type="date"
@@ -1106,7 +1100,22 @@ export default function SortiesFerme() {
                                 </select>
                               </td>
                               <td className="min-w-[120px]">
-                                {typeUsesDesignationDropdown(row.type) ? (
+                                {(row.type === "Vente Aliment" || row.type === "Vente Fumier") ? (
+                                  <div className="relative">
+                                    <input
+                                      type="text"
+                                      list={`designation-datalist-${row.id}`}
+                                      value={row.designation}
+                                      onChange={(e) => updateRow(row.id, "designation", e.target.value)}
+                                      placeholder={typeDefaultDesignation(row.type)}
+                                      disabled={rowReadOnly}
+                                      className="w-full bg-transparent border-0 outline-none text-sm"
+                                    />
+                                    <datalist id={`designation-datalist-${row.id}`}>
+                                      <option value={typeDefaultDesignation(row.type)} />
+                                    </datalist>
+                                  </div>
+                                ) : typeUsesDesignationDropdown(row.type) ? (
                                   <select
                                     value={row.designation}
                                     onChange={(e) => updateRow(row.id, "designation", e.target.value)}

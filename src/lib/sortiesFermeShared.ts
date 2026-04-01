@@ -8,7 +8,6 @@ import { toOptionalNumber } from "@/lib/formatResumeAmount";
 
 /** Data columns only — before ✓ / delete. */
 export const SORTIES_FERME_TABLE_HEADERS = [
-  "AGE",
   "DATE",
   "SEM",
   "CLIENT",
@@ -24,7 +23,6 @@ export const SORTIES_FERME_TABLE_HEADERS = [
 export type SortiesFermeHeaderKey = (typeof SORTIES_FERME_TABLE_HEADERS)[number];
 
 export const SORTIES_FERME_HEADER_CLASS: Record<SortiesFermeHeaderKey, string> = {
-  AGE: "min-w-[70px]",
   DATE: "min-w-[100px]",
   SEM: "min-w-[60px]",
   CLIENT: "min-w-[120px]",
@@ -41,11 +39,7 @@ export const SORTIES_FERME_MAIN_HEADER_TITLE: Partial<Record<SortiesFermeHeaderK
   SEM: "Semaine (VS, S1…)",
 };
 
-export function getSortiesFermeAgeHeaderTitle(isVideSanitaireSemaine: boolean): string {
-  return isVideSanitaireSemaine
-    ? "Pas d'âge en vide sanitaire"
-    : "Âge séquentiel depuis S1 (jours), comme Livraisons aliment";
-}
+
 
 /** Colspan for TOTAL / CUMUL label cells (columns before NBRE DINDE). */
 export function sortiesFermeTotalRowLabelColSpan(): number {
