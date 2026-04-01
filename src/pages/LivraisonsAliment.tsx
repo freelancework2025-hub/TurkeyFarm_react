@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Plus, Check, Trash2, Calendar, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Plus, Check, Trash2, Eraser, Calendar, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -439,6 +439,24 @@ export default function LivraisonsAliment() {
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const clearRow = (id: string) => {
+    const row = rows.find((r) => r.id === id);
+    if (!row || row.serverId == null || !hasFullAccess) {
+      toast({ title: "Non autorisé", description: "Seuls les administrateurs peuvent supprimer cette ligne.", variant: "destructive" });
+      return;
+    }
+
+    api.livraisonsAliment
+      .delete(row.serverId)
+      .then(() => {
+        toast({ title: "Ligne supprimée", description: `L'enregistrement a été supprimé de la base de données.` });
+        loadMovements();
+      })
+      .catch(() => {
+        toast({ title: "Erreur", description: "Impossible de supprimer la ligne.", variant: "destructive" });
+      });
   };
 
   const updateRow = (id: string, field: keyof LivraisonRow, value: string) => {
@@ -1002,7 +1020,7 @@ export default function LivraisonsAliment() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
+                        {currentRows.map((row, index) => {
                           const rowReadOnly =
                             isReadOnly ||
                             (row.serverId == null && !canCreate) ||
@@ -1154,18 +1172,29 @@ export default function LivraisonsAliment() {
                                   </button>
                                 )}
                               </td>
-                              <td>
-                                {showDelete && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeRow(row.id)}
-                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
-                                    title="Supprimer"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                )}
+                              <td className="w-14 max-w-14 shrink-0 !px-1 text-center align-middle">
+                                <div className="flex gap-0.5 justify-center">
+                                  {row.serverId != null && hasFullAccess && (
+                                    <button
+                                      type="button"
+                                      onClick={() => clearRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer la ligne entière"
+                                    >
+                                      <Eraser className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {showDelete && index >= MIN_TABLE_ROWS && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );

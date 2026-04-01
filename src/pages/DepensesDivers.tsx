@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Loader2, Plus, Check, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Loader2, Plus, Check, Trash2, Eraser, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -38,15 +38,17 @@ import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount"
 
 /**
  * DÉPENSES DIVERS
- * Flow: Farm → Lot → Semaine → Vide sanitaire table (top) + Dépenses divers table (main).
+ * Flow: Farm → Lot → Semaine/VS selector → VS table (if VS selected) + Dépenses divers table (if semaine selected).
  * Vide sanitaire: dedicated table with DATE, désignation, fournisseur, N°BL, N°BR, UG, quantité, prix, montant. TOTAL and CUMUL for quantité and montant.
  * Main table: TOTAL = current semaine, CUMUL = vide sanitaire cumul + semaines up to current.
  * Permission: canCreate / canUpdate (Admin/RT). Persisted delete: hasFullAccess only; RF can remove unsaved lines.
  * PER-ROW: ✓ saves one line (POST/PUT) for Vide sanitaire (age=VS) and main table alike.
  */
 
-/** Quick-pick S1–S36; S37+ via champ libre. */
-const SEMAINES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
+const VS_SEMAINE = "VS";
+/** Quick-pick S1–S36; S37+ via champ libre. Vide sanitaire as first week. */
+const SEMAINES_NUMEROTEES = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
+const SEMAINES = [VS_SEMAINE, ...SEMAINES_NUMEROTEES];
 const MIN_TABLE_ROWS = 7;
 
 const VS_HEADER_CLASS = {
@@ -76,7 +78,12 @@ const MAIN_HEADER_CLASS = {
 
 /** Options de désignation : l'utilisateur peut sélectionner ou saisir librement. */
 const DESIGNATION_OPTIONS = ["ENTRETIEN ET REP"];
-const VS_AGE = "VS"; // Vide sanitaire marker
+
+/** Clé de filtre / comparaison (VS insensible à la casse). */
+function normalizeSemaineKey(s: string): string {
+  const t = (s || "").trim();
+  return t.toUpperCase() === "VS" ? VS_SEMAINE : t;
+}
 
 interface DepenseDiversRow {
   id: string;
@@ -130,9 +137,9 @@ function addOneDay(isoDate: string): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Semaine / VS depuis la ligne (champ UI `sem`). */
+/** Semaine affichée / filtre depuis la ligne. */
 function getSemFromRow(r: DepenseDiversRow): string {
-  return (r.sem || "").trim();
+  return normalizeSemaineKey(r.sem ?? "");
 }
 
 /** Aligné sur DepenseDiversService.isFilledRow ; vide sanitaire exige au moins un champ métier (pas seulement l’âge VS). */
@@ -209,7 +216,7 @@ export default function DepensesDivers() {
   );
   const isSelectedLotClosed = Boolean(
     lotParam.trim() &&
-      isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotParam.trim()), lotAccessCtx)
+    isClosedLotBlockedForSession(lotsWithStatus.find((l) => l.lot === lotParam.trim()), lotAccessCtx)
   );
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** QTE: raw while focused, grouped when blurred (Livraisons Aliment). */
@@ -298,7 +305,7 @@ export default function DepensesDivers() {
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today for first lot). */
   const getStartDateForSemaine = useCallback(
     (semaine: string): string => {
-      const ages = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_AGE));
+      const ages = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_SEMAINE));
       ages.add(semaine.trim());
       const semOrder = sortSemaines([...ages]);
       const idx = semOrder.indexOf(semaine.trim());
@@ -407,11 +414,11 @@ export default function DepensesDivers() {
     const startDate =
       forSem.length > 0
         ? (() => {
-            const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
-            if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
-            const maxD = dates.sort()[dates.length - 1];
-            return addOneDay(maxD);
-          })()
+          const dates = forSem.map((r) => r.date).filter((d) => d?.trim());
+          if (dates.length === 0) return getStartDateForSemaine(selectedSemaine);
+          const maxD = dates.sort()[dates.length - 1];
+          return addOneDay(maxD);
+        })()
         : getStartDateForSemaine(selectedSemaine);
     const newRows: DepenseDiversRow[] = [];
     let nextDate = startDate;
@@ -426,22 +433,16 @@ export default function DepensesDivers() {
     if (!canCreate || !selectedSemaine) return;
     const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     const lastRow = currentRows.length > 0 ? currentRows[currentRows.length - 1] : null;
-    const nextDate =
-      lastRow?.date?.trim() ? addOneDay(lastRow.date) : getStartDateForSemaine(selectedSemaine);
+    const isVs = selectedSemaine === VS_SEMAINE;
+    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : (isVs ? today : getStartDateForSemaine(selectedSemaine));
     const newRow = { ...emptyRow(selectedSemaine), date: nextDate };
     setRows((prev) => [...prev, newRow]);
   };
 
-  const addRowVideSanitaire = () => {
-    if (!canCreate || !lotFilter.trim()) return;
-    const vsRows = rows.filter((r) => getSemFromRow(r) === VS_AGE);
-    const lastRow = vsRows.length > 0 ? vsRows[vsRows.length - 1] : null;
-    const nextDate = lastRow?.date?.trim() ? addOneDay(lastRow.date) : today;
-    const newRow = { ...emptyRow(VS_AGE), date: nextDate };
-    setRows((prev) => [...prev, newRow]);
-  };
-
-  const removeRowVideSanitaire = (id: string) => {
+  const removeRow = (id: string) => {
+    const isVs = selectedSemaine === VS_SEMAINE;
+    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
+    if (!isVs && currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
     if (!row) return;
     if (row.serverId != null && !hasFullAccess) return;
@@ -455,19 +456,22 @@ export default function DepensesDivers() {
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
-  const removeRow = (id: string) => {
-    const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
-    if (currentRows.length <= MIN_TABLE_ROWS) return;
+  const clearRow = (id: string) => {
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !hasFullAccess) return;
-    if (row?.serverId != null) {
-      api.depensesDivers
-        .delete(row.serverId)
-        .then(() => loadMovements())
-        .catch(() => { /* API error — logged in backend only */ });
+    if (!row || row.serverId == null || !hasFullAccess) {
+      toast({ title: "Non autorisé", description: "Seuls les administrateurs peuvent supprimer cette ligne.", variant: "destructive" });
       return;
     }
-    setRows((prev) => prev.filter((r) => r.id !== id));
+
+    api.depensesDivers
+      .delete(row.serverId)
+      .then(() => {
+        toast({ title: "Ligne supprimée", description: `L'enregistrement a été supprimé de la base de données.` });
+        loadMovements();
+      })
+      .catch(() => {
+        toast({ title: "Erreur", description: "Impossible de supprimer la ligne.", variant: "destructive" });
+      });
   };
 
   const updateRow = (id: string, field: keyof DepenseDiversRow, value: string) => {
@@ -496,9 +500,9 @@ export default function DepensesDivers() {
         : qteParsed != null && prix >= 0
           ? qteParsed * prix
           : null;
-    const isVs = getSemFromRow(r) === VS_AGE;
+    const isVs = getSemFromRow(r) === VS_SEMAINE;
     const semLabel = r.sem.trim();
-    const ageField = semLabel || (isVs ? VS_AGE : selectedSemaine || null) || null;
+    const ageField = semLabel || (isVs ? VS_SEMAINE : selectedSemaine || null) || null;
     return {
       farmId: pageFarmId ?? undefined,
       lot: r.lot.trim() || lotFilter.trim() || null,
@@ -516,7 +520,7 @@ export default function DepensesDivers() {
   };
 
   const saveRow = async (row: DepenseDiversRow) => {
-    const isVs = getSemFromRow(row) === VS_AGE;
+    const isVs = getSemFromRow(row) === VS_SEMAINE;
     const canSaveNew = row.serverId == null && canCreate;
     const canSaveExisting = row.serverId != null && canUpdate;
     if (!canSaveNew && !canSaveExisting) {
@@ -581,14 +585,14 @@ export default function DepensesDivers() {
           prev.map((r) =>
             r.id === row.id
               ? {
-                  ...r,
-                  serverId: created.id,
-                  sem:
-                    created.age != null && String(created.age).trim() !== ""
-                      ? String(created.age).trim()
-                      : r.sem,
-                  lot: created.lot ?? r.lot,
-                }
+                ...r,
+                serverId: created.id,
+                sem:
+                  created.age != null && String(created.age).trim() !== ""
+                    ? String(created.age).trim()
+                    : r.sem,
+                lot: created.lot ?? r.lot,
+              }
               : r
           )
         );
@@ -606,7 +610,7 @@ export default function DepensesDivers() {
 
   /** Âge séquentiel (jours) pour toutes les lignes hors vide sanitaire ; l’API ne stocke que la semaine dans `age`. */
   const ageByRowId = React.useMemo(() => {
-    const rowsForAge = rows.filter((r) => getSemFromRow(r) !== VS_AGE);
+    const rowsForAge = rows.filter((r) => getSemFromRow(r) !== VS_SEMAINE);
     return computeAgeByRowId(rowsForAge, (r) => getSemFromRow(r), (r) => r.date);
   }, [rows]);
 
@@ -615,13 +619,13 @@ export default function DepensesDivers() {
     const m = new Map<string, number | string>();
     if (loading) return m;
     for (const r of rows) {
-      if (getSemFromRow(r) === VS_AGE) continue;
+      if (getSemFromRow(r) === VS_SEMAINE) continue;
       m.set(r.id, ageByRowId.get(r.id) ?? "—");
     }
     return m;
   }, [rows, ageByRowId, loading]);
 
-  const videSanitaireRows = [...rows.filter((r) => getSemFromRow(r) === VS_AGE)].sort((a, b) =>
+  const videSanitaireRows = [...rows.filter((r) => getSemFromRow(r) === VS_SEMAINE)].sort((a, b) =>
     (a.date || "").localeCompare(b.date || "")
   );
   const videSanitaireTotalQte = videSanitaireRows.reduce(
@@ -633,18 +637,18 @@ export default function DepensesDivers() {
 
   const currentRows = selectedSemaine
     ? [...rows.filter((r) => getSemFromRow(r) === selectedSemaine)].sort((a, b) => {
-        const ageA = displayAgeByRowId.get(a.id);
-        const ageB = displayAgeByRowId.get(b.id);
-        const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
-        const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
-        if (numA !== numB) return numA - numB;
-        return (a.date || "").localeCompare(b.date || "");
-      })
+      const ageA = displayAgeByRowId.get(a.id);
+      const ageB = displayAgeByRowId.get(b.id);
+      const numA = typeof ageA === "number" ? ageA : Number.MAX_SAFE_INTEGER;
+      const numB = typeof ageB === "number" ? ageB : Number.MAX_SAFE_INTEGER;
+      if (numA !== numB) return numA - numB;
+      return (a.date || "").localeCompare(b.date || "");
+    })
     : [];
   const weekTotalQte = currentRows.reduce((acc, r) => acc + (resolvedQteFromString(r.qte) ?? 0), 0);
   const weekTotalPrix = currentRows.reduce((acc, r) => acc + toNum(r.prixPerUnit), 0);
   const weekTotalMontant = currentRows.reduce((acc, r) => acc + effectiveMontantForTotal(r), 0);
-  const semainesOnly = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_AGE));
+  const semainesOnly = new Set(rows.map((r) => getSemFromRow(r)).filter((a) => a && a !== VS_SEMAINE));
   const semOrder = sortSemaines([...semainesOnly]);
   const idx = semOrder.indexOf(selectedSemaine ?? "");
   const semsUpTo = idx < 0 ? (selectedSemaine ? [selectedSemaine] : []) : semOrder.slice(0, idx + 1);
@@ -1009,15 +1013,16 @@ export default function DepensesDivers() {
             ))}
           </datalist>
           <div className="space-y-6 w-full min-w-0">
-            {/* Vide sanitaire table */}
-            <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
+            {selectedSemaine === VS_SEMAINE ? (
+              /* Vide sanitaire table */
+              <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <h2 className="text-lg font-display font-bold text-foreground">Vide sanitaire</h2>
                 {!isReadOnly && canCreate && (
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={addRowVideSanitaire}
+                      onClick={addRow}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-farm-green text-farm-green-foreground rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
                     >
                       <Plus className="w-4 h-4" /> Ligne
@@ -1049,7 +1054,7 @@ export default function DepensesDivers() {
                       </tr>
                     ) : (
                       <>
-                        {videSanitaireRows.map((row) => {
+                        {videSanitaireRows.map((row, index) => {
                           const rowReadOnly =
                             isReadOnly ||
                             (row.serverId == null && !canCreate) ||
@@ -1195,17 +1200,29 @@ export default function DepensesDivers() {
                                   </button>
                                 )}
                               </td>
-                              <td className="align-middle">
-                                {showDelete && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeRowVideSanitaire(row.id)}
-                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                    disabled={false}
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                )}
+                              <td className="w-14 max-w-14 shrink-0 !px-1 text-center align-middle">
+                                <div className="flex gap-0.5 justify-center">
+                                  {row.serverId != null && hasFullAccess && (
+                                    <button
+                                      type="button"
+                                      onClick={() => clearRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer la ligne entière"
+                                    >
+                                      <Eraser className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {showDelete && index >= MIN_TABLE_ROWS && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1251,10 +1268,10 @@ export default function DepensesDivers() {
                   </tbody>
                 </table>
               </div>
-            </div>
-
-            {/* Main dépenses divers table */}
-            <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
+              </div>
+            ) : (
+              /* Main dépenses divers table */
+              <div className="bg-card rounded-lg border border-border shadow-sm animate-fade-in w-full min-w-0">
               <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-2">
                 <div>
                   <h2 className="text-lg font-display font-bold text-foreground">Dépenses divers</h2>
@@ -1306,7 +1323,7 @@ export default function DepensesDivers() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
+                        {currentRows.map((row, index) => {
                           const rowReadOnly =
                             isReadOnly ||
                             (row.serverId == null && !canCreate) ||
@@ -1455,17 +1472,29 @@ export default function DepensesDivers() {
                                   </button>
                                 )}
                               </td>
-                              <td className="text-right align-middle">
-                                {showDelete && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeRow(row.id)}
-                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                )}
+                              <td className="w-14 max-w-14 shrink-0 !px-1 text-center align-middle">
+                                <div className="flex gap-0.5 justify-center">
+                                  {row.serverId != null && hasFullAccess && (
+                                    <button
+                                      type="button"
+                                      onClick={() => clearRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer la ligne entière"
+                                    >
+                                      <Eraser className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {showDelete && index >= MIN_TABLE_ROWS && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1519,6 +1548,7 @@ export default function DepensesDivers() {
                 </table>
               </div>
             </div>
+            )}
           </div>
         </>
       )}

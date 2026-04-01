@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Download, FileSpreadsheet, FileText, Loader2, Plus, Pencil, Trash2 } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, Loader2, Plus, Pencil, Trash2, Eraser } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";

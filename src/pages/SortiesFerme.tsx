@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Check, Loader2, Plus, Tag, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Check, Loader2, Plus, Tag, Trash2, Eraser, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -460,6 +460,24 @@ export default function SortiesFerme() {
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
+  const clearRow = (id: string) => {
+    const row = rows.find((r) => r.id === id);
+    if (!row || row.serverId == null || !hasFullAccess) {
+      toast({ title: "Non autorisé", description: "Seuls les administrateurs peuvent supprimer cette ligne.", variant: "destructive" });
+      return;
+    }
+
+    api.sorties
+      .delete(row.serverId)
+      .then(() => {
+        toast({ title: "Ligne supprimée", description: `L'enregistrement a été supprimé de la base de données.` });
+        loadSorties();
+      })
+      .catch(() => {
+        toast({ title: "Erreur", description: "Impossible de supprimer la ligne.", variant: "destructive" });
+      });
+  };
+
   const updateRow = (id: string, field: keyof SortieRow, value: string) => {
     setRows((prev) =>
       prev.map((r) => {
@@ -621,10 +639,15 @@ export default function SortiesFerme() {
   // Calculate totals for the current week
   const weekTotal = (() => {
     const t = { nbre_dinde: 0, qte_brute_kg: 0, prix_kg: 0, montant_ttc: 0 };
+    const isVs = selectedSemKey === VS_SEMAINE;
     for (const r of currentRows) {
       t.nbre_dinde += toNum(r.nbre_dinde);
-      // Only include qte_brute_kg, prix_kg, and montant_ttc for rows that have nbre_dinde
-      if (r.nbre_dinde.trim() !== "") {
+      // For VS: include all rows; for other weeks: include rows with meaningful data (qte, prix, or montant)
+      const hasQte = (resolvedQteFromString(r.qte_brute_kg) ?? 0) > 0;
+      const hasMontant = (toNum(r.montant_ttc) ?? 0) > 0;
+      const hasPrix = (toNum(r.prix_kg) ?? 0) > 0;
+      const shouldInclude = isVs || hasQte || hasMontant || hasPrix;
+      if (shouldInclude) {
         t.qte_brute_kg += resolvedQteFromString(r.qte_brute_kg) ?? 0;
         t.prix_kg += toNum(r.prix_kg);
         t.montant_ttc += sortiesFermeEffectiveMontantForTotal(r);
@@ -645,10 +668,15 @@ export default function SortiesFerme() {
 
     for (const sem of semsUpTo) {
       const weekRows = rows.filter((r) => getSemFromRow(r) === sem);
+      const isVsSem = sem === VS_SEMAINE;
       for (const r of weekRows) {
         t.nbre_dinde += toNum(r.nbre_dinde);
-        // Only include qte_brute_kg, prix_kg, and montant_ttc for rows that have nbre_dinde
-        if (r.nbre_dinde.trim() !== "") {
+        // For VS: include all rows; for other weeks: include rows with meaningful data (qte, prix, or montant)
+        const hasQte = (resolvedQteFromString(r.qte_brute_kg) ?? 0) > 0;
+        const hasMontant = (toNum(r.montant_ttc) ?? 0) > 0;
+        const hasPrix = (toNum(r.prix_kg) ?? 0) > 0;
+        const shouldInclude = isVsSem || hasQte || hasMontant || hasPrix;
+        if (shouldInclude) {
           t.qte_brute_kg += resolvedQteFromString(r.qte_brute_kg) ?? 0;
           t.prix_kg += toNum(r.prix_kg);
           t.montant_ttc += sortiesFermeEffectiveMontantForTotal(r);
@@ -1012,7 +1040,7 @@ export default function SortiesFerme() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
+                        {currentRows.map((row, index) => {
                           const rowReadOnly =
                             isReadOnly ||
                             (row.serverId == null && !canCreate) ||
@@ -1192,18 +1220,29 @@ export default function SortiesFerme() {
                                   </button>
                                 )}
                               </td>
-                              <td>
-                                {showDelete && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeRow(row.id)}
-                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
-                                    title="Supprimer"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                )}
+                              <td className="w-14 max-w-14 shrink-0 !px-1 text-center align-middle">
+                                <div className="flex gap-0.5 justify-center">
+                                  {row.serverId != null && hasFullAccess && (
+                                    <button
+                                      type="button"
+                                      onClick={() => clearRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer la ligne entière"
+                                    >
+                                      <Eraser className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {showDelete && index >= MIN_TABLE_ROWS && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1 inline-flex justify-center items-center rounded hover:bg-red-50"
+                                      title="Supprimer"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1215,7 +1254,7 @@ export default function SortiesFerme() {
                                 colSpan={sortiesFermeTotalRowLabelColSpan()}
                                 className="text-sm font-medium text-muted-foreground"
                               >
-                                TOTAL {selectedSemaine}
+                                TOTAL {selectedSemaine === VS_SEMAINE ? "(Vide Sanitaire)" : `(${selectedSemaine})`}
                               </td>
                               <td className="text-center tabular-nums whitespace-nowrap">
                                 {formatGroupedNumber(weekTotal.nbre_dinde, 0)}
@@ -1232,28 +1271,30 @@ export default function SortiesFerme() {
                               <td />
                               <td />
                             </tr>
-                            <tr className="bg-muted/50">
-                              <td
-                                colSpan={sortiesFermeTotalRowLabelColSpan()}
-                                className="text-sm font-medium text-muted-foreground"
-                              >
-                                CUMUL
-                              </td>
-                              <td className="text-center tabular-nums whitespace-nowrap">
-                                {formatGroupedNumber(cumulForSelectedSemaine.nbre_dinde, 0)}
-                              </td>
-                              <td className="text-center tabular-nums whitespace-nowrap">
-                                {formatGroupedNumber(cumulForSelectedSemaine.qte_brute_kg, 2)}
-                              </td>
-                              <td className="text-center tabular-nums whitespace-nowrap">
-                                {formatGroupedNumber(cumulForSelectedSemaine.prix_kg, 2)}
-                              </td>
-                              <td className="text-center tabular-nums whitespace-nowrap font-semibold">
-                                {formatGroupedNumber(cumulForSelectedSemaine.montant_ttc, 2)}
-                              </td>
-                              <td />
-                              <td />
-                            </tr>
+                            {selectedSemaine !== VS_SEMAINE && (
+                              <tr className="bg-muted/50">
+                                <td
+                                  colSpan={sortiesFermeTotalRowLabelColSpan()}
+                                  className="text-sm font-medium text-muted-foreground"
+                                >
+                                  CUMUL (Vide sanitaire + semaines)
+                                </td>
+                                <td className="text-center tabular-nums whitespace-nowrap">
+                                  {formatGroupedNumber(cumulForSelectedSemaine.nbre_dinde, 0)}
+                                </td>
+                                <td className="text-center tabular-nums whitespace-nowrap">
+                                  {formatGroupedNumber(cumulForSelectedSemaine.qte_brute_kg, 2)}
+                                </td>
+                                <td className="text-center tabular-nums whitespace-nowrap">
+                                  {formatGroupedNumber(cumulForSelectedSemaine.prix_kg, 2)}
+                                </td>
+                                <td className="text-center tabular-nums whitespace-nowrap font-semibold">
+                                  {formatGroupedNumber(cumulForSelectedSemaine.montant_ttc, 2)}
+                                </td>
+                                <td />
+                                <td />
+                              </tr>
+                            )}
                           </>
                         )}
                       </>

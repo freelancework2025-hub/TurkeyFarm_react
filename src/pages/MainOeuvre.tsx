@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Building2, Calendar, Check, Download, FileSpreadsheet, FileText, Loader2, Plus, Trash2, UserPlus } from "lucide-react";
+import { ArrowLeft, Building2, Calendar, Check, Download, Eraser, FileSpreadsheet, FileText, Loader2, Plus, Trash2, UserPlus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -406,14 +406,19 @@ export default function MainOeuvre() {
     const row = rows.find((r) => r.id === id);
     if (!row) return;
     const savedEntryIds = row.entries.filter((e) => e.serverId != null).map((e) => e.serverId!);
-    if (savedEntryIds.length > 0 && !hasFullAccess) return;
-    if (savedEntryIds.length > 0) {
-      Promise.all(savedEntryIds.map((sid) => api.mainOeuvre.delete(sid)))
-        .then(() => loadMovements())
-        .catch(() => { /* API error — logged in backend only */ });
-      return;
-    }
+    if (savedEntryIds.length > 0) return; // Saved entries should use clearRow instead
     setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const clearRow = (id: string) => {
+    if (!hasFullAccess) return;
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+    const savedEntryIds = row.entries.filter((e) => e.serverId != null).map((e) => e.serverId!);
+    if (savedEntryIds.length === 0) return; // No saved entries to clear
+    Promise.all(savedEntryIds.map((sid) => api.mainOeuvre.delete(sid)))
+      .then(() => loadMovements())
+      .catch(() => { /* API error — logged in backend only */ });
   };
 
   const updateRow = (id: string, field: "date" | "observation", value: string) => {
@@ -993,7 +998,7 @@ export default function MainOeuvre() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
+                        {currentRows.map((row, index) => {
                           const hasSavedEntries = row.entries.some((e) => e.serverId != null);
                           const allPersisted =
                             row.entries.length > 0 && row.entries.every((e) => e.serverId != null);
@@ -1158,16 +1163,29 @@ export default function MainOeuvre() {
                                 )}
                               </td>
                               <td>
-                                {showDelete && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeRow(row.id)}
-                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                )}
+                                <div className="flex items-center gap-1">
+                                  {hasSavedEntries && hasFullAccess && (
+                                    <button
+                                      type="button"
+                                      onClick={() => clearRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                      title="Effacer définitivement (Admin)"
+                                    >
+                                      <Eraser className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {(currentRows.length > MIN_TABLE_ROWS && !hasSavedEntries) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                      disabled={currentRows.length <= MIN_TABLE_ROWS}
+                                      title="Supprimer la ligne"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );

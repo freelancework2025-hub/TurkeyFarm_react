@@ -89,6 +89,7 @@ const TAB_TO_API_SEX: Record<TabType, string> = { male: "Mâle", femelle: "Femel
  * RESPONSABLE_FERME: can add and save new data in child tables; saved rows/cells are read-only.
  * Number display: grouped thousands (space) + dot decimal via formatGroupedNumber (same as Résumé coûts / production).
  * Colonnes du tableau « Suivi hebdomadaire » (grille + exports Excel/PDF section 3) : `@/lib/suiviTechniqueHebdomadaireShared` — consommé par WeeklyTrackingTable et suiviTechniqueBatimentExport.
+ * Mortalité du transport (ligne sous la grille, offset S2+, S1) : documentée en détail dans `WeeklyTrackingTable.tsx` et dans `TurkeyFarm/docs/CALCULS_ET_EQUATIONS.md` §8.1.
  */
 export default function SuiviTechniqueHebdomadaire() {
   const [searchParams, setSearchParams] = useSearchParams();

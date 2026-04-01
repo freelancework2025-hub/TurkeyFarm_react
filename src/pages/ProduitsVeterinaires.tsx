@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Building2, Plus, Check, Calendar, Trash2, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, Loader2, Building2, Plus, Check, Calendar, Trash2, Eraser, Download, FileSpreadsheet, FileText } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import {
   DropdownMenu,
@@ -410,15 +410,18 @@ export default function ProduitsVeterinaires() {
     const currentRows = rows.filter((r) => getSemFromRow(r) === selectedSemaine);
     if (currentRows.length <= MIN_TABLE_ROWS) return;
     const row = rows.find((r) => r.id === id);
-    if (row?.serverId != null && !hasFullAccess) return;
-    if (row?.serverId != null) {
-      api.livraisonsProduitsVeterinaires
-        .delete(row.serverId)
-        .then(() => loadMovements())
-        .catch(() => { /* API error — logged in backend only */ });
-      return;
-    }
+    if (row?.serverId != null) return; // Saved entries should use clearRow instead
     setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const clearRow = (id: string) => {
+    if (!hasFullAccess) return;
+    const row = rows.find((r) => r.id === id);
+    if (!row || row.serverId == null) return; // No saved entry to clear
+    api.livraisonsProduitsVeterinaires
+      .delete(row.serverId)
+      .then(() => loadMovements())
+      .catch(() => { /* API error — logged in backend only */ });
   };
 
   const updateRow = (id: string, field: keyof VetRow, value: string) => {
@@ -934,7 +937,7 @@ export default function ProduitsVeterinaires() {
                       </tr>
                     ) : (
                       <>
-                        {currentRows.map((row) => {
+                        {currentRows.map((row, index) => {
                           const rowReadOnly =
                             isReadOnly ||
                             (row.serverId == null && !canCreate) ||
@@ -1075,16 +1078,29 @@ export default function ProduitsVeterinaires() {
                                 )}
                               </td>
                               <td>
-                                {showDelete && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeRow(row.id)}
-                                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                                    disabled={currentRows.length <= MIN_TABLE_ROWS}
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                )}
+                                <div className="flex items-center gap-1">
+                                  {row.serverId != null && hasFullAccess && (
+                                    <button
+                                      type="button"
+                                      onClick={() => clearRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                      title="Effacer définitivement (Admin)"
+                                    >
+                                      <Eraser className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {((currentRows.length > MIN_TABLE_ROWS && row.serverId == null) || (row.serverId != null && !hasFullAccess)) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(row.id)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                      disabled={currentRows.length <= MIN_TABLE_ROWS}
+                                      title="Supprimer la ligne"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );

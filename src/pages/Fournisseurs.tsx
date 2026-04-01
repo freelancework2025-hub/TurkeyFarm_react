@@ -75,6 +75,7 @@ export default function Fournisseurs() {
   const [prices, setPrices] = useState<Record<number, Record<string, string>>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingFournisseurId, setDeletingFournisseurId] = useState<string | null>(null);
   const { toast } = useToast();
 
   const loadGrid = useCallback(async () => {
@@ -156,11 +157,115 @@ export default function Fournisseurs() {
     ]);
   };
 
-  const removeFournisseur = (id: string) => {
+  const saveGridToServer = async (updatedFournisseurs?: FournisseurCol[], updatedPrices?: Record<number, Record<string, string>>) => {
+    const fournisseursToSave = updatedFournisseurs || fournisseurs;
+    const pricesToSave = updatedPrices || prices;
+    
+    const body: FournisseurGridRequest = {
+      fournisseurs: fournisseursToSave.map((f) => ({
+        id: f.serverId ?? undefined,
+        name: f.name,
+      })),
+      designations,
+      prices: [],
+    };
+    
+    for (let desIdx = 0; desIdx < designations.length; desIdx++) {
+      for (let fi = 0; fi < fournisseursToSave.length; fi++) {
+        const f = fournisseursToSave[fi];
+        const val = pricesToSave[desIdx]?.[f.id];
+        const num =
+          val != null && val.trim() !== ""
+            ? parseFloat(val)
+            : Number.NaN;
+        body.prices.push({
+          fournisseur_index: fi,
+          designation_index: desIdx,
+          price_kg: Number.isNaN(num) ? null : num,
+        });
+      }
+    }
+    
+    const grid = await api.fournisseurs.saveGrid(body, pageFarmId ?? undefined);
+    const cols: FournisseurCol[] = (grid.fournisseurs ?? []).map((f) => ({
+      id: `f${f.id}`,
+      serverId: f.id,
+      name: f.name,
+    }));
+    const serverDes = grid.designations ?? [];
+    const des = serverDes.length >= 8 ? serverDes : DEFAULT_DESIGNATIONS;
+    const priceMap: Record<number, Record<string, string>> = {};
+    const cellKeys = new Set<string>();
+    for (const row of grid.prices ?? []) {
+      const desIdx = des.indexOf(row.designation);
+      if (desIdx === -1) continue;
+      const col = cols.find((c) => c.serverId === row.fournisseurId);
+      if (!col) continue;
+      if (!priceMap[desIdx]) priceMap[desIdx] = {};
+      priceMap[desIdx][col.id] =
+        row.price_kg != null ? String(row.price_kg) : "";
+      if (row.price_kg != null) cellKeys.add(`${desIdx}|${col.id}`);
+    }
+    setFournisseurs(cols.length ? cols : [{ id: crypto.randomUUID(), name: "Fournisseur A" }]);
+    setDesignations(des);
+    setSavedCellKeys(cellKeys);
+    setServerDesignationCount(des.length);
+    setPrices(priceMap);
+  };
+
+  const removeFournisseur = async (id: string) => {
     if (fournisseurs.length <= 1) return;
     const col = fournisseurs.find((f) => f.id === id);
     if (col?.serverId != null && !canDelete) return;
-    setFournisseurs((prev) => prev.filter((f) => f.id !== id));
+    
+    const wasSaved = col?.serverId != null;
+    
+    // Clean up local state first
+    const updatedFournisseurs = fournisseurs.filter((f) => f.id !== id);
+    const updatedPrices = { ...prices };
+    const updatedSavedCellKeys = new Set<string>();
+    
+    // Clean up price data for this supplier across all designations
+    for (const desIdx in updatedPrices) {
+      if (updatedPrices[desIdx] && updatedPrices[desIdx][id] !== undefined) {
+        const { [id]: removed, ...rest } = updatedPrices[desIdx];
+        updatedPrices[desIdx] = rest;
+      }
+    }
+    
+    // Clean up saved cell keys for this supplier
+    for (const key of savedCellKeys) {
+      if (!key.endsWith(`|${id}`)) {
+        updatedSavedCellKeys.add(key);
+      }
+    }
+    
+    // Update local state immediately
+    setFournisseurs(updatedFournisseurs);
+    setPrices(updatedPrices);
+    setSavedCellKeys(updatedSavedCellKeys);
+    
+    // If supplier was saved, immediately persist the deletion to server
+    if (wasSaved) {
+      setDeletingFournisseurId(id);
+      try {
+        await saveGridToServer(updatedFournisseurs, updatedPrices);
+        toast({ 
+          title: "Fournisseur supprimé", 
+          description: `${col.name} a été supprimé définitivement.` 
+        });
+      } catch {
+        toast({
+          title: "Erreur",
+          description: "Impossible de supprimer le fournisseur.",
+          variant: "destructive",
+        });
+        // Reload grid to restore previous state on error
+        loadGrid();
+      } finally {
+        setDeletingFournisseurId(null);
+      }
+    }
   };
 
   const updateFournisseurName = (id: string, name: string) => {
@@ -241,57 +346,10 @@ export default function Fournisseurs() {
       });
       return;
     }
-    // Send full grid so empty cells are not "deleted" — they stay empty until user fills and saves
-    const body: FournisseurGridRequest = {
-      fournisseurs: fournisseurs.map((f) => ({
-        id: f.serverId ?? undefined,
-        name: f.name,
-      })),
-      designations,
-      prices: [],
-    };
-    for (let desIdx = 0; desIdx < designations.length; desIdx++) {
-      for (let fi = 0; fi < fournisseurs.length; fi++) {
-        const f = fournisseurs[fi];
-        const val = prices[desIdx]?.[f.id];
-        const num =
-          val != null && val.trim() !== ""
-            ? parseFloat(val)
-            : Number.NaN;
-        body.prices.push({
-          fournisseur_index: fi,
-          designation_index: desIdx,
-          price_kg: Number.isNaN(num) ? null : num,
-        });
-      }
-    }
+    
     setSaving(true);
     try {
-      const grid = await api.fournisseurs.saveGrid(body, pageFarmId ?? undefined);
-      const cols: FournisseurCol[] = (grid.fournisseurs ?? []).map((f) => ({
-        id: `f${f.id}`,
-        serverId: f.id,
-        name: f.name,
-      }));
-      const serverDes = grid.designations ?? [];
-      const des = serverDes.length >= 8 ? serverDes : DEFAULT_DESIGNATIONS;
-      const priceMap: Record<number, Record<string, string>> = {};
-      const cellKeys = new Set<string>();
-      for (const row of grid.prices ?? []) {
-        const desIdx = des.indexOf(row.designation);
-        if (desIdx === -1) continue;
-        const col = cols.find((c) => c.serverId === row.fournisseurId);
-        if (!col) continue;
-        if (!priceMap[desIdx]) priceMap[desIdx] = {};
-        priceMap[desIdx][col.id] =
-          row.price_kg != null ? String(row.price_kg) : "";
-        if (row.price_kg != null) cellKeys.add(`${desIdx}|${col.id}`);
-      }
-      setFournisseurs(cols.length ? cols : [{ id: crypto.randomUUID(), name: "Fournisseur A" }]);
-      setDesignations(des);
-      setSavedCellKeys(cellKeys);
-      setServerDesignationCount(des.length);
-      setPrices(priceMap);
+      await saveGridToServer();
       toast({ title: "Grille enregistrée", description: "Prix d'aliment mis à jour." });
     } catch {
       /* API error — logged in backend only */
@@ -453,10 +511,14 @@ export default function Fournisseurs() {
                                   type="button"
                                   onClick={() => removeFournisseur(f.id)}
                                   className="text-primary-foreground/60 hover:text-primary-foreground disabled:opacity-50"
-                                  disabled={isReadOnly || fournisseurs.length <= 1 || (f.serverId != null && !canDelete)}
+                                  disabled={isReadOnly || fournisseurs.length <= 1 || (f.serverId != null && !canDelete) || deletingFournisseurId === f.id}
                                   title={f.serverId != null && !canDelete ? "Suppression non autorisée" : undefined}
                                 >
-                                  <Trash2 className="w-3 h-3" />
+                                  {deletingFournisseurId === f.id ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-3 h-3" />
+                                  )}
                                 </button>
                               </div>
                             </th>
