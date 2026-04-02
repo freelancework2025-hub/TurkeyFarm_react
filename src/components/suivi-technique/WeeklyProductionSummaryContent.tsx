@@ -281,7 +281,7 @@ export default function WeeklyProductionSummaryContent({
   /**
    * Même logique que WeeklyTrackingTable par bâtiment×sexe, puis somme sur les périmètres actifs
    * (effectif mis en place > 0 pour la semaine), comme sur Suivi technique hebdomadaire.
-   * S1 : somme des mortalités NBRE du premier jour (données fusionnées hebdo + journalier).
+   * S1 : somme des mortalités NBRE du premier jour (données fusionnées hebdo + journalier) — comme WeeklyTrackingTable.
    * S2+ : somme des cumuls fin semaine précédente (API transport-cumul), identique à mortaliteTransportCumul affiché par bâtiment.
    */
   const totalMortaliteTransportAllBatiments = useMemo(() => {
@@ -379,8 +379,9 @@ export default function WeeklyProductionSummaryContent({
     const effectifDepartSemaine = totalEffectifDepart;
     /** % cumul : cumul mortalité ÷ effectif mis en place total (somme des setups Mâle+Femelle × bâtiments pour la semaine). */
     const effectifMisEnPlaceSemaine = aggregatedSetup.effectifMisEnPlace;
-    /** Cumul journalier inclut la somme des cumuls départ (fin semaine précédente) sur tous les bâtiments × sexes. */
-    let runningCumul = totalMortaliteTransportAllBatiments;
+    /** Cumul journalier: same logic as WeeklyTrackingTable - S1 starts from 0, S2+ starts from transport value */
+    const isS1 = isSemaineS1(semaineCanon);
+    let runningCumul = isS1 ? 0 : totalMortaliteTransportAllBatiments;
 
     return sortedDates.map((recordDate) => {
       const row = byDate.get(recordDate)!;
@@ -416,13 +417,14 @@ export default function WeeklyProductionSummaryContent({
     return { totalMortality, totalWater };
   }, [aggregatedRows]);
 
-  /** Cumul mortalité en fin de semaine affichée (transport départ + somme journalière) — pour ligne TOTAL et exports. */
+  /** Cumul mortalité en fin de semaine affichée (S1: just the sum; S2+: transport + sum of daily) */
   const totalMortaliteCumulFinSemaine = useMemo(() => {
+    const isS1 = isSemaineS1(semaineCanon);
     if (aggregatedRows.length > 0) {
       return aggregatedRows[aggregatedRows.length - 1].mortaliteCumul;
     }
-    return totalMortaliteTransportAllBatiments;
-  }, [aggregatedRows, totalMortaliteTransportAllBatiments]);
+    return isS1 ? 0 : totalMortaliteTransportAllBatiments;
+  }, [aggregatedRows, totalMortaliteTransportAllBatiments, semaineCanon]);
 
   const totalMortaliteCumulFinSemainePct = useMemo(() => {
     const em = aggregatedSetup.effectifMisEnPlace;

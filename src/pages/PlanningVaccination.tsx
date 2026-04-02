@@ -81,6 +81,7 @@ const DEFAULT_MOTIFS = [
   "Programme préventif",
   "Prévention",
   "Atteinte Hépatique",
+  "PCR MYCOPLASME",
 ];
 
 const DEFAULT_VACCINS = [
@@ -96,6 +97,7 @@ const DEFAULT_VACCINS = [
   "AD3E",
   "Nobilis influenza N2H9+ND",
   "Clone 30",
+  "ND Clone 30",
   "OTC",
   "Hépatoprotecteur",
   "Doxycycline",
