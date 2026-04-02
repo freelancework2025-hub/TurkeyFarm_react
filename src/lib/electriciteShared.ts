@@ -13,10 +13,10 @@ export const ELECTRICITE_TABLE_HEADERS = [
   "SEM",
   "DÉSIGNATION",
   "FOURNISSEUR",
+  "N° BR",
   "QTE",
   "PRIX",
   "MONTANT",
-  "N° BR",
 ] as const;
 
 export type ElectriciteMontantRow = Pick<

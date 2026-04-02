@@ -14,30 +14,26 @@ export const PRODUITS_HYGIENE_TABLE_HEADERS = [
   "DÉSIGNATION",
   "FOURNISSEUR",
   "N° BL",
+  "N° BR",
   "QTE",
   "PRIX",
   "MONTANT",
-  "N° BR",
-  "MALE",
-  "FEMELLE",
 ] as const;
 
 export type ProduitsHygieneHeaderKey = (typeof PRODUITS_HYGIENE_TABLE_HEADERS)[number];
 
 /** Tailwind classes — matches ProduitsHygiene.tsx thead. */
 export const PRODUITS_HYGIENE_HEADER_CLASS: Record<ProduitsHygieneHeaderKey, string> = {
-  AGE: "min-w-[70px]",
-  DATE: "min-w-[100px]",
-  SEM: "min-w-[60px]",
-  DÉSIGNATION: "min-w-[180px]",
-  FOURNISSEUR: "min-w-[120px]",
-  "N° BL": "min-w-[90px]",
-  QTE: "min-w-[128px] w-[8.5rem] !text-center",
-  PRIX: "min-w-[80px] !text-center",
-  MONTANT: "min-w-[90px] !text-center",
-  "N° BR": "min-w-[90px]",
-  MALE: "min-w-[70px] !text-center",
-  FEMELLE: "min-w-[80px] !text-center",
+  AGE: "min-w-[60px]",
+  DATE: "min-w-[90px]",
+  SEM: "min-w-[40px]",
+  DÉSIGNATION: "min-w-[140px]",
+  FOURNISSEUR: "min-w-[90px]",
+  "N° BL": "min-w-[80px]",
+  "N° BR": "min-w-[65px] w-[5rem]",
+  QTE: "min-w-[160px] w-[10rem] !text-center",
+  PRIX: "min-w-[100px] !text-center",
+  MONTANT: "min-w-[110px] !text-center",
 };
 
 /** Optional title on main table only (VS table leaves AGE/SEM without tooltips). */

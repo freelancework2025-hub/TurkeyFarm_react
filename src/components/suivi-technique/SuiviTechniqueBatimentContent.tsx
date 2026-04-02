@@ -126,6 +126,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Mâle"
             batiment={batiment}
             refreshKey={stockRefreshKey}
+            onSaveSuccess={onRefreshStock}
           />
           <StockTrackingTable
             farmId={farmId}
@@ -188,6 +189,7 @@ export default function SuiviTechniqueBatimentContent({
             sex="Femelle"
             batiment={batiment}
             refreshKey={stockRefreshKey}
+            onSaveSuccess={onRefreshStock}
           />
           <StockTrackingTable
             farmId={farmId}

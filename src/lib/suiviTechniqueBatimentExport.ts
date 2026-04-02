@@ -54,18 +54,72 @@ function isSemaineS1(semaine: string): boolean {
 }
 
 function mortaliteTransportPctStr(
-  semaine: string,
   cumul: number,
   effectifDepart: number | null | undefined
 ): string {
-  if (isSemaineS1(semaine)) return formatPctExport(0);
+  if (cumul == null || Number.isNaN(cumul)) return "—";
   const ef = effectifDepart != null ? Number(effectifDepart) : NaN;
   if (!Number.isFinite(ef) || ef <= 0) return "—";
   return formatPctExport((cumul / ef) * 100);
 }
 
+/**
+ * Calculate mortalité de transport starting point:
+ * - S1: First day's mortalité NBRE (starting point for cumul)
+ * - S2+: Previous week's ending cumul (starting point for cumul)
+ *
+ * IMPORTANT: This function must produce identical results for all batiments.
+ * The only difference between batiments is the data fetched from the API,
+ * not the calculation logic.
+ */
+function getMortaliteTransportStartingPoint(semaine: string, hebdoList: any[], prevWeekCumul: number): number {
+  const n = parseSemaineIndex(semaine);
+  if (n == null || n <= 1) {
+    // S1: Get FIRST row WITH a valid mortalité NBRE value
+    const sorted = (hebdoList ?? [])
+      .filter((r) => r.recordDate && r.recordDate.trim() !== "")
+      .sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
+    
+    // Find first row with a valid mortaliteNbre
+    for (const row of sorted) {
+      if (row.mortaliteNbre != null) {
+        let firstRowNbre: number | null = null;
+        if (typeof row.mortaliteNbre === "number") {
+          firstRowNbre = row.mortaliteNbre;
+        } else if (typeof row.mortaliteNbre === "string") {
+          const parsed = parseInt(row.mortaliteNbre, 10);
+          firstRowNbre = Number.isFinite(parsed) ? parsed : null;
+        }
+        if (firstRowNbre != null && firstRowNbre >= 0) {
+          return firstRowNbre;
+        }
+      }
+    }
+    return 0;
+  } else {
+    // S2+: Use previous week's ending cumul
+    // Ensure prevWeekCumul is a valid number
+    if (typeof prevWeekCumul === "number" && Number.isFinite(prevWeekCumul)) {
+      return prevWeekCumul;
+    }
+    return 0;
+  }
+}
+
+function parseSemaineIndex(semaine: string): number | null {
+  const m = semaine.trim().match(/^S(\d+)$/i);
+  if (!m) return null;
+  return parseInt(m[1], 10);
+}
+
 export async function exportToExcel(params: SuiviTechniqueBatimentExportParams): Promise<void> {
   const { farmName, farmId, lot, semaine, batiment, sex } = params;
+  
+  // Validate required parameters - all batiments must have these
+  if (!farmId || !lot?.trim() || !semaine?.trim() || !batiment?.trim() || !sex?.trim()) {
+    console.error("Export parameters missing or invalid", { farmId, lot, semaine, batiment, sex });
+    throw new Error("Invalid export parameters: all fields required");
+  }
 
   const [setup, hebdoList, transportCumulExport, production, consumption, performance, stock] = await Promise.all([
     api.suiviTechniqueSetup.getBySex({ farmId, lot, semaine, sex, batiment }),
@@ -175,7 +229,10 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   addTitle(`3. Suivi hebdomadaire — ${sex} — ${semaine}`);
   const hebdoHeaders = [...SUIVI_HEBDO_EXPORT_HEADERS];
   addTableHeader(hebdoHeaders);
-  const transportPctExport = mortaliteTransportPctStr(semaine, transportCumulExport, effectifDepart);
+  
+  const sortedHebdo = (hebdoList ?? []).filter((r) => r.recordDate && r.mortaliteNbre != null).sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
+  const mortaliteTransportStartingPoint = getMortaliteTransportStartingPoint(semaine, sortedHebdo, transportCumulExport);
+  const transportPctExport = mortaliteTransportPctStr(mortaliteTransportStartingPoint, effectifDepart);
   const TRANSPORT_CUMUL_BG = "FFFEF9C4";
   ws.mergeCells(row, 1, row, 4);
   ws.getCell(row, 1).value = "MORTALITE DU TRANSPORT";
@@ -185,7 +242,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
     ws.getCell(row, c).border = BORDERS_ALL;
   }
   ws.getCell(row, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
-  ws.getCell(row, 5).value = formatGroupedNumber(transportCumulExport, 0);
+  ws.getCell(row, 5).value = formatGroupedNumber(mortaliteTransportStartingPoint, 0);
   ws.getCell(row, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TRANSPORT_CUMUL_BG } };
   ws.getCell(row, 5).alignment = { horizontal: "center", vertical: "middle" };
   ws.getCell(row, 6).value = transportPctExport;
@@ -194,8 +251,6 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
     ws.getCell(row, c).value = "";
   }
   row++;
-
-  const sortedHebdo = (hebdoList ?? []).filter((r) => r.recordDate).sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
   for (let i = 0; i < sortedHebdo.length; i++) {
     const r = sortedHebdo[i]!;
     const mortalitePct = r.mortalitePct != null ? formatPctExport(r.mortalitePct) : "—";
@@ -221,13 +276,69 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   if (sortedHebdo.length === 0) {
     addDataRow(["Aucune donnée", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]);
   }
-  const totalMort = sortedHebdo.reduce((s, r) => s + (r.mortaliteNbre ?? 0), 0);
-  const totalEau = sortedHebdo.reduce((s, r) => s + (r.consoEauL ?? 0), 0);
+  
+  // Calculate total mortality: robust handling for string or number types
+  const totalMort = sortedHebdo.reduce((s, r) => {
+    let val = 0;
+    if (r.mortaliteNbre != null) {
+      if (typeof r.mortaliteNbre === "number") {
+        val = r.mortaliteNbre;
+      } else if (typeof r.mortaliteNbre === "string") {
+        const parsed = parseInt(r.mortaliteNbre, 10);
+        val = Number.isFinite(parsed) ? parsed : 0;
+      }
+    }
+    return s + val;
+  }, 0);
+  
+  // Calculate total water consumption: robust handling for string or number types
+  const totalEau = sortedHebdo.reduce((s, r) => {
+    let val = 0;
+    if (r.consoEauL != null) {
+      if (typeof r.consoEauL === "number") {
+        val = r.consoEauL;
+      } else if (typeof r.consoEauL === "string") {
+        const parsed = parseFloat(r.consoEauL);
+        val = Number.isFinite(parsed) ? parsed : 0;
+      }
+    }
+    return s + val;
+  }, 0);
+  
+  // Get the final cumulative value from the last row
+  let finalCumul = 0;
+  if (sortedHebdo.length > 0) {
+    const lastRow = sortedHebdo[sortedHebdo.length - 1];
+    // Try to use last row's cumulative value if valid
+    if (lastRow?.mortaliteCumul != null) {
+      if (typeof lastRow.mortaliteCumul === "number") {
+        finalCumul = lastRow.mortaliteCumul;
+      } else if (typeof lastRow.mortaliteCumul === "string") {
+        const parsed = parseInt(lastRow.mortaliteCumul, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          finalCumul = parsed;
+        }
+      }
+    }
+    // If no valid cumulative from last row, calculate from starting point
+    if (finalCumul === 0 && sortedHebdo.length > 0) {
+      const startingPoint = getMortaliteTransportStartingPoint(semaine, sortedHebdo, transportCumulExport);
+      finalCumul = startingPoint + totalMort;
+    }
+  }
+  
+  // Calculate percentages for total row
+  const totalMortPct = effectifDepart != null && effectifDepart > 0 ? (totalMort / effectifDepart) * 100 : null;
+  const finalCumulPct = effectifDepart != null && effectifDepart > 0 ? (finalCumul / effectifDepart) * 100 : null;
+  
   if (sortedHebdo.length > 0) {
     ws.getCell(row, 1).value = `TOTAL ${semaine}`;
     ws.getCell(row, 1).font = { bold: true };
     ws.getCell(row, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
     ws.getCell(row, 3).value = formatGroupedNumber(totalMort, 0);
+    ws.getCell(row, 4).value = totalMortPct != null ? formatPctExport(totalMortPct) : "—";
+    ws.getCell(row, 5).value = formatGroupedNumber(finalCumul, 0);
+    ws.getCell(row, 6).value = finalCumulPct != null ? formatPctExport(finalCumulPct) : "—";
     ws.getCell(row, 7).value = formatGroupedNumber(totalEau, 2);
     for (let c = 1; c <= hebdoHeaders.length; c++) {
       ws.getCell(row, c).border = BORDERS_ALL;
@@ -322,6 +433,12 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
 
 export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): Promise<void> {
   const { farmName, farmId, lot, semaine, batiment, sex } = params;
+  
+  // Validate required parameters - all batiments must have these
+  if (!farmId || !lot?.trim() || !semaine?.trim() || !batiment?.trim() || !sex?.trim()) {
+    console.error("Export parameters missing or invalid", { farmId, lot, semaine, batiment, sex });
+    throw new Error("Invalid export parameters: all fields required");
+  }
 
   const [setup, hebdoList, transportCumulPdf, production, consumption, performance, stock] = await Promise.all([
     api.suiviTechniqueSetup.getBySex({ farmId, lot, semaine, sex, batiment }).catch(() => null),
@@ -395,18 +512,19 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   );
   y += 8;
 
-  const sortedHebdo = (hebdoList ?? []).filter((r) => r.recordDate).sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
+  const sortedHebdo = (hebdoList ?? []).filter((r) => r.recordDate && r.mortaliteNbre != null).sort((a, b) => (a.recordDate ?? "").localeCompare(b.recordDate ?? ""));
   doc.setFont("helvetica", "bold");
   doc.text(`3. Suivi hebdomadaire — ${sex} — ${semaine}`, margin, y);
   y += 6;
   const hebdoHeaders = [...SUIVI_HEBDO_EXPORT_HEADERS];
-  const transportPctPdf = mortaliteTransportPctStr(semaine, transportCumulPdf, effectifDepart);
+  const mortaliteTransportStartingPointPdf = getMortaliteTransportStartingPoint(semaine, sortedHebdo, transportCumulPdf);
+  const transportPctPdf = mortaliteTransportPctStr(mortaliteTransportStartingPointPdf, effectifDepart);
   const transportRowPdf: string[] = [
     "MORTALITE DU TRANSPORT",
     "",
     "",
     "",
-    formatGroupedNumber(transportCumulPdf, 0),
+    formatGroupedNumber(mortaliteTransportStartingPointPdf, 0),
     transportPctPdf,
     "—",
     "—",
@@ -439,15 +557,65 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   if (sortedHebdo.length === 0) {
     hebdoBody.push(["Aucune donnée", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]);
   } else {
-    const totalMort = sortedHebdo.reduce((s, r) => s + (r.mortaliteNbre ?? 0), 0);
-    const totalEau = sortedHebdo.reduce((s, r) => s + (r.consoEauL ?? 0), 0);
+    // Calculate total mortality: robust handling for string or number types
+    const totalMort = sortedHebdo.reduce((s, r) => {
+      let val = 0;
+      if (r.mortaliteNbre != null) {
+        if (typeof r.mortaliteNbre === "number") {
+          val = r.mortaliteNbre;
+        } else if (typeof r.mortaliteNbre === "string") {
+          const parsed = parseInt(r.mortaliteNbre, 10);
+          val = Number.isFinite(parsed) ? parsed : 0;
+        }
+      }
+      return s + val;
+    }, 0);
+    
+    // Calculate total water consumption: robust handling for string or number types
+    const totalEau = sortedHebdo.reduce((s, r) => {
+      let val = 0;
+      if (r.consoEauL != null) {
+        if (typeof r.consoEauL === "number") {
+          val = r.consoEauL;
+        } else if (typeof r.consoEauL === "string") {
+          const parsed = parseFloat(r.consoEauL);
+          val = Number.isFinite(parsed) ? parsed : 0;
+        }
+      }
+      return s + val;
+    }, 0);
+    
+    // Get the final cumulative value from the last row
+    let finalCumul = 0;
+    const lastRow = sortedHebdo[sortedHebdo.length - 1];
+    // Try to use last row's cumulative value if valid
+    if (lastRow?.mortaliteCumul != null) {
+      if (typeof lastRow.mortaliteCumul === "number") {
+        finalCumul = lastRow.mortaliteCumul;
+      } else if (typeof lastRow.mortaliteCumul === "string") {
+        const parsed = parseInt(lastRow.mortaliteCumul, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          finalCumul = parsed;
+        }
+      }
+    }
+    // If no valid cumulative from last row, calculate from starting point
+    if (finalCumul === 0 && sortedHebdo.length > 0) {
+      const startingPoint = getMortaliteTransportStartingPoint(semaine, sortedHebdo, transportCumulPdf);
+      finalCumul = startingPoint + totalMort;
+    }
+    
+    // Calculate percentages for total row
+    const totalMortPct = effectifDepart != null && effectifDepart > 0 ? (totalMort / effectifDepart) * 100 : null;
+    const finalCumulPct = effectifDepart != null && effectifDepart > 0 ? (finalCumul / effectifDepart) * 100 : null;
+    
     hebdoBody.push([
       `TOTAL ${semaine}`,
       "—",
       formatGroupedNumber(totalMort, 0),
-      "—",
-      "—",
-      "—",
+      totalMortPct != null ? formatPctExport(totalMortPct) : "—",
+      formatGroupedNumber(finalCumul, 0),
+      finalCumulPct != null ? formatPctExport(finalCumulPct) : "—",
       formatGroupedNumber(totalEau, 2),
       "—",
       "—",

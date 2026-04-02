@@ -14,7 +14,7 @@ import ResumePerformanceTrackingTable from "@/components/suivi-technique/ResumeP
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { mergeHebdoRowsWithDailyReports } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
 import { canonicalSemaine } from "@/lib/semaineCanonical";
-import { fetchMortaliteCumulFinSemainePrecedente } from "@/lib/mortalitePrevWeekCumul";
+import { fetchMortaliteCumulFinSemainePrecedente, parseSemaineIndex } from "@/lib/mortalitePrevWeekCumul";
 import type { ResumeProductionHebdoExportParams } from "@/lib/resumeProductionHebdoExport";
 import {
   RESUME_PRODUCTION_WEEKLY_UI_DATE,
@@ -632,7 +632,9 @@ export default function WeeklyProductionSummaryContent({
       Number.isFinite(aggregatedConsommation.cumulAlimentConsommeSum)
         ? aggregatedConsommation.cumulAlimentConsommeSum / aggregatedStock.poidsVifProduitKg
         : null;
-    const gmqGParJour = poidsMoyenG != null && Number.isFinite(poidsMoyenG) ? poidsMoyenG / 7 : null;
+    const semaineIndex = parseSemaineIndex(semaineCanon);
+    const joursCumul = semaineIndex != null ? semaineIndex * 7 : 7;
+    const gmqGParJour = poidsMoyenG != null && Number.isFinite(poidsMoyenG) && joursCumul > 0 ? poidsMoyenG / joursCumul : null;
     const viabilite =
       lastMortaliteCumulPct != null && Number.isFinite(lastMortaliteCumulPct)
         ? 100 - lastMortaliteCumulPct
@@ -659,6 +661,7 @@ export default function WeeklyProductionSummaryContent({
     aggregatedConsommation,
     indiceEauAlimentResume,
     lastMortaliteCumulPct,
+    semaineCanon,
   ]);
 
   const exportParams = useMemo(

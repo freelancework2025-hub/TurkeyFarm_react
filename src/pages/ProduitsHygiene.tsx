@@ -65,8 +65,6 @@ interface HygieneRow {
   prixPerUnit: string;
   montant: string;
   numeroBR: string;
-  male: string;
-  femelle: string;
 }
 
 function toNum(s: string): number {
@@ -86,11 +84,6 @@ function formatQtyDisplay(s: string): string {
 function formatMoneyDisplay(s: string): string {
   const n = toOptionalNumber(s);
   return n != null ? formatGroupedNumber(n, 2) : "—";
-}
-
-function formatCountDisplay(s: string): string {
-  const n = toOptionalNumber(s);
-  return n != null ? formatGroupedNumber(n, 0) : "—";
 }
 
 /** MONTANT column: stored value or qte × prix when empty — same rule as export / totals. */
@@ -137,8 +130,6 @@ function isFilledHygieneLivraison(req: LivraisonProduitHygieneRequest, isVs: boo
     qteOk ||
     !!(req.deliveryNoteNumber?.trim()) ||
     !!(req.numeroBR?.trim()) ||
-    (req.male != null && req.male !== 0) ||
-    (req.femelle != null && req.femelle !== 0) ||
     montantOk;
   if (isVs) return meaningful;
   return meaningful || !!(req.sem?.trim()) || !!(req.age?.trim());
@@ -283,8 +274,6 @@ export default function ProduitsHygiene() {
     prixPerUnit: "",
     montant: "",
     numeroBR: "",
-    male: "",
-    femelle: "",
   });
 
   /** Start date for a semaine: S2 = last day of S1 + 1; first semaine of lot = previous lot last day + 1 (or today). */
@@ -338,8 +327,6 @@ export default function ProduitsHygiene() {
           prixPerUnit: fromNum(r.prixPerUnit),
           montant: fromNum(r.montant),
           numeroBR: r.numeroBR ?? "",
-          male: fromNum(r.male),
-          femelle: fromNum(r.femelle),
         };
       });
       const hasVsLivraison = mapped.some((row) => getSemFromRow(row) === VS_AGE);
@@ -365,8 +352,6 @@ export default function ProduitsHygiene() {
             prixPerUnit: fromNum(vsRes.prixPerUnit),
             montant: fromNum(vsRes.montant),
             numeroBR: vsRes.numeroBR ?? "",
-            male: "",
-            femelle: "",
           });
         }
       }
@@ -593,10 +578,8 @@ export default function ProduitsHygiene() {
       qte: acc.qte + (resolvedQteFromString(r.qte) ?? 0),
       prix: acc.prix + toNum(r.prixPerUnit),
       montant: acc.montant + produitsHygieneEffectiveMontantForTotal(r),
-      male: acc.male + toNum(r.male),
-      femelle: acc.femelle + toNum(r.femelle),
     }),
-    { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 }
+    { qte: 0, prix: 0, montant: 0 }
   );
 
   const currentRows = selectedSemaine
@@ -611,13 +594,11 @@ export default function ProduitsHygiene() {
     : [];
 
   const weekTotal = (() => {
-    const t = { qte: 0, prix: 0, montant: 0, male: 0, femelle: 0 };
+    const t = { qte: 0, prix: 0, montant: 0 };
     for (const r of currentRows) {
       t.qte += resolvedQteFromString(r.qte) ?? 0;
       t.prix += toNum(r.prixPerUnit);
       t.montant += produitsHygieneEffectiveMontantForTotal(r);
-      t.male += toNum(r.male);
-      t.femelle += toNum(r.femelle);
     }
     return t;
   })();
@@ -633,8 +614,6 @@ export default function ProduitsHygiene() {
         running.qte += resolvedQteFromString(r.qte) ?? 0;
         running.prix += toNum(r.prixPerUnit);
         running.montant += produitsHygieneEffectiveMontantForTotal(r);
-        running.male += toNum(r.male);
-        running.femelle += toNum(r.femelle);
       }
     }
     return running;
@@ -650,8 +629,6 @@ export default function ProduitsHygiene() {
         : qteParsed != null && prix >= 0
           ? qteParsed * prix
           : null;
-    const male = r.male.trim() !== "" ? toNum(r.male) : null;
-    const femelle = r.femelle.trim() !== "" ? toNum(r.femelle) : null;
     const sem = isVs ? VS_AGE : getSemFromRow(r) || selectedSemaine || null;
     const age = isVs
       ? null
@@ -673,8 +650,6 @@ export default function ProduitsHygiene() {
       prixPerUnit: prix > 0 ? prix : null,
       montant: montant != null && Number.isFinite(montant) ? montant : null,
       numeroBR: r.numeroBR.trim() || null,
-      male: Number.isFinite(male) && Math.round(male) !== 0 ? Math.round(male) : null,
-      femelle: Number.isFinite(femelle) && Math.round(femelle) !== 0 ? Math.round(femelle) : null,
     };
   };
 
@@ -720,7 +695,7 @@ export default function ProduitsHygiene() {
       toast({
         title: "Ligne incomplète",
         description:
-          "Remplissez au moins un champ (désignation, fournisseur, n° BL, N° BR, quantité, male ou femelle).",
+          "Remplissez au moins un champ (désignation, fournisseur, n° BL, N° BR, quantité, prix ou montant).",
         variant: "destructive",
       });
       return;
@@ -787,9 +762,9 @@ export default function ProduitsHygiene() {
         farmName: exportFarmName,
         lot: lotFilter.trim(),
         semaine: selectedSemaine,
-        rows: currentRows,
-        weekTotal,
-        cumul: cumulForSelectedSemaine,
+        rows: currentRows.map((r) => ({ ...r, male: "", femelle: "" })),
+        weekTotal: { ...weekTotal, male: 0, femelle: 0 },
+        cumul: { ...cumulForSelectedSemaine, male: 0, femelle: 0 },
         ageByRowId: displayAgeByRowId,
         videSanitaireRows: videSanitaireRows.map((r) => ({
           date: r.date,
@@ -800,6 +775,7 @@ export default function ProduitsHygiene() {
           prixPerUnit: r.prixPerUnit,
           montant: r.montant,
         })),
+        videSanitaireTotal: videSanitaireTotals,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
     } catch {
@@ -809,25 +785,30 @@ export default function ProduitsHygiene() {
 
   const handleExportPdf = () => {
     if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
-    exportToPdf({
-      farmName: exportFarmName,
-      lot: lotFilter.trim(),
-      semaine: selectedSemaine,
-      rows: currentRows,
-      weekTotal,
-      cumul: cumulForSelectedSemaine,
-      ageByRowId: displayAgeByRowId,
-      videSanitaireRows: videSanitaireRows.map((r) => ({
-        date: r.date,
-        supplier: r.supplier,
-        deliveryNoteNumber: r.deliveryNoteNumber,
-        numeroBR: r.numeroBR,
-        qte: r.qte,
-        prixPerUnit: r.prixPerUnit,
-        montant: r.montant,
-      })),
-    });
-    toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+    try {
+      exportToPdf({
+        farmName: exportFarmName,
+        lot: lotFilter.trim(),
+        semaine: selectedSemaine,
+        rows: currentRows.map((r) => ({ ...r, male: "", femelle: "" })),
+        weekTotal: { ...weekTotal, male: 0, femelle: 0 },
+        cumul: { ...cumulForSelectedSemaine, male: 0, femelle: 0 },
+        ageByRowId: displayAgeByRowId,
+        videSanitaireRows: videSanitaireRows.map((r) => ({
+          date: r.date,
+          supplier: r.supplier,
+          deliveryNoteNumber: r.deliveryNoteNumber,
+          numeroBR: r.numeroBR,
+          qte: r.qte,
+          prixPerUnit: r.prixPerUnit,
+          montant: r.montant,
+        })),
+        videSanitaireTotal: videSanitaireTotals,
+      });
+      toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
+    } catch {
+      toast({ title: "Erreur", description: "Impossible de générer le fichier PDF.", variant: "destructive" });
+    }
   };
 
   return (
@@ -1153,7 +1134,17 @@ export default function ProduitsHygiene() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td className="min-w-[128px] text-center">
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.numeroBR}
+                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td className="min-w-[160px] text-center">
                                 {rowReadOnly ? (
                                   <span className="block text-center tabular-nums px-1 py-0.5">
                                     {formatQtyDisplay(row.qte)}
@@ -1211,50 +1202,6 @@ export default function ProduitsHygiene() {
                               <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
                                 {formatMontantCell(row)}
                               </td>
-                              <td>
-                                <input
-                                  type="text"
-                                  value={row.numeroBR}
-                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
-                                  placeholder="—"
-                                  disabled={rowReadOnly}
-                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                />
-                              </td>
-                              <td className="text-center">
-                                {rowReadOnly ? (
-                                  <span className="block text-center tabular-nums px-1 py-0.5">
-                                    {formatCountDisplay(row.male)}
-                                  </span>
-                                ) : (
-                                  <input
-                                    type="number"
-                                    value={row.male}
-                                    onChange={(e) => updateRow(row.id, "male", e.target.value)}
-                                    placeholder="0"
-                                    min={0}
-                                    disabled={rowReadOnly}
-                                    className="w-full min-w-[4rem] tabular-nums text-center"
-                                  />
-                                )}
-                              </td>
-                              <td className="text-center">
-                                {rowReadOnly ? (
-                                  <span className="block text-center tabular-nums px-1 py-0.5">
-                                    {formatCountDisplay(row.femelle)}
-                                  </span>
-                                ) : (
-                                  <input
-                                    type="number"
-                                    value={row.femelle}
-                                    onChange={(e) => updateRow(row.id, "femelle", e.target.value)}
-                                    placeholder="0"
-                                    min={0}
-                                    disabled={rowReadOnly}
-                                    className="w-full min-w-[4rem] tabular-nums text-center"
-                                  />
-                                )}
-                              </td>
                               <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                                 {canSaveRow && (
                                   <button
@@ -1284,7 +1231,7 @@ export default function ProduitsHygiene() {
                                       <Eraser className="w-4 h-4" />
                                     </button>
                                   )}
-                                  {showDelete && (
+                                  {(row.serverId == null || hasFullAccess) && (
                                     <button
                                       type="button"
                                       onClick={() => removeRowVideSanitaire(row.id)}
@@ -1301,10 +1248,9 @@ export default function ProduitsHygiene() {
                         })}
                         {videSanitaireRows.length > 0 && (
                           <tr className="bg-muted/60">
-                            <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                            <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                               TOTAL vide sanitaire
                             </td>
-                            <td className="text-center" />
                             <td className="text-center tabular-nums whitespace-nowrap">
                               {formatGroupedNumber(videSanitaireTotals.qte, 2)}
                             </td>
@@ -1313,13 +1259,6 @@ export default function ProduitsHygiene() {
                             </td>
                             <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                               {formatGroupedNumber(videSanitaireTotals.montant, 2)}
-                            </td>
-                            <td className="text-center" />
-                            <td className="text-center tabular-nums whitespace-nowrap">
-                              {formatGroupedNumber(videSanitaireTotals.male, 0)}
-                            </td>
-                            <td className="text-center tabular-nums whitespace-nowrap">
-                              {formatGroupedNumber(videSanitaireTotals.femelle, 0)}
                             </td>
                             <td className="w-9 max-w-9 !px-1" />
                             <td />
@@ -1440,7 +1379,17 @@ export default function ProduitsHygiene() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td className="min-w-[128px] text-center">
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.numeroBR}
+                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td className="min-w-[160px] text-center">
                                 {rowReadOnly ? (
                                   <span className="block text-center tabular-nums px-1 py-0.5">
                                     {formatQtyDisplay(row.qte)}
@@ -1498,50 +1447,6 @@ export default function ProduitsHygiene() {
                               <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
                                 {formatMontantCell(row)}
                               </td>
-                              <td>
-                                <input
-                                  type="text"
-                                  value={row.numeroBR}
-                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
-                                  placeholder="—"
-                                  disabled={rowReadOnly}
-                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                />
-                              </td>
-                              <td className="text-center">
-                                {rowReadOnly ? (
-                                  <span className="block text-center tabular-nums px-1 py-0.5">
-                                    {formatCountDisplay(row.male)}
-                                  </span>
-                                ) : (
-                                  <input
-                                    type="number"
-                                    value={row.male}
-                                    onChange={(e) => updateRow(row.id, "male", e.target.value)}
-                                    placeholder="0"
-                                    min={0}
-                                    disabled={rowReadOnly}
-                                    className="w-full min-w-[4rem] tabular-nums text-center"
-                                  />
-                                )}
-                              </td>
-                              <td className="text-center">
-                                {rowReadOnly ? (
-                                  <span className="block text-center tabular-nums px-1 py-0.5">
-                                    {formatCountDisplay(row.femelle)}
-                                  </span>
-                                ) : (
-                                  <input
-                                    type="number"
-                                    value={row.femelle}
-                                    onChange={(e) => updateRow(row.id, "femelle", e.target.value)}
-                                    placeholder="0"
-                                    min={0}
-                                    disabled={rowReadOnly}
-                                    className="w-full min-w-[4rem] tabular-nums text-center"
-                                  />
-                                )}
-                              </td>
                               <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                                 {canSaveRow && (
                                   <button
@@ -1571,7 +1476,7 @@ export default function ProduitsHygiene() {
                                       <Eraser className="w-4 h-4" />
                                     </button>
                                   )}
-                                  {showDelete && index >= MIN_TABLE_ROWS && (
+                                  {(row.serverId == null || hasFullAccess) && index >= MIN_TABLE_ROWS && (
                                     <button
                                       type="button"
                                       onClick={() => removeRow(row.id)}
@@ -1587,10 +1492,9 @@ export default function ProduitsHygiene() {
                           );
                         })}
                         <tr className="bg-muted/60">
-                          <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                          <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                             TOTAL {selectedSemaine}
                           </td>
-                          <td className="text-center" />
                           <td className="text-center tabular-nums whitespace-nowrap">
                             {formatGroupedNumber(weekTotal.qte, 2)}
                           </td>
@@ -1600,21 +1504,13 @@ export default function ProduitsHygiene() {
                           <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(weekTotal.montant, 2)}
                           </td>
-                          <td className="text-center" />
-                          <td className="text-center tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(weekTotal.male, 0)}
-                          </td>
-                          <td className="text-center tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(weekTotal.femelle, 0)}
-                          </td>
                           <td className="w-9 max-w-9 !px-1" />
                           <td />
                         </tr>
                         <tr className="bg-muted/50">
-                          <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                          <td colSpan={7} className="text-sm font-medium text-muted-foreground">
                             CUMUL (vide sanitaire + semaines)
                           </td>
-                          <td className="text-center" />
                           <td className="text-center tabular-nums whitespace-nowrap">
                             {formatGroupedNumber(cumulForSelectedSemaine.qte, 2)}
                           </td>
@@ -1623,13 +1519,6 @@ export default function ProduitsHygiene() {
                           </td>
                           <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
-                          </td>
-                          <td className="text-center" />
-                          <td className="text-center tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(cumulForSelectedSemaine.male, 0)}
-                          </td>
-                          <td className="text-center tabular-nums whitespace-nowrap">
-                            {formatGroupedNumber(cumulForSelectedSemaine.femelle, 0)}
                           </td>
                           <td className="w-9 max-w-9 !px-1" />
                           <td />

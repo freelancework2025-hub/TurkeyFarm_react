@@ -809,10 +809,10 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
    * NEW LOGIC - Ligne MORTALITE DU TRANSPORT (now shows the starting point):
    * S1: First day's mortalité NBRE value (starting point for cumul calculation)
    * S2+: Previous week's ending cumul (starting point for cumul calculation)
-   * % cumul = (starting point / effectif départ semaine courante) × 100
+   * % cumul = (starting point / effectif mis en place) × 100
    */
   const mortaliteTransportDisplay = useMemo(() => {
-    const ef = effectifPourCalculMortalite;
+    const ef = effectifInitial;
     const cumul = mortaliteTransportStartingPoint;
 
     if (cumul === null || cumul === undefined) return null;
@@ -828,7 +828,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       cumul,
       cumulPctDisplay: `${formatGroupedNumber(pct, 2).replace(".", ",")} %`,
     };
-  }, [mortaliteTransportStartingPoint, effectifPourCalculMortalite]);
+  }, [mortaliteTransportStartingPoint, effectifInitial]);
 
   if (loading) {
     return (
@@ -1174,17 +1174,17 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                   {formatGroupedNumber(weeklyTotals.totalMortality, 0)}
                 </td>
                 <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
-                  {rows.length && effectifPourCalculMortalite != null
-                    ? `${formatGroupedNumber((weeklyTotals.totalMortality / effectifPourCalculMortalite) * 100, 2)} %`
+                  {rows.length && effectifInitial != null
+                    ? `${formatGroupedNumber((weeklyTotals.totalMortality / effectifInitial) * 100, 2)} %`
                     : "—"}
                 </td>
                 <td className="px-1.5 py-2 text-center border-r border-border tabular-nums whitespace-nowrap">
                   {formatGroupedNumber(totalCumulFooterDisplay, 0)}
                 </td>
                 <td className="px-1.5 py-2 text-center text-muted-foreground border-r border-border tabular-nums whitespace-nowrap">
-                  {effectifPourCalculMortalite != null && effectifPourCalculMortalite > 0
+                  {effectifInitial != null && effectifInitial > 0
                     ? `${formatGroupedNumber(
-                        (totalCumulFooterDisplay / effectifPourCalculMortalite) * 100,
+                        (totalCumulFooterDisplay / effectifInitial) * 100,
                         2
                       )} %`
                     : "—"}

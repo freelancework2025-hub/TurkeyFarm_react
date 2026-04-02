@@ -66,10 +66,10 @@ interface PerformanceTrackingTableProps {
   lot: string;
   semaine: string;
   sex: string;
-  /** Bâtiment (Lot → Semaine → Batiment workflow). */
   batiment?: string;
-  /** When this key changes, performance data is refetched so computed fields (indice consommation, viabilité) update. */
   refreshKey?: number;
+  /** Called after performance is saved (e.g. to refresh stock table). */
+  onSaveSuccess?: () => void;
 }
 
 export default function PerformanceTrackingTable({
@@ -78,7 +78,8 @@ export default function PerformanceTrackingTable({
   semaine,
   sex,
   batiment,
-  refreshKey,
+  refreshKey = 0,
+  onSaveSuccess,
 }: PerformanceTrackingTableProps) {
   const { isReadOnly, canCreate, canUpdate } = useAuth();
   const { toast } = useToast();
@@ -204,6 +205,7 @@ export default function PerformanceTrackingTable({
         toast({ title: "Enregistré", description: "Suivi de performances REEL enregistré." });
       }
       await load();
+      onSaveSuccess?.();
     } catch {
       /* API error — logged in backend only */
     } finally {

@@ -53,10 +53,10 @@ const ELECTRICITE_HEADER_CLASS = {
   SEM: "min-w-[60px]",
   DÉSIGNATION: "min-w-[180px]",
   FOURNISSEUR: "min-w-[120px]",
+  "N° BR": "min-w-[90px]",
   QTE: "min-w-[128px] w-[8.5rem] !text-center",
   PRIX: "min-w-[80px] !text-center",
   MONTANT: "min-w-[90px] !text-center",
-  "N° BR": "min-w-[90px]",
 } as const satisfies Record<(typeof ELECTRICITE_TABLE_HEADERS)[number], string>;
 
 interface ElectriciteRow {
@@ -1020,6 +1020,16 @@ export default function Electricite() {
                                   className="min-w-[100px] bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.numeroBR}
+                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
                               <td className="min-w-[128px] text-center">
                                 {rowReadOnly ? (
                                   <span className="block text-center tabular-nums px-1 py-0.5">
@@ -1078,16 +1088,6 @@ export default function Electricite() {
                               <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
                                 {formatMontantCell(row)}
                               </td>
-                              <td>
-                                <input
-                                  type="text"
-                                  value={row.numeroBR}
-                                  onChange={(e) => updateRow(row.id, "numeroBR", e.target.value)}
-                                  placeholder="—"
-                                  disabled={rowReadOnly}
-                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                />
-                              </td>
                               <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                                 {canSaveRow && (
                                   <button
@@ -1138,6 +1138,7 @@ export default function Electricite() {
                               <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                                 TOTAL {selectedSemaine}
                               </td>
+                              <td className="text-center" />
                               <td className="text-center tabular-nums whitespace-nowrap">
                                 {formatGroupedNumber(weekTotal.qte, 2)}
                               </td>
@@ -1155,6 +1156,7 @@ export default function Electricite() {
                               <td colSpan={5} className="text-sm font-medium text-muted-foreground">
                                 CUMUL
                               </td>
+                              <td className="text-center" />
                               <td className="text-center tabular-nums whitespace-nowrap">
                                 {formatGroupedNumber(cumulForSelectedSemaine.qte, 2)}
                               </td>

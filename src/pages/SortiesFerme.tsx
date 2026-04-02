@@ -696,6 +696,7 @@ export default function SortiesFerme() {
 
   const handleExportExcel = async () => {
     if (!canShowExport || !lotParam.trim() || !selectedSemaine) return;
+    const isVs = selectedSemaine === VS_SEMAINE;
     try {
       await exportToExcel({
         farmName: exportFarmName,
@@ -716,7 +717,7 @@ export default function SortiesFerme() {
           montant_ttc: r.montant_ttc,
         })),
         weekTotal,
-        cumul: cumulForSelectedSemaine,
+        cumul: isVs ? weekTotal : cumulForSelectedSemaine,
       });
       toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
     } catch {
@@ -726,6 +727,7 @@ export default function SortiesFerme() {
 
   const handleExportPdf = () => {
     if (!canShowExport || !lotParam.trim() || !selectedSemaine) return;
+    const isVs = selectedSemaine === VS_SEMAINE;
     exportToPdf({
       farmName: exportFarmName,
       lot: lotParam.trim(),
@@ -745,7 +747,7 @@ export default function SortiesFerme() {
         montant_ttc: r.montant_ttc,
       })),
       weekTotal,
-      cumul: cumulForSelectedSemaine,
+      cumul: isVs ? weekTotal : cumulForSelectedSemaine,
     });
     toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
   };

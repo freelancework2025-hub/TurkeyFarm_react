@@ -683,19 +683,20 @@ export default function DepensesDivers() {
 
   const handleExportExcel = async () => {
     if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
+    const isVs = selectedSemaine === VS_SEMAINE;
     try {
       await exportToExcel({
         farmName: exportFarmName,
         lot: lotFilter.trim(),
         semaine: selectedSemaine,
-        weekTotalQte,
-        weekTotalPrix,
-        weekTotalMontant,
-        cumulQte,
-        cumulPrix,
-        cumulMontant,
+        weekTotalQte: isVs ? 0 : weekTotalQte,
+        weekTotalPrix: isVs ? 0 : weekTotalPrix,
+        weekTotalMontant: isVs ? 0 : weekTotalMontant,
+        cumulQte: isVs ? videSanitaireTotalQte : cumulQte,
+        cumulPrix: isVs ? videSanitaireTotalPrix : cumulPrix,
+        cumulMontant: isVs ? videSanitaireTotalMontant : cumulMontant,
         ageByRowId: displayAgeByRowId,
-        rows: currentRows.map((r) => ({
+        rows: isVs ? [] : currentRows.map((r) => ({
           id: r.id,
           date: r.date,
           age: r.sem,
@@ -730,18 +731,19 @@ export default function DepensesDivers() {
 
   const handleExportPdf = () => {
     if (!canShowExport || !lotFilter.trim() || !selectedSemaine) return;
+    const isVs = selectedSemaine === VS_SEMAINE;
     exportToPdf({
       farmName: exportFarmName,
       lot: lotFilter.trim(),
       semaine: selectedSemaine,
-      weekTotalQte,
-      weekTotalPrix,
-      weekTotalMontant,
-      cumulQte,
-      cumulPrix,
-      cumulMontant,
+      weekTotalQte: isVs ? 0 : weekTotalQte,
+      weekTotalPrix: isVs ? 0 : weekTotalPrix,
+      weekTotalMontant: isVs ? 0 : weekTotalMontant,
+      cumulQte: isVs ? videSanitaireTotalQte : cumulQte,
+      cumulPrix: isVs ? videSanitaireTotalPrix : cumulPrix,
+      cumulMontant: isVs ? videSanitaireTotalMontant : cumulMontant,
       ageByRowId: displayAgeByRowId,
-      rows: currentRows.map((r) => ({
+      rows: isVs ? [] : currentRows.map((r) => ({
         id: r.id,
         date: r.date,
         age: r.sem,

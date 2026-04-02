@@ -1,5 +1,5 @@
 /**
- * Export utilities for Électricité — aligné sur Electricite.tsx (AGE, DATE, SEM, … QTE, PRIX, MONTANT, N° BR).
+ * Export utilities for Électricité — aligné sur Electricite.tsx (AGE, DATE, SEM, DÉSIGNATION, FOURNISSEUR, N° BR, QTE, PRIX, MONTANT).
  */
 
 import type { ITableExportConfig } from "./tableExport";
@@ -63,17 +63,17 @@ function rowToArray(row: ElectriciteRowExport, age: string | number): (string | 
     safeStr(row.sem) || "—",
     safeStr(row.designation) || "—",
     safeStr(row.supplier) || "—",
+    safeStr(row.numeroBR) || "—",
     qte == null ? "—" : qte,
     prix == null ? "—" : prix,
     montant == null ? "—" : montant,
-    safeStr(row.numeroBR) || "—",
   ];
 }
 
 function pdfRowMapper(cells: (string | number)[]): string[] {
   return cells.map((v, i) => {
     if (i === 0) return v === "—" ? "—" : String(v);
-    if (i >= 5 && i <= 7) {
+    if (i >= 6 && i <= 8) {
       if (v === "—") return "—";
       if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
     }
@@ -91,10 +91,11 @@ function toConfig(params: ElectriciteExportParams): ITableExportConfig {
     semaine,
     rows,
     rowToArray,
-    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant, ""],
-    cumulRow: ["CUMUL", "", "", "", "", cumul.qte, cumul.prix, cumul.montant, ""],
+    weekTotalRow: [`TOTAL ${semaine}`, "", "", "", "", "", weekTotal.qte, weekTotal.prix, weekTotal.montant],
+    cumulRow: ["CUMUL", "", "", "", "", "", cumul.qte, cumul.prix, cumul.montant],
     weekTotalPdfRow: [
       `TOTAL ${semaine}`,
+      "",
       "",
       "",
       "",
@@ -102,7 +103,6 @@ function toConfig(params: ElectriciteExportParams): ITableExportConfig {
       formatGroupedNumber(weekTotal.qte, 2),
       formatGroupedNumber(weekTotal.prix, 2),
       formatGroupedNumber(weekTotal.montant, 2),
-      "",
     ],
     cumulPdfRow: [
       "CUMUL",
@@ -110,15 +110,15 @@ function toConfig(params: ElectriciteExportParams): ITableExportConfig {
       "",
       "",
       "",
+      "",
       formatGroupedNumber(cumul.qte, 2),
       formatGroupedNumber(cumul.prix, 2),
       formatGroupedNumber(cumul.montant, 2),
-      "",
     ],
     pdfRowMapper,
     ageByRowId,
     fileNamePrefix: "Livraisons_Electricite",
-    numberFormatColumns: [5, 6, 7],
+    numberFormatColumns: [6, 7, 8],
   };
 }
 

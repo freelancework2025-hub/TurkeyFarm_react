@@ -58,17 +58,17 @@ function rowToArray(row: VetRowExport, age: string | number): (string | number)[
     safeStr(row.designation) || "—",
     safeStr(row.supplier) || "—",
     safeStr(row.ug) || "—",
+    safeStr(row.deliveryNoteNumber) || "—",
     qte == null ? "—" : qte,
     prix == null ? "—" : prix,
     montant == null ? "—" : montant,
-    safeStr(row.deliveryNoteNumber) || "—",
   ];
 }
 
 function pdfRowMapper(cells: (string | number)[]): string[] {
   return cells.map((v, i) => {
     if (i === 0) return v === "—" ? "—" : String(v);
-    if (i >= 6 && i <= 8) {
+    if (i >= 7 && i <= 9) {
       if (v === "—") return "—";
       if (typeof v === "number" && Number.isFinite(v)) return formatGroupedNumber(v, 2);
     }
@@ -93,14 +93,15 @@ function toConfig(params: ProduitsVeterinairesExportParams): ITableExportConfig 
       "",
       "",
       "",
+      "",
       weekTotal.qte,
       weekTotal.prix,
       weekTotal.montant,
-      "",
     ],
-    cumulRow: ["CUMUL", "", "", "", "", "", cumul.qte, cumul.prix, cumul.montant, ""],
+    cumulRow: ["CUMUL", "", "", "", "", "", "", cumul.qte, cumul.prix, cumul.montant],
     weekTotalPdfRow: [
       `TOTAL ${semaine}`,
+      "",
       "",
       "",
       "",
@@ -109,7 +110,6 @@ function toConfig(params: ProduitsVeterinairesExportParams): ITableExportConfig 
       formatGroupedNumber(weekTotal.qte, 2),
       formatGroupedNumber(weekTotal.prix, 2),
       formatGroupedNumber(weekTotal.montant, 2),
-      "",
     ],
     cumulPdfRow: [
       "CUMUL",
@@ -118,15 +118,15 @@ function toConfig(params: ProduitsVeterinairesExportParams): ITableExportConfig 
       "",
       "",
       "",
+      "",
       formatGroupedNumber(cumul.qte, 2),
       formatGroupedNumber(cumul.prix, 2),
       formatGroupedNumber(cumul.montant, 2),
-      "",
     ],
     pdfRowMapper,
     ageByRowId,
     fileNamePrefix: "Livraisons_Produits_Veterinaires",
-    numberFormatColumns: [6, 7, 8],
+    numberFormatColumns: [7, 8, 9],
   };
 }
 

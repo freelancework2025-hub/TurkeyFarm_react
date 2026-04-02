@@ -14,26 +14,26 @@ export const PRODUITS_VETERINAIRES_TABLE_HEADERS = [
   "DÉSIGNATION",
   "FOURNISSEUR",
   "UG",
+  "N° BR",
   "QTE",
   "PRIX",
   "MONTANT",
-  "N° BR",
 ] as const;
 
 export type ProduitsVeterinairesHeaderKey = (typeof PRODUITS_VETERINAIRES_TABLE_HEADERS)[number];
 
 /** Tailwind classes — matches ProduitsVeterinaires.tsx thead. */
 export const PRODUITS_VETERINAIRES_HEADER_CLASS: Record<ProduitsVeterinairesHeaderKey, string> = {
-  AGE: "min-w-[70px]",
-  DATE: "min-w-[100px]",
-  SEM: "min-w-[60px]",
-  DÉSIGNATION: "min-w-[180px]",
-  FOURNISSEUR: "min-w-[120px]",
-  UG: "min-w-[80px]",
-  QTE: "min-w-[128px] w-[8.5rem] !text-center",
-  PRIX: "min-w-[80px] !text-center",
-  MONTANT: "min-w-[90px] !text-center",
-  "N° BR": "min-w-[90px]",
+  AGE: "min-w-[60px]",
+  DATE: "min-w-[90px]",
+  SEM: "min-w-[40px]",
+  DÉSIGNATION: "min-w-[140px]",
+  FOURNISSEUR: "min-w-[90px]",
+  UG: "min-w-[40px] w-[3.5rem]",
+  "N° BR": "min-w-[55px] w-[4.5rem]",
+  QTE: "min-w-[180px] w-[11rem] !text-center",
+  PRIX: "min-w-[110px] !text-center",
+  MONTANT: "min-w-[120px] !text-center",
 };
 
 export const PRODUITS_VETERINAIRES_MAIN_HEADER_TITLE: Partial<Record<ProduitsVeterinairesHeaderKey, string>> = {

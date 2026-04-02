@@ -993,7 +993,17 @@ export default function ProduitsVeterinaires() {
                                   className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
-                              <td className="min-w-[128px] text-center">
+                              <td>
+                                <input
+                                  type="text"
+                                  value={row.deliveryNoteNumber}
+                                  onChange={(e) => updateRow(row.id, "deliveryNoteNumber", e.target.value)}
+                                  placeholder="—"
+                                  disabled={rowReadOnly}
+                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
+                                />
+                              </td>
+                              <td className="min-w-[140px] text-center">
                                 {rowReadOnly ? (
                                   <span className="block text-center tabular-nums px-1 py-0.5">
                                     {formatQtyDisplay(row.qte)}
@@ -1043,22 +1053,12 @@ export default function ProduitsVeterinaires() {
                                     placeholder="—"
                                     step="0.01"
                                     min={0}
-                                    className="w-full min-w-[5.5rem] tabular-nums text-center"
+                                    className="w-full min-w-[5.625rem] tabular-nums text-center"
                                   />
                                 )}
                               </td>
                               <td className="font-semibold text-sm text-center tabular-nums whitespace-nowrap">
                                 {formatMontantCell(row)}
-                              </td>
-                              <td>
-                                <input
-                                  type="text"
-                                  value={row.deliveryNoteNumber}
-                                  onChange={(e) => updateRow(row.id, "deliveryNoteNumber", e.target.value)}
-                                  placeholder="—"
-                                  disabled={rowReadOnly}
-                                  className="w-full min-w-0 bg-transparent border-0 outline-none text-sm"
-                                />
                               </td>
                               <td className="w-9 max-w-9 shrink-0 !px-1 text-center align-middle">
                                 {canSaveRow && (
@@ -1089,7 +1089,7 @@ export default function ProduitsVeterinaires() {
                                       <Eraser className="w-4 h-4" />
                                     </button>
                                   )}
-                                  {((currentRows.length > MIN_TABLE_ROWS && row.serverId == null) || (row.serverId != null && !hasFullAccess)) && (
+                                  {(row.serverId == null || hasFullAccess) && (
                                     <button
                                       type="button"
                                       onClick={() => removeRow(row.id)}
@@ -1106,7 +1106,7 @@ export default function ProduitsVeterinaires() {
                           );
                         })}
                         <tr className="bg-muted/60">
-                          <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                          <td colSpan={6} className="text-sm font-medium text-muted-foreground">
                             TOTAL {selectedSemaine}
                           </td>
                           <td className="text-center" />
@@ -1119,12 +1119,11 @@ export default function ProduitsVeterinaires() {
                           <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(weekTotal.montant, 2)}
                           </td>
-                          <td className="text-center" />
                           <td className="w-9 max-w-9 !px-1" />
                           <td></td>
                         </tr>
                         <tr className="bg-muted/50">
-                          <td colSpan={5} className="text-sm font-medium text-muted-foreground">
+                          <td colSpan={6} className="text-sm font-medium text-muted-foreground">
                             CUMUL
                           </td>
                           <td className="text-center" />
@@ -1137,7 +1136,6 @@ export default function ProduitsVeterinaires() {
                           <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                             {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
                           </td>
-                          <td className="text-center" />
                           <td className="w-9 max-w-9 !px-1" />
                           <td></td>
                         </tr>

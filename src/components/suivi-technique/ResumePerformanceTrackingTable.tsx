@@ -4,6 +4,7 @@
  */
 
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import { parseSemaineIndex } from "@/lib/mortalitePrevWeekCumul";
 
 export interface ResumePerformanceTrackingTableProps {
   /** Semaine label (e.g. S1) for the header */
@@ -56,8 +57,10 @@ export default function ResumePerformanceTrackingTable({
       ? cumulAlimentConsommeSum / poidsVifProduitKg
       : null;
 
+  const semaineIndex = parseSemaineIndex(semaine);
+  const joursCumul = semaineIndex != null ? semaineIndex * 7 : 7;
   const gmqGParJour =
-    poidsMoyenG != null && Number.isFinite(poidsMoyenG) ? poidsMoyenG / 7 : null;
+    poidsMoyenG != null && Number.isFinite(poidsMoyenG) && joursCumul > 0 ? poidsMoyenG / joursCumul : null;
 
   const viabilite =
     lastMortaliteCumulPct != null && Number.isFinite(lastMortaliteCumulPct)
