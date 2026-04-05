@@ -4,24 +4,19 @@ import { api, type DailyReportResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 
-/** Format YYYY-MM-DD → dd/mm/yyyy */
+/** Format YYYY-MM-DD → YYYY-MM-DD (keep original format) */
 function formatDateDMY(iso: string): string {
-  const [y, m, d] = iso.split("-");
-  const day = d!.replace(/^0/, "");
-  const month = m!.replace(/^0/, "");
-  return `${day}/${month}/${y}`;
+  return iso;
 }
 
-/** Date range for a week: "dd/mm – dd/mm/yyyy" (first day – last day) */
+/** Date range for a week: "YYYY-MM-DD – YYYY-MM-DD" (first day – last day) */
 function formatWeekDateRange(dates: string[]): string {
   if (dates.length === 0) return "";
   const sorted = [...dates].sort();
-  const first = formatDateDMY(sorted[0]!);
-  const last = formatDateDMY(sorted[sorted.length - 1]!);
+  const first = sorted[0]!;
+  const last = sorted[sorted.length - 1]!;
   if (first === last) return first;
-  const [d1, m1, y1] = first.split("/");
-  const [d2, m2, y2] = last.split("/");
-  return `${d1}/${m1} – ${d2}/${m2}/${y2}`;
+  return `${first} – ${last}`;
 }
 
 /** Add n days to ISO date (YYYY-MM-DD), return YYYY-MM-DD */
@@ -214,7 +209,7 @@ export default function SavedDaysOverview({ onSelectDay, onNewReport, farmId, lo
                               ? "border-border bg-background hover:bg-primary/10 hover:border-primary/50 text-foreground"
                               : "border-dashed border-muted-foreground/50 bg-muted/30 hover:border-primary/50 hover:bg-primary/5 text-muted-foreground"
                           }`}
-                          title={hasReport ? formatDateDMY(date) : `${formatDateDMY(date)} — À faire`}
+                          title={hasReport ? date : `${date} — À faire`}
                         >
                           {formatDateDMY(date)}
                         </button>

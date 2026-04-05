@@ -889,16 +889,6 @@ export default function SortiesFerme() {
             </>
           ) : !hasSemaineInUrl ? (
             <div className="space-y-6">
-              {canAccessAllFarms && isValidFarmId && (
-                <button
-                  type="button"
-                  onClick={clearFarmSelection}
-                  className="mb-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  Changer de ferme
-                </button>
-              )}
               <div className="flex flex-wrap items-center gap-4 mb-4">
                 <span className="flex items-center gap-2 text-sm font-medium">
                   <Tag className="w-4 h-4 text-muted-foreground" />

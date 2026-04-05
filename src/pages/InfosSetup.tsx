@@ -101,6 +101,13 @@ function formatEffectifDisplay(s: string): string {
   return formatGroupedNumber(Math.round(n), 0);
 }
 
+function formatDateDMY(iso: string): string {
+  if (!iso) return "—";
+  const parts = iso.split("-").reverse();
+  if (parts.length !== 3) return "—";
+  return parts.join("/");
+}
+
 function setupRowToRequest(r: SetupRow): SetupInfoRequest {
   return {
     lot: r.lot.trim(),
@@ -344,6 +351,7 @@ export default function InfosSetup() {
   const [loading, setLoading] = useState(true);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [effectifFocusRowId, setEffectifFocusRowId] = useState<string | null>(null);
+  const [dateFocusRowId, setDateFocusRowId] = useState<string | null>(null);
   
   // Dynamic buildings list - starts with predefined buildings and grows with user input
   const [availableBuildings, setAvailableBuildings] = useState<string[]>(BUILDINGS);
@@ -1002,13 +1010,26 @@ export default function InfosSetup() {
                         return (
                           <tr key={row.id}>
                             <td>
-                              <input
-                                type="date"
-                                value={row.dateMiseEnPlace}
-                                onChange={(e) => updateRow(row.id, "dateMiseEnPlace", e.target.value)}
-                                readOnly={readOnly}
-                                className={readOnly ? "bg-muted/50 cursor-not-allowed" : ""}
-                              />
+                              {readOnly ? (
+                                <span className="text-sm">{formatDateDMY(row.dateMiseEnPlace)}</span>
+                              ) : dateFocusRowId === row.id ? (
+                                <input
+                                  type="date"
+                                  value={row.dateMiseEnPlace}
+                                  onChange={(e) => updateRow(row.id, "dateMiseEnPlace", e.target.value)}
+                                  onBlur={() => setDateFocusRowId(null)}
+                                  autoFocus
+                                  className="w-full"
+                                />
+                              ) : (
+                                <span
+                                  onClick={() => setDateFocusRowId(row.id)}
+                                  className="cursor-pointer text-sm hover:text-primary transition-colors"
+                                  title="Cliquer pour éditer"
+                                >
+                                  {formatDateDMY(row.dateMiseEnPlace)}
+                                </span>
+                              )}
                             </td>
                             <td>
                               <input

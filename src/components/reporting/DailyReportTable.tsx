@@ -319,6 +319,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   /** NBR / eau / températures : brut au focus, groupé au blur (Livraisons Aliment). */
   const [numericFocusKey, setNumericFocusKey] = useState<string | null>(null);
+  const [dateFocusRowId, setDateFocusRowId] = useState<string | null>(null);
   const [placementDateForLot, setPlacementDateForLot] = useState<string | null>(null);
   /** Min(earliest report, placement) when reports exist — same as load() for âge/semaine on new lines. */
   const effectivePlacementRef = useRef<string | null>(null);
@@ -644,7 +645,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
 
       toast({
         title: "Ligne enregistrée",
-        description: `Le rapport du ${recalced.report_date.split("-").reverse().join("/")} a été enregistré.`,
+        description: `Le rapport du ${recalced.report_date} a été enregistré.`,
       });
 
       if (isNewReport && onSaveSuccess && !saved) {
@@ -678,7 +679,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
       <div className="flex flex-col gap-2 px-5 py-4 border-b border-border">
         {isNewReport && dateContext && (
           <p className="text-sm font-medium text-primary">
-            Nouveau tableau vide pour le {dateContext.split("-").reverse().join("/")}
+            Nouveau tableau vide pour le {dateContext}
           </p>
         )}
         <div className="flex items-center justify-between">
@@ -688,7 +689,7 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
           </h2>
           <p className="text-xs text-muted-foreground">
             {initialDate
-              ? `Rapport du ${initialDate.split("-").reverse().join("/")}`
+              ? `Rapport du ${initialDate}`
               : allFarmsMode
                 ? "Suivi quotidien : mortalité, eau, température, traitements (toutes fermes)."
                 : selectedFarmName
@@ -743,13 +744,26 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                     {row.age_jour || "—"}
                   </td>
                   <td>
-                    <input
-                      type="date"
-                      value={row.report_date}
-                      onChange={(e) => updateRow(row.id, "report_date", e.target.value)}
-                      disabled={readOnly}
-                      className={`w-full bg-transparent border-0 outline-none text-sm py-0.5 ${readOnly ? "bg-muted/50 cursor-not-allowed" : ""}`}
-                    />
+                    {readOnly ? (
+                      <span className="text-sm">{row.report_date}</span>
+                    ) : dateFocusRowId === row.id ? (
+                      <input
+                        type="date"
+                        value={row.report_date}
+                        onChange={(e) => updateRow(row.id, "report_date", e.target.value)}
+                        onBlur={() => setDateFocusRowId(null)}
+                        autoFocus
+                        className="w-full"
+                      />
+                    ) : (
+                      <span
+                        onClick={() => setDateFocusRowId(row.id)}
+                        className="cursor-pointer text-sm hover:text-primary transition-colors"
+                        title="Cliquer pour éditer"
+                      >
+                        {row.report_date}
+                      </span>
+                    )}
                   </td>
                   <td className="text-sm font-medium text-muted-foreground">
                     {row.semaine?.trim() ? (row.semaine.match(/^\d+$/) ? `S${row.semaine}` : row.semaine) : "—"}

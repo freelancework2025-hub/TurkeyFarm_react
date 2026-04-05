@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
-import { AlertTriangle, Bell, CalendarClock, Check, CalendarIcon, Clock } from "lucide-react";
+import { AlertTriangle, Bell, CalendarClock, Check, CalendarIcon, Clock, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +28,7 @@ import { AnimatedList } from "@/components/ui/animated-list";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
+import { ProgressiveBlur } from "@/components/ui/progressive-blur";
 import { api, type VaccinationAlertResponse } from "@/lib/api";
 import { VACCINATION_ALERTS_REFRESH_EVENT } from "@/lib/vaccinationAlertsEvents";
 import { initAlertSound, unlockAndPlayVaccinationAlertSound, playVaccinationAlertSound } from "@/lib/alertSound";
@@ -59,8 +60,17 @@ export default function VaccinationAlertsBanner() {
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   /** Brief Magic UI BorderBeam after silent audio unlock when there are no pending alerts (no beep on first click). */
   const [silentAudioReadyCue, setSilentAudioReadyCue] = useState(false);
+  
+  // Sequential thinking state for handling many alerts
+  const [sequentialThinking, setSequentialThinking] = useState(false);
+  const [currentAlertIndex, setCurrentAlertIndex] = useState(0);
+  const [processedAlerts, setProcessedAlerts] = useState<Set<number>>(new Set());
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
+  const [separateRescheduleModal, setSeparateRescheduleModal] = useState(false);
+  
   const alertsRef = useRef<VaccinationAlertResponse[]>([]);
   const loadingRef = useRef(true);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
   const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
@@ -80,6 +90,21 @@ export default function VaccinationAlertsBanner() {
   const hasUnconfirmedAlerts = count > 0;
   const hasBoth = hasNewAlerts && hasRescheduled;
   const alertTheme = hasBoth ? "blend" : hasNewAlerts ? "red" : hasRescheduled ? "blue" : "amber";
+  
+  // Sequential thinking logic
+  const hasManyAlerts = count > 10;
+  const shouldUseSequentialThinking = hasManyAlerts && !showAllAlerts;
+  const currentAlert = shouldUseSequentialThinking ? alerts[currentAlertIndex] : null;
+  const remainingAlerts = shouldUseSequentialThinking ? alerts.length - currentAlertIndex - 1 : 0;
+
+  // Auto-start sequential thinking when there are many alerts
+  useEffect(() => {
+    if (hasManyAlerts && !sequentialThinking && !showAllAlerts && alerts.length > 0) {
+      setSequentialThinking(true);
+      setCurrentAlertIndex(0);
+      setProcessedAlerts(new Set());
+    }
+  }, [hasManyAlerts, sequentialThinking, showAllAlerts, alerts.length]);
 
   const fetchAlerts = useCallback(() => {
     setLoading(true);
@@ -167,16 +192,6 @@ export default function VaccinationAlertsBanner() {
     }
   }, [searchParams]);
 
-  const handleConfirm = async (a: VaccinationAlertResponse) => {
-    try {
-      await api.vaccinationAlerts.confirm({ farmId: a.farmId, lot: a.lot, planningId: a.planningId });
-      toast({ title: "Alert confirmée", description: "L'alerte a été marquée comme traitée." });
-      fetchAlerts();
-    } catch {
-      toast({ title: "Erreur", description: "Impossible de confirmer.", variant: "destructive" });
-    }
-  };
-
   const handleRescheduleOpen = (a: VaccinationAlertResponse) => {
     setRescheduleFor({ planningId: a.planningId, farmId: a.farmId, lot: a.lot });
     setDatePickerOpen(false);
@@ -185,6 +200,11 @@ export default function VaccinationAlertsBanner() {
     tomorrow.setDate(tomorrow.getDate() + 1);
     setRescheduleDate(tomorrow.toISOString().split("T")[0]);
     setRescheduleTime("09:00");
+    
+    // Use separate modal for reschedule when there are many alerts
+    if (hasManyAlerts) {
+      setSeparateRescheduleModal(true);
+    }
   };
 
   /** Format "HH:mm" to "XhYY" for display */
@@ -207,10 +227,69 @@ export default function VaccinationAlertsBanner() {
         description: `L'alerte sera réaffichée le ${formatDate(rescheduleDate)} à ${formatTimeDisplay(timeStr)} (Casablanca). Vous recevrez un rappel par email à cette heure jusqu'à confirmation.`,
       });
       setRescheduleFor(null);
+      setSeparateRescheduleModal(false);
+      
+      // Mark as processed in sequential thinking mode
+      if (shouldUseSequentialThinking && currentAlert) {
+        setProcessedAlerts(prev => new Set([...prev, currentAlert.planningId]));
+        handleNextAlert();
+      }
+      
       fetchAlerts();
     } catch {
       toast({ title: "Erreur", description: "Impossible de reporter.", variant: "destructive" });
     }
+  };
+
+  const handleConfirm = async (a: VaccinationAlertResponse) => {
+    try {
+      await api.vaccinationAlerts.confirm({ farmId: a.farmId, lot: a.lot, planningId: a.planningId });
+      toast({ title: "Alert confirmée", description: "L'alerte a été marquée comme traitée." });
+      
+      // Mark as processed in sequential thinking mode
+      if (shouldUseSequentialThinking && currentAlert && a.planningId === currentAlert.planningId) {
+        setProcessedAlerts(prev => new Set([...prev, a.planningId]));
+        handleNextAlert();
+      }
+      
+      fetchAlerts();
+    } catch {
+      toast({ title: "Erreur", description: "Impossible de confirmer.", variant: "destructive" });
+    }
+  };
+
+  const handleNextAlert = () => {
+    if (currentAlertIndex < alerts.length - 1) {
+      setCurrentAlertIndex(prev => prev + 1);
+    } else {
+      // All alerts processed, show summary
+      setSequentialThinking(false);
+      setShowAllAlerts(true);
+      toast({
+        title: "Traitement terminé",
+        description: `Toutes les alertes ont été traitées. ${processedAlerts.size} alertes ont été confirmées ou reportées.`,
+      });
+    }
+  };
+
+  const handlePreviousAlert = () => {
+    if (currentAlertIndex > 0) {
+      setCurrentAlertIndex(prev => prev - 1);
+    }
+  };
+
+  const startSequentialThinking = () => {
+    setSequentialThinking(true);
+    setCurrentAlertIndex(0);
+    setProcessedAlerts(new Set());
+    setShowAllAlerts(false);
+  };
+
+  const exitSequentialThinking = () => {
+    setSequentialThinking(false);
+    setShowAllAlerts(true);
+    setCurrentAlertIndex(0);
+    setProcessedAlerts(new Set());
   };
 
   return (
@@ -314,121 +393,248 @@ export default function VaccinationAlertsBanner() {
       </div>
 
       {/* Popup dialog with full details */}
-      <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); setRescheduleFor(null); setRescheduleTime("09:00"); }}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-          <DialogHeader>
+      <Dialog open={dialogOpen} onOpenChange={(o) => { 
+        setDialogOpen(o); 
+        setRescheduleFor(null); 
+        setRescheduleTime("09:00");
+        if (!o) {
+          // Reset sequential thinking state when dialog closes
+          setSequentialThinking(false);
+          setShowAllAlerts(false);
+          setCurrentAlertIndex(0);
+          setProcessedAlerts(new Set());
+        }
+      }}>
+        <DialogContent className="max-w-4xl h-[90vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-amber-500" />
               Rappels de vaccination
             </DialogTitle>
-            <DialogDescription>
-              Le lot atteindra l'âge prévu pour le vaccin demain. Planifiez l'administration.
-              {canConfirmOrReschedule && " En tant que responsable de ferme : confirmez une fois réalisé ou reportez à une autre date. Si vous reportez, vous recevrez un email à la date choisie jusqu'à confirmation."}
-            </DialogDescription>
+            {sequentialThinking ? (
+              <div className="space-y-2">
+                <DialogDescription>
+                  Mode séquentiel activé - Traitement alerte par alerte
+                </DialogDescription>
+                <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                  <span>Alerte {currentAlertIndex + 1} sur {count}</span>
+                  <span>•</span>
+                  <span>{remainingAlerts} restantes</span>
+                  <span>•</span>
+                  <span>{processedAlerts.size} traitées</span>
+                </div>
+              </div>
+            ) : null}
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-hidden">
             {alerts.length === 0 ? (
-              <p className="py-8 text-center text-muted-foreground">Aucune alerte vaccination en attente.</p>
-            ) : (
-              <div className="space-y-4">
-                {/* Grey card: rescheduled alerts with brief info (read from DB) */}
-                {rescheduledAlerts.length > 0 && (
-                  <div className="rounded-lg border border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-900/40 overflow-hidden">
-                    <div className="px-4 py-2 font-semibold text-gray-700 dark:text-gray-300 bg-gray-100/80 dark:bg-gray-800/50 flex items-center gap-2">
-                      <CalendarClock className="h-4 w-4 text-gray-500" />
-                      Alertes reportées
+              <div className="flex items-center justify-center h-full">
+                <p className="text-center text-muted-foreground">Aucune alerte vaccination en attente.</p>
+              </div>
+            ) : shouldUseSequentialThinking && currentAlert ? (
+              // Sequential thinking mode - show one alert at a time
+              <div className="h-full flex flex-col">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/30 overflow-hidden">
+                    <div className="px-4 py-2 font-semibold flex items-center gap-2 text-amber-900 dark:text-amber-100 bg-amber-100/50 dark:bg-amber-900/30">
+                      {currentAlert.farmName} — Lot {currentAlert.lot} • Âge actuel : {currentAlert.currentAge} J → Vaccin prévu à {currentAlert.vaccineAgeLabel}
                     </div>
-                    <div className="px-4 py-3 space-y-2">
-                      {rescheduledAlerts.map((a, idx) => (
-                        <div
-                          key={`resched-${a.farmId}-${a.lot}-${a.planningId}-${idx}`}
-                          className="flex flex-wrap items-center justify-between gap-2 text-sm text-gray-700 dark:text-gray-300"
-                        >
-                          <div className="flex flex-col gap-0.5">
-                            <span className="font-medium">
+
+                    <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
+                      <div><span className="text-muted-foreground">Age</span><br />{currentAlert.vaccineAgeLabel}</div>
+                      <div><span className="text-muted-foreground">Date</span><br />{formatDate(currentAlert.planDate ?? null)}</div>
+                      <div><span className="text-muted-foreground">Motif</span><br />{orDash(currentAlert.motif)}</div>
+                      <div><span className="text-muted-foreground">Vaccin / Traitement</span><br />{orDash(currentAlert.vaccinTraitement)}</div>
+                      <div><span className="text-muted-foreground">Quantité</span><br />{orDash(currentAlert.quantite)}</div>
+                      <div><span className="text-muted-foreground">Administration</span><br />{orDash(currentAlert.administration)}</div>
+                      <div className="sm:col-span-2"><span className="text-muted-foreground">Remarques</span><br />{orDash(currentAlert.remarques)}</div>
+                    </div>
+
+                    {currentAlert.notes && currentAlert.notes.length > 0 && (
+                      <div className="px-4 py-2 border-t border-amber-200 dark:border-amber-800">
+                        <p className="text-xs font-medium mb-1 text-amber-800 dark:text-amber-200">Notes :</p>
+                        <ul className="list-disc list-inside text-sm space-y-0.5 text-amber-700 dark:text-amber-300">
+                          {currentAlert.notes.map((n, i) => (
+                            <li key={i}>{n}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {canConfirmOrReschedule && (
+                      <div className="px-4 py-3 flex gap-2 border-t border-amber-200 dark:border-amber-800">
+                        <Button size="sm" variant="outline" onClick={() => handleRescheduleOpen(currentAlert)} className="gap-1">
+                          <CalendarClock className="h-4 w-4" />
+                          Reporter
+                        </Button>
+                        <Button size="sm" onClick={() => handleConfirm(currentAlert)} className="gap-1 bg-green-600 hover:bg-green-700">
+                          <Check className="h-4 w-4" />
+                          Confirmer
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Sequential navigation */}
+                <div className="flex-shrink-0 border-t p-4 flex items-center justify-between bg-muted/30">
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handlePreviousAlert}
+                      disabled={currentAlertIndex === 0}
+                      className="gap-1"
+                    >
+                      <ChevronUp className="h-4 w-4" />
+                      Précédente
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleNextAlert}
+                      disabled={currentAlertIndex === alerts.length - 1}
+                      className="gap-1"
+                    >
+                      Suivante
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={exitSequentialThinking}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    Voir toutes les alertes
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              // Regular mode - show all alerts with proper scrolling
+              <div className="h-full w-full relative">
+                <div 
+                  ref={scrollContainerRef} 
+                  className="h-full w-full overflow-y-auto overflow-x-hidden"
+                  style={{ 
+                    scrollBehavior: 'smooth',
+                    WebkitOverflowScrolling: 'touch',
+                    maxHeight: '100%'
+                  }}
+                >
+                  <div className="p-4 space-y-4" style={{ paddingBottom: '2rem' }}>
+                    {/* Grey card: rescheduled alerts with brief info (read from DB) */}
+                    {rescheduledAlerts.length > 0 && (
+                      <BlurFade delay={0.1}>
+                        <div className="rounded-lg border border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-900/40 overflow-hidden">
+                          <div className="px-4 py-2 font-semibold text-gray-700 dark:text-gray-300 bg-gray-100/80 dark:bg-gray-800/50 flex items-center gap-2">
+                            <CalendarClock className="h-4 w-4 text-gray-500" />
+                            Alertes reportées
+                          </div>
+                          <div className="px-4 py-3 space-y-2">
+                            {rescheduledAlerts.map((a, idx) => (
+                              <div
+                                key={`resched-${a.farmId}-${a.lot}-${a.planningId}-${idx}`}
+                                className="flex flex-wrap items-center justify-between gap-2 text-sm text-gray-700 dark:text-gray-300"
+                              >
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="font-medium">
+                                    {a.farmName} — Lot {a.lot} • Âge actuel : {a.currentAge} J → Vaccin prévu à {a.vaccineAgeLabel}
+                                  </span>
+                                  {a.planDate && (
+                                    <span className="text-xs text-muted-foreground">
+                                      Réaffichée le {formatDate(a.planDate)}
+                                      {a.rescheduleTime ? ` à ${formatTimeDisplay(a.rescheduleTime)} (Casablanca)` : ""}
+                                    </span>
+                                  )}
+                                </div>
+                                {canConfirmOrReschedule && (
+                                  <div className="flex gap-1.5 shrink-0">
+                                    <Button size="sm" variant="outline" onClick={() => handleRescheduleOpen(a)} className="gap-1 h-7 text-xs">
+                                      <CalendarClock className="h-3 w-3" />
+                                      Reporter
+                                    </Button>
+                                    <Button size="sm" onClick={() => handleConfirm(a)} className="gap-1 h-7 text-xs bg-green-600 hover:bg-green-700">
+                                      <Check className="h-3 w-3" />
+                                      Confirmer
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </BlurFade>
+                    )}
+
+                    {/* Regular alerts (day-before, first-day) */}
+                    {regularAlerts.length > 0 && (
+                      <AnimatedList delay={250} className="gap-4 w-full">
+                        {regularAlerts.map((a, idx) => (
+                          <div
+                            key={`${a.farmId}-${a.lot}-${a.planningId}-${idx}`}
+                            className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/30 overflow-hidden"
+                          >
+                            <div className="px-4 py-2 font-semibold flex items-center gap-2 text-amber-900 dark:text-amber-100 bg-amber-100/50 dark:bg-amber-900/30">
                               {a.farmName} — Lot {a.lot} • Âge actuel : {a.currentAge} J → Vaccin prévu à {a.vaccineAgeLabel}
-                            </span>
-                            {a.planDate && (
-                              <span className="text-xs text-muted-foreground">
-                                Réaffichée le {formatDate(a.planDate)}
-                                {a.rescheduleTime ? ` à ${formatTimeDisplay(a.rescheduleTime)} (Casablanca)` : ""}
-                              </span>
+                            </div>
+
+                            <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
+                              <div><span className="text-muted-foreground">Age</span><br />{a.vaccineAgeLabel}</div>
+                              <div><span className="text-muted-foreground">Date</span><br />{formatDate(a.planDate ?? null)}</div>
+                              <div><span className="text-muted-foreground">Motif</span><br />{orDash(a.motif)}</div>
+                              <div><span className="text-muted-foreground">Vaccin / Traitement</span><br />{orDash(a.vaccinTraitement)}</div>
+                              <div><span className="text-muted-foreground">Quantité</span><br />{orDash(a.quantite)}</div>
+                              <div><span className="text-muted-foreground">Administration</span><br />{orDash(a.administration)}</div>
+                              <div className="sm:col-span-2"><span className="text-muted-foreground">Remarques</span><br />{orDash(a.remarques)}</div>
+                            </div>
+
+                            {a.notes && a.notes.length > 0 && (
+                              <div className="px-4 py-2 border-t border-amber-200 dark:border-amber-800">
+                                <p className="text-xs font-medium mb-1 text-amber-800 dark:text-amber-200">Notes :</p>
+                                <ul className="list-disc list-inside text-sm space-y-0.5 text-amber-700 dark:text-amber-300">
+                                  {a.notes.map((n, i) => (
+                                    <li key={i}>{n}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {canConfirmOrReschedule && (
+                              <div className="px-4 py-2 flex gap-2 border-t border-amber-200 dark:border-amber-800">
+                                <Button size="sm" variant="outline" onClick={() => handleRescheduleOpen(a)} className="gap-1">
+                                  <CalendarClock className="h-4 w-4" />
+                                  Reporter
+                                </Button>
+                                <Button size="sm" onClick={() => handleConfirm(a)} className="gap-1 bg-green-600 hover:bg-green-700">
+                                  <Check className="h-4 w-4" />
+                                  Confirmer
+                                </Button>
+                              </div>
                             )}
                           </div>
-                          {canConfirmOrReschedule && (
-                            <div className="flex gap-1.5 shrink-0">
-                              <Button size="sm" variant="outline" onClick={() => handleRescheduleOpen(a)} className="gap-1 h-7 text-xs">
-                                <CalendarClock className="h-3 w-3" />
-                                Reporter
-                              </Button>
-                              <Button size="sm" onClick={() => handleConfirm(a)} className="gap-1 h-7 text-xs bg-green-600 hover:bg-green-700">
-                                <Check className="h-3 w-3" />
-                                Confirmer
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </AnimatedList>
+                    )}
                   </div>
-                )}
+                </div>
 
-                {/* Regular alerts (day-before, first-day) */}
-                {regularAlerts.length > 0 && (
-                  <AnimatedList delay={250} className="gap-4 w-full">
-                    {regularAlerts.map((a, idx) => (
-                      <div
-                        key={`${a.farmId}-${a.lot}-${a.planningId}-${idx}`}
-                        className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/30 overflow-hidden"
-                      >
-                        <div className="px-4 py-2 font-semibold flex items-center gap-2 text-amber-900 dark:text-amber-100 bg-amber-100/50 dark:bg-amber-900/30">
-                          {a.farmName} — Lot {a.lot} • Âge actuel : {a.currentAge} J → Vaccin prévu à {a.vaccineAgeLabel}
-                        </div>
-
-                        <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
-                          <div><span className="text-muted-foreground">Age</span><br />{a.vaccineAgeLabel}</div>
-                          <div><span className="text-muted-foreground">Date</span><br />{formatDate(a.planDate ?? null)}</div>
-                          <div><span className="text-muted-foreground">Motif</span><br />{orDash(a.motif)}</div>
-                          <div><span className="text-muted-foreground">Vaccin / Traitement</span><br />{orDash(a.vaccinTraitement)}</div>
-                          <div><span className="text-muted-foreground">Quantité</span><br />{orDash(a.quantite)}</div>
-                          <div><span className="text-muted-foreground">Administration</span><br />{orDash(a.administration)}</div>
-                          <div className="sm:col-span-2"><span className="text-muted-foreground">Remarques</span><br />{orDash(a.remarques)}</div>
-                        </div>
-
-                        {a.notes && a.notes.length > 0 && (
-                          <div className="px-4 py-2 border-t border-amber-200 dark:border-amber-800">
-                            <p className="text-xs font-medium mb-1 text-amber-800 dark:text-amber-200">Notes :</p>
-                            <ul className="list-disc list-inside text-sm space-y-0.5 text-amber-700 dark:text-amber-300">
-                              {a.notes.map((n, i) => (
-                                <li key={i}>{n}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {canConfirmOrReschedule && (
-                          <div className="px-4 py-2 flex gap-2 border-t border-amber-200 dark:border-amber-800">
-                            <Button size="sm" variant="outline" onClick={() => handleRescheduleOpen(a)} className="gap-1">
-                              <CalendarClock className="h-4 w-4" />
-                              Reporter
-                            </Button>
-                            <Button size="sm" onClick={() => handleConfirm(a)} className="gap-1 bg-green-600 hover:bg-green-700">
-                              <Check className="h-4 w-4" />
-                              Confirmer
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </AnimatedList>
+                {/* Progressive blur for better scroll indication when there are many alerts */}
+                {hasManyAlerts && (
+                  <ProgressiveBlur
+                    className="pointer-events-none"
+                    height="10%"
+                    position="bottom"
+                  />
                 )}
               </div>
             )}
           </div>
 
-          {rescheduleFor && (
-            <div className="relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-muted/50 to-muted/30 p-4 shadow-sm">
+          {/* Inline reschedule section - only show when not using separate modal */}
+          {rescheduleFor && !separateRescheduleModal && (
+            <div className="flex-shrink-0 relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-muted/50 to-muted/30 p-4 shadow-sm">
               <BorderBeam
                 size={60}
                 duration={8}
@@ -533,7 +739,11 @@ export default function VaccinationAlertsBanner() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => setRescheduleFor(null)}
+                  onClick={() => {
+                    setRescheduleFor(null);
+                    setDatePickerOpen(false);
+                    setTimePickerOpen(false);
+                  }}
                   className="text-muted-foreground hover:text-foreground"
                 >
                   Annuler
@@ -542,10 +752,126 @@ export default function VaccinationAlertsBanner() {
             </div>
           )}
 
-          <div className="flex justify-end pt-2 border-t shrink-0">
+          <div className="flex-shrink-0 flex justify-end pt-2 border-t">
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               Fermer
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Separate reschedule modal for better UX when there are many alerts */}
+      <Dialog open={separateRescheduleModal} onOpenChange={(open) => {
+        setSeparateRescheduleModal(open);
+        if (!open) {
+          setRescheduleFor(null);
+          setDatePickerOpen(false);
+          setTimePickerOpen(false);
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarClock className="h-5 w-5 text-blue-500" />
+              Reporter l'alerte
+            </DialogTitle>
+            <DialogDescription>
+              Choisissez une nouvelle date et heure pour cette alerte de vaccination.
+              Vous recevrez un rappel par email jusqu'à confirmation.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Date</label>
+              <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start gap-2 font-normal"
+                  >
+                    <CalendarIcon className="h-4 w-4 shrink-0 opacity-70" />
+                    {rescheduleDate
+                      ? format(new Date(rescheduleDate + "T12:00:00"), "dd/MM/yyyy", { locale: fr })
+                      : "Choisir une date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={rescheduleDate ? new Date(rescheduleDate + "T12:00:00") : undefined}
+                    onSelect={(date) => {
+                      if (date) {
+                        setRescheduleDate(format(date, "yyyy-MM-dd"));
+                        setDatePickerOpen(false);
+                      }
+                    }}
+                    locale={fr}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Heure (Casablanca GMT+1)</label>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={timeHour}
+                  onValueChange={(v) => setTimeFromParts(v, timeMinute)}
+                >
+                  <SelectTrigger className="w-20 font-mono">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[200px]">
+                    {HOURS.map((h) => (
+                      <SelectItem key={h} value={h} className="font-mono">
+                        {h}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-lg font-bold">:</span>
+                <Select
+                  value={timeMinute}
+                  onValueChange={(v) => setTimeFromParts(timeHour, v)}
+                >
+                  <SelectTrigger className="w-20 font-mono">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[200px]">
+                    {MINUTES.map((m) => (
+                      <SelectItem key={m} value={m} className="font-mono">
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSeparateRescheduleModal(false);
+                setRescheduleFor(null);
+                setDatePickerOpen(false);
+                setTimePickerOpen(false);
+              }}
+            >
+              Annuler
+            </Button>
+            <ShimmerButton
+              onClick={handleRescheduleSubmit}
+              disabled={!rescheduleDate}
+              className="px-6"
+              background="hsl(var(--primary))"
+              shimmerColor="rgba(255,255,255,0.4)"
+            >
+              Valider
+            </ShimmerButton>
           </div>
         </DialogContent>
       </Dialog>

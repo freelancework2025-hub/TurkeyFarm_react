@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Planning de Vaccination — visible and editable only by Responsable Technique and Administrateur.
  * Table: Age, Date, Motif, Vaccin / Traitement, Quantité, Administration, Remarques.
  * Date defaults from Date Mise en Place (InfosSetup) for the selected lot.
@@ -1482,12 +1482,6 @@ export default function PlanningVaccination() {
             <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-base font-semibold">Notes</h2>
-                {canEditPlanning && (
-                  <p className="text-xs text-muted-foreground mt-1 max-w-xl">
-                    Chaque ✓ enregistre toutes les lignes du tableau (l&apos;API remplace la liste des notes du
-                    lot). La coche « Sélection » est incluse lors de l&apos;enregistrement.
-                  </p>
-                )}
               </div>
               {canEditPlanning ? (
                 <div className="flex items-center gap-2 shrink-0">
