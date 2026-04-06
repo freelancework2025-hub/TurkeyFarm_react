@@ -198,7 +198,8 @@ function toConfig(params: ProduitsHygieneExportParams): ITableExportConfig {
 }
 
 /**
- * Export two separate tables for ProduitsHygiene: Vide Sanitaire + Main Livraisons
+ * Export two tables for ProduitsHygiene: Vide Sanitaire + Main Livraisons in a single worksheet
+ * With fixed headers for the currently visible section
  */
 export async function exportToExcel(params: ProduitsHygieneExportParams): Promise<void> {
   const ExcelJS = (await import("exceljs")).default;
@@ -206,7 +207,44 @@ export async function exportToExcel(params: ProduitsHygieneExportParams): Promis
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "ElevagePro";
-  const ws = workbook.addWorksheet("Export", { views: [{ state: "frozen", ySplit: 7, activeCell: "A8", showGridLines: true }] });
+  
+  // Create single worksheet with both tables
+  await createCombinedWorksheet(workbook, params);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Livraisons_Produits_Hygiene_${farmName.replace(/\s+/g, "_")}_Lot${lot}_${semaine}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Create combined worksheet with both Vide Sanitaire and Main Livraisons tables
+ * Uses frozen panes at the main table headers for optimal viewing
+ */
+async function createCombinedWorksheet(workbook: ExcelJS.Workbook, params: ProduitsHygieneExportParams): Promise<void> {
+  const { farmName, lot, semaine, rows, weekTotal, cumul, ageByRowId, videSanitaireRows = [], videSanitaireTotal } = params;
+  
+  const hasVideSanitaire = videSanitaireRows.length > 0;
+  
+  // Calculate freeze position - freeze at main table headers for best user experience
+  let mainTableHeaderRow = 7; // Default when no vide sanitaire
+  if (hasVideSanitaire) {
+    // VS section: title(1) + headers(1) + data rows + total(1) + spacing(2) = 5 + data rows
+    mainTableHeaderRow = 7 + videSanitaireRows.length + (videSanitaireTotal ? 1 : 0) + 2;
+  }
+  
+  const ws = workbook.addWorksheet("Produits Hygiène", { 
+    views: [{ 
+      state: "frozen", 
+      ySplit: mainTableHeaderRow, // Freeze at main table headers
+      activeCell: `A${mainTableHeaderRow + 1}`, 
+      showGridLines: true 
+    }] 
+  });
 
   const HEADER_PRIMARY = "FF3D2E1A";
   const HEADER_TEXT = "FFF7F6F3";
@@ -253,8 +291,9 @@ export async function exportToExcel(params: ProduitsHygieneExportParams): Promis
 
   let currentRowNum = 7;
 
-  // **TABLE 1: VIDE SANITAIRE**
-  if (videSanitaireRows.length > 0) {
+  // **TABLE 1: VIDE SANITAIRE** (if exists)
+  if (hasVideSanitaire) {
+    // Section title
     ws.mergeCells(currentRowNum, 1, currentRowNum, COLS.length);
     const vsHeader = ws.getCell(currentRowNum, 1);
     vsHeader.value = "VIDE SANITAIRE";
@@ -264,7 +303,7 @@ export async function exportToExcel(params: ProduitsHygieneExportParams): Promis
     ws.getRow(currentRowNum).height = 24;
     currentRowNum++;
 
-    // Column headers
+    // VS Column headers
     COLS.forEach((col, i) => {
       const cell = ws.getCell(currentRowNum, i + 1);
       cell.value = col;
@@ -321,20 +360,22 @@ export async function exportToExcel(params: ProduitsHygieneExportParams): Promis
       currentRowNum++;
     }
 
-    currentRowNum++; // Spacing between tables
+    // Spacing between tables
+    currentRowNum += 2;
   }
 
   // **TABLE 2: LIVRAISONS PRODUITS HYGIÈNE**
+  // Section title
   ws.mergeCells(currentRowNum, 1, currentRowNum, COLS.length);
   const mainHeader = ws.getCell(currentRowNum, 1);
-  mainHeader.value = "LIVRAISONS PRODUITS HYGIÈNE";
+  mainHeader.value = hasVideSanitaire ? "LIVRAISONS PRODUITS HYGIÈNE" : "PRODUITS HYGIÈNE";
   mainHeader.font = { size: 12, bold: true, color: { argb: HEADER_TEXT } };
   mainHeader.fill = { type: "pattern", pattern: "solid", fgColor: { argb: HEADER_PRIMARY } };
   mainHeader.alignment = { horizontal: "left" };
   ws.getRow(currentRowNum).height = 24;
   currentRowNum++;
 
-  // Column headers
+  // Main table column headers (this is where we freeze)
   COLS.forEach((col, i) => {
     const cell = ws.getCell(currentRowNum, i + 1);
     cell.value = col;
@@ -391,15 +432,6 @@ export async function exportToExcel(params: ProduitsHygieneExportParams): Promis
       cell.numFmt = "#,##0.00";
     }
   });
-
-  const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Livraisons_Produits_Hygiene_${farmName.replace(/\s+/g, "_")}_Lot${lot}_${semaine}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 export function exportToPdf(params: ProduitsHygieneExportParams): void {
@@ -563,3 +595,4 @@ export function exportToPdf(params: ProduitsHygieneExportParams): void {
 
   doc.save(`Livraisons_Produits_Hygiene_${farmName.replace(/\s+/g, "_")}_Lot${lot}_${semaine}.pdf`);
 }
+

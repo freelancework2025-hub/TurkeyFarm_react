@@ -35,6 +35,9 @@ import {
 } from "@/lib/depensesDiversShared";
 import { exportToExcel, exportToPdf } from "@/lib/depensesDiversExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { QuantityInput } from "@/components/ui/QuantityInput";
+import { PriceInput } from "@/components/ui/PriceInput";
+import { NumericInput } from "@/components/ui/NumericInput";
 
 /**
  * DÉPENSES DIVERS
@@ -1133,34 +1136,14 @@ export default function DepensesDivers() {
                                     {formatQtyDisplay(row.qte)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={
-                                      qteFocusVsRowId === row.id
-                                        ? row.qte
-                                        : toOptionalNumber(row.qte) != null
-                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
-                                          : ""
-                                    }
-                                    onFocus={() => setQteFocusVsRowId(row.id)}
-                                    onBlur={(e) => {
-                                      setQteFocusVsRowId(null);
-                                      const raw = e.target.value;
-                                      if (raw.trim() === "") {
-                                        updateRow(row.id, "qte", "");
-                                        return;
-                                      }
-                                      const n = resolvedQteFromString(raw);
-                                      if (n == null || !Number.isFinite(n)) {
-                                        updateRow(row.id, "qte", "");
-                                      } else {
-                                        updateRow(row.id, "qte", n.toFixed(2));
-                                      }
-                                    }}
-                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                  <QuantityInput
+                                    value={row.qte}
+                                    onChange={(value) => updateRow(row.id, "qte", value)}
+                                    isFocused={qteFocusVsRowId === row.id}
+                                    onFocusChange={(focused) => setQteFocusVsRowId(focused ? row.id : null)}
                                     placeholder="—"
                                     className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                    showFormattedDisplay={true}
                                   />
                                 )}
                               </td>
@@ -1170,14 +1153,10 @@ export default function DepensesDivers() {
                                     {formatMoneyDisplay(row.prixPerUnit)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="number"
+                                  <PriceInput
                                     value={row.prixPerUnit}
-                                    onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                    onChange={(value) => updateRow(row.id, "prixPerUnit", value)}
                                     placeholder="—"
-                                    step="0.01"
-                                    min={0}
-                                    disabled={rowReadOnly}
                                     className="w-full min-w-[5.5rem] tabular-nums text-center"
                                   />
                                 )}
@@ -1405,34 +1384,14 @@ export default function DepensesDivers() {
                                     {formatQtyDisplay(row.qte)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={
-                                      qteFocusRowId === row.id
-                                        ? row.qte
-                                        : toOptionalNumber(row.qte) != null
-                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
-                                          : ""
-                                    }
-                                    onFocus={() => setQteFocusRowId(row.id)}
-                                    onBlur={(e) => {
-                                      setQteFocusRowId(null);
-                                      const raw = e.target.value;
-                                      if (raw.trim() === "") {
-                                        updateRow(row.id, "qte", "");
-                                        return;
-                                      }
-                                      const n = resolvedQteFromString(raw);
-                                      if (n == null || !Number.isFinite(n)) {
-                                        updateRow(row.id, "qte", "");
-                                      } else {
-                                        updateRow(row.id, "qte", n.toFixed(2));
-                                      }
-                                    }}
-                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                  <QuantityInput
+                                    value={row.qte}
+                                    onChange={(value) => updateRow(row.id, "qte", value)}
+                                    isFocused={qteFocusRowId === row.id}
+                                    onFocusChange={(focused) => setQteFocusRowId(focused ? row.id : null)}
                                     placeholder="—"
                                     className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                    showFormattedDisplay={true}
                                   />
                                 )}
                               </td>
@@ -1442,14 +1401,10 @@ export default function DepensesDivers() {
                                     {formatMoneyDisplay(row.prixPerUnit)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="number"
+                                  <PriceInput
                                     value={row.prixPerUnit}
-                                    onChange={(e) => updateRow(row.id, "prixPerUnit", e.target.value)}
+                                    onChange={(value) => updateRow(row.id, "prixPerUnit", value)}
                                     placeholder="—"
-                                    step="0.01"
-                                    min={0}
-                                    disabled={rowReadOnly}
                                     className="w-full min-w-[5.5rem] tabular-nums text-center"
                                   />
                                 )}

@@ -9,6 +9,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import { QuantityInput } from "@/components/ui/QuantityInput";
 
 type MetricKey =
   | "poidsMoyen"
@@ -86,6 +87,10 @@ export default function PerformanceTrackingTable({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<SuiviPerformancesHebdoResponse | null>(null);
+  
+  // Focus state management for QuantityInput components
+  const [reelFocusKey, setReelFocusKey] = useState<MetricKey | null>(null);
+  const [normeFocusKey, setNormeFocusKey] = useState<MetricKey | null>(null);
 
   const [reel, setReel] = useState<Record<MetricKey, string>>({
     poidsMoyen: "",
@@ -149,10 +154,10 @@ export default function PerformanceTrackingTable({
   const canEditNorme = !isReadOnly && canUpdate;
 
   const setReelField = (key: MetricKey, value: string) => {
-    setReel((prev) => ({ ...prev, [key]: normalizeDecimalInput(value) }));
+    setReel((prev) => ({ ...prev, [key]: value }));
   };
   const setNormeField = (key: MetricKey, value: string) => {
-    setNorme((prev) => ({ ...prev, [key]: normalizeDecimalInput(value) }));
+    setNorme((prev) => ({ ...prev, [key]: value }));
   };
 
   const parseOptional = (s: string): number | null => {
@@ -319,7 +324,7 @@ export default function PerformanceTrackingTable({
                   <td className="px-4 py-2 border-r border-border font-medium text-foreground">
                     {row.label}
                   </td>
-                  <td className="align-middle border-l border-border">
+                  <td className="align-middle border-l border-border text-center">
                     {isReelComputed(row.key) ? (
                       <div className={ecartCell} title={row.key === "indiceConsommation" ? "Calculé automatiquement : CUMUL ALIMENT CONSOMMÉ (Suivi consommation) / POIDS VIF PRODUIT (STOCK)" : "100% − cumul mortalité % fin de semaine"}>
                         {formatVal(
@@ -328,14 +333,15 @@ export default function PerformanceTrackingTable({
                         )}
                       </div>
                     ) : canEditReel ? (
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="text"
-                          inputMode="decimal"
+                      <div className="flex items-center justify-center gap-1">
+                        <QuantityInput
                           value={reel[row.key]}
-                          onChange={(e) => setReelField(row.key, e.target.value)}
-                          className={inputBase}
+                          onChange={(value) => setReelField(row.key, value)}
+                          isFocused={reelFocusKey === row.key}
+                          onFocusChange={(focused) => setReelFocusKey(focused ? row.key : null)}
                           placeholder={getPlaceholder(rowUnit)}
+                          className="flex-1 min-w-0 text-center"
+                          showFormattedDisplay={true}
                         />
                         {rowUnit && <span className="text-xs text-muted-foreground font-medium">{rowUnit}</span>}
                       </div>
@@ -347,16 +353,17 @@ export default function PerformanceTrackingTable({
                       </div>
                     )}
                   </td>
-                  <td className={`align-middle border-l border-border ${!canEditNorme ? normeCellReadOnly : ""}`}>
+                  <td className={`align-middle border-l border-border text-center ${!canEditNorme ? normeCellReadOnly : ""}`}>
                     {canEditNorme ? (
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="text"
-                          inputMode="decimal"
+                      <div className="flex items-center justify-center gap-1">
+                        <QuantityInput
                           value={norme[row.key]}
-                          onChange={(e) => setNormeField(row.key, e.target.value)}
-                          className={inputBase + " bg-amber-50/50 dark:bg-amber-950/20"}
+                          onChange={(value) => setNormeField(row.key, value)}
+                          isFocused={normeFocusKey === row.key}
+                          onFocusChange={(focused) => setNormeFocusKey(focused ? row.key : null)}
                           placeholder={getPlaceholder(rowUnit)}
+                          className="flex-1 min-w-0 text-center bg-amber-50/50 dark:bg-amber-950/20"
+                          showFormattedDisplay={true}
                         />
                         {rowUnit && <span className="text-xs text-muted-foreground font-medium">{rowUnit}</span>}
                       </div>

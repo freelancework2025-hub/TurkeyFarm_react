@@ -21,6 +21,7 @@ import { api, type FarmResponse, type LotWithStatusResponse, type SetupInfoReque
 import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { exportToExcel, exportToPdf } from "@/lib/infosSetupExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { QuantityInput } from "@/components/ui/QuantityInput";
 import { useToast } from "@/hooks/use-toast";
 
 const BUILDINGS = ["B1", "B2", "B3", "B4"];
@@ -1068,37 +1069,26 @@ export default function InfosSetup() {
                                   {formatEffectifDisplay(row.effectifMisEnPlace)}
                                 </span>
                               ) : (
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={
-                                    effectifFocusRowId === row.id
-                                      ? row.effectifMisEnPlace
-                                      : toOptionalNumber(row.effectifMisEnPlace) != null
-                                        ? formatGroupedNumber(
-                                            Math.round(toOptionalNumber(row.effectifMisEnPlace)!),
-                                            0
-                                          )
-                                        : ""
-                                  }
-                                  onFocus={() => setEffectifFocusRowId(row.id)}
-                                  onBlur={(e) => {
-                                    setEffectifFocusRowId(null);
-                                    const raw = e.target.value;
-                                    if (raw.trim() === "") {
-                                      updateRow(row.id, "effectifMisEnPlace", "");
-                                      return;
-                                    }
-                                    const n = toOptionalNumber(raw);
-                                    if (n == null || n < 0) {
+                                <QuantityInput
+                                  value={row.effectifMisEnPlace}
+                                  onChange={(value) => {
+                                    // For effectif, we need integer values
+                                    if (value === "") {
                                       updateRow(row.id, "effectifMisEnPlace", "");
                                     } else {
-                                      updateRow(row.id, "effectifMisEnPlace", String(Math.max(0, Math.round(n))));
+                                      const n = toOptionalNumber(value);
+                                      if (n != null && n >= 0) {
+                                        updateRow(row.id, "effectifMisEnPlace", String(Math.round(n)));
+                                      } else {
+                                        updateRow(row.id, "effectifMisEnPlace", value);
+                                      }
                                     }
                                   }}
-                                  onChange={(e) => updateRow(row.id, "effectifMisEnPlace", e.target.value)}
+                                  isFocused={effectifFocusRowId === row.id}
+                                  onFocusChange={(focused) => setEffectifFocusRowId(focused ? row.id : null)}
                                   placeholder="0"
-                                  className="w-full min-w-[6rem] tabular-nums text-center bg-transparent border-0 outline-none"
+                                  className="w-full min-w-[6rem] tabular-nums text-center"
+                                  showFormattedDisplay={true}
                                 />
                               )}
                             </td>

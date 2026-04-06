@@ -122,7 +122,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
     currentRow++;
   };
 
-  const ws = workbook.addWorksheet("Résumé production", { views: [{ state: "frozen", ySplit: 10, activeCell: "A11", showGridLines: true }] });
+  const ws = workbook.addWorksheet("Résumé production", { views: [{ state: "frozen", ySplit: 6, activeCell: "A7", showGridLines: true }] });
   ws.columns = [
     { width: 14 },  // DATE
     { width: 12 },  // ÂGE (J)

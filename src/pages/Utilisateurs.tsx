@@ -217,7 +217,7 @@ export default function Utilisateurs() {
     // Extract farm IDs from assignedFarms or fallback to single farmId
     const assignedFarmIds = u.assignedFarms?.map(f => f.id) ?? (u.farmId ? [u.farmId] : []);
     setForm({
-      username: u.username,
+      username: u.email ?? "", // Use email as username
       password: "",
       displayName: u.displayName ?? "",
       email: u.email ?? "",
@@ -242,8 +242,8 @@ export default function Utilisateurs() {
       return;
     }
     
-    // Email is the canonical login id when present (matches backend UserService.update).
-    const effectiveUsername = form.email?.trim() || form.username?.trim() || undefined;
+    // Email is the canonical login id (matches backend UserService.update).
+    const effectiveUsername = form.email?.trim() || undefined;
     const body: UserRequest = {
       username: effectiveUsername,
       displayName: form.displayName?.trim() || undefined,
@@ -274,8 +274,8 @@ export default function Utilisateurs() {
         toast({ title: "Mot de passe invalide", description: pwdErr, variant: "destructive" });
         return;
       }
-      if (!body.email?.trim() && !body.username?.trim()) {
-        toast({ title: "Email ou identifiant requis", variant: "destructive" });
+      if (!body.email?.trim()) {
+        toast({ title: "Email requis", variant: "destructive" });
         return;
       }
       createMutation.mutate(body);
@@ -492,19 +492,7 @@ export default function Utilisateurs() {
                 )}
               </div>
             )}
-            <div>
-              <Label>
-                {editingUser
-                  ? "Identifiant de connexion (suit l’email)"
-                  : "Identifiant (ou laisser vide pour utiliser l’email)"}
-              </Label>
-              <Input
-                value={form.username ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
-                placeholder="nom d'utilisateur ou email"
-                disabled={!!editingUser}
-              />
-            </div>
+
               <div>
                 <Label>Nom affiché</Label>
                 <Input
@@ -520,15 +508,15 @@ export default function Utilisateurs() {
                 value={form.email ?? ""}
                 onChange={(e) => {
                   const v = e.target.value;
-                  setForm((f) => (editingUser ? { ...f, email: v, username: v } : { ...f, email: v }));
+                  setForm((f) => ({ ...f, email: v, username: v }));
                 }}
                 placeholder="email@exemple.com"
               />
-              {editingUser && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Modifier l’email met à jour l’identifiant de connexion. L’utilisateur devra se connecter avec cette adresse.
-                </p>
-              )}
+
+              <p className="text-xs text-muted-foreground mt-1">
+                L'email sera utilisé comme identifiant de connexion.
+              </p>
+
             </div>
             <div>
               <Label>Téléphone</Label>
@@ -701,3 +689,4 @@ export default function Utilisateurs() {
     </AppLayout>
   );
 }
+

@@ -4,6 +4,7 @@ import { api, type DailyReportResponse, type DailyReportRequest, type SetupInfoR
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { NumericInput } from "@/components/ui/NumericInput";
 import {
   REPORTING_DAILY_TABLE_HEADERS,
   REPORTING_DAILY_HEADER_CLASS,
@@ -810,32 +811,12 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                     {readOnly ? (
                       <span className="block text-center tabular-nums px-1 py-0.5">{formatIntDisplay(row.nbr)}</span>
                     ) : (
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={
-                          numericFocusKey === dailyNumericFocusKey(row.id, "nbr")
-                            ? row.nbr
-                            : toOptionalNumber(row.nbr) != null
-                              ? formatGroupedNumber(toOptionalNumber(row.nbr)!, 0)
-                              : ""
-                        }
-                        onFocus={() => setNumericFocusKey(dailyNumericFocusKey(row.id, "nbr"))}
-                        onBlur={(e) => {
-                          setNumericFocusKey(null);
-                          const raw = e.target.value;
-                          if (raw.trim() === "") {
-                            updateRow(row.id, "nbr", "");
-                            return;
-                          }
-                          const n = toOptionalNumber(raw);
-                          if (n == null || n < 0) {
-                            updateRow(row.id, "nbr", "");
-                          } else {
-                            updateRow(row.id, "nbr", String(Math.round(n)));
-                          }
-                        }}
-                        onChange={(e) => updateRow(row.id, "nbr", e.target.value)}
+                      <NumericInput
+                        value={row.nbr}
+                        onChange={(value) => updateRow(row.id, "nbr", value)}
+                        allowDecimals={false}
+                        allowNegative={false}
+                        min={0}
                         placeholder="—"
                         className="w-full min-w-[5rem] tabular-nums text-center"
                       />
@@ -845,32 +826,13 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                     {readOnly ? (
                       <span className="block text-center tabular-nums px-1 py-0.5">{formatDecDisplay(row.water_l)}</span>
                     ) : (
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={
-                          numericFocusKey === dailyNumericFocusKey(row.id, "water_l")
-                            ? row.water_l
-                            : toOptionalNumber(row.water_l) != null
-                              ? formatGroupedNumber(toOptionalNumber(row.water_l)!, 2)
-                              : ""
-                        }
-                        onFocus={() => setNumericFocusKey(dailyNumericFocusKey(row.id, "water_l"))}
-                        onBlur={(e) => {
-                          setNumericFocusKey(null);
-                          const raw = e.target.value;
-                          if (raw.trim() === "") {
-                            updateRow(row.id, "water_l", "");
-                            return;
-                          }
-                          const n = toOptionalNumber(raw);
-                          if (n == null || n < 0) {
-                            updateRow(row.id, "water_l", "");
-                          } else {
-                            updateRow(row.id, "water_l", n.toFixed(2));
-                          }
-                        }}
-                        onChange={(e) => updateRow(row.id, "water_l", e.target.value)}
+                      <NumericInput
+                        value={row.water_l}
+                        onChange={(value) => updateRow(row.id, "water_l", value)}
+                        allowDecimals={true}
+                        allowNegative={false}
+                        maxDecimals={2}
+                        min={0}
                         placeholder="—"
                         className="w-full min-w-[7.5rem] tabular-nums text-center"
                       />
@@ -880,32 +842,14 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                     {readOnly ? (
                       <span className="block text-center tabular-nums px-1 py-0.5">{formatDecDisplay(row.temp_min)}</span>
                     ) : (
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={
-                          numericFocusKey === dailyNumericFocusKey(row.id, "temp_min")
-                            ? row.temp_min
-                            : toOptionalNumber(row.temp_min) != null
-                              ? formatGroupedNumber(toOptionalNumber(row.temp_min)!, 2)
-                              : ""
-                        }
-                        onFocus={() => setNumericFocusKey(dailyNumericFocusKey(row.id, "temp_min"))}
-                        onBlur={(e) => {
-                          setNumericFocusKey(null);
-                          const raw = e.target.value;
-                          if (raw.trim() === "") {
-                            updateRow(row.id, "temp_min", "");
-                            return;
-                          }
-                          const n = toOptionalNumber(raw);
-                          if (n == null) {
-                            updateRow(row.id, "temp_min", "");
-                          } else {
-                            updateRow(row.id, "temp_min", n.toFixed(2));
-                          }
-                        }}
-                        onChange={(e) => updateRow(row.id, "temp_min", e.target.value)}
+                      <NumericInput
+                        value={row.temp_min}
+                        onChange={(value) => updateRow(row.id, "temp_min", value)}
+                        allowDecimals={true}
+                        allowNegative={true}
+                        maxDecimals={2}
+                        min={-50}
+                        max={50}
                         placeholder="—"
                         className="w-full min-w-[5.5rem] tabular-nums text-center"
                       />
@@ -915,32 +859,14 @@ export default function DailyReportTable({ initialDate, farmId, lot, isNewReport
                     {readOnly ? (
                       <span className="block text-center tabular-nums px-1 py-0.5">{formatDecDisplay(row.temp_max)}</span>
                     ) : (
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={
-                          numericFocusKey === dailyNumericFocusKey(row.id, "temp_max")
-                            ? row.temp_max
-                            : toOptionalNumber(row.temp_max) != null
-                              ? formatGroupedNumber(toOptionalNumber(row.temp_max)!, 2)
-                              : ""
-                        }
-                        onFocus={() => setNumericFocusKey(dailyNumericFocusKey(row.id, "temp_max"))}
-                        onBlur={(e) => {
-                          setNumericFocusKey(null);
-                          const raw = e.target.value;
-                          if (raw.trim() === "") {
-                            updateRow(row.id, "temp_max", "");
-                            return;
-                          }
-                          const n = toOptionalNumber(raw);
-                          if (n == null) {
-                            updateRow(row.id, "temp_max", "");
-                          } else {
-                            updateRow(row.id, "temp_max", n.toFixed(2));
-                          }
-                        }}
-                        onChange={(e) => updateRow(row.id, "temp_max", e.target.value)}
+                      <NumericInput
+                        value={row.temp_max}
+                        onChange={(value) => updateRow(row.id, "temp_max", value)}
+                        allowDecimals={true}
+                        allowNegative={true}
+                        maxDecimals={2}
+                        min={-50}
+                        max={50}
                         placeholder="—"
                         className="w-full min-w-[5.5rem] tabular-nums text-center"
                       />

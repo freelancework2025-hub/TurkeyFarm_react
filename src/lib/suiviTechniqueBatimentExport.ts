@@ -139,7 +139,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "ElevagePro";
-  const ws = workbook.addWorksheet("Suivi technique", { views: [{ state: "frozen", ySplit: 12, activeCell: "A13", showGridLines: true }] });
+  const ws = workbook.addWorksheet("Suivi technique", { views: [{ state: "frozen", ySplit: 6, activeCell: "A7", showGridLines: true }] });
   ws.columns = [
     { width: 28 },
     { width: 14 },

@@ -35,6 +35,7 @@ import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusRespo
 import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
 import { exportToExcel, exportToPdf } from "@/lib/suiviTechniqueBatimentExport";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
+import { QuantityInput } from "@/components/ui/QuantityInput";
 import { canonicalSemaine } from "@/lib/semaineCanonical";
 
 const SEMAINES = Array.from({ length: 24 }, (_, i) => `S${i + 1}`);

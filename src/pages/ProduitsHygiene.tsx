@@ -38,6 +38,7 @@ import {
   produitsHygieneEffectiveMontantForTotal,
 } from "@/lib/produitsHygieneShared";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { QuantityInput } from "@/components/ui/QuantityInput";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS PRODUITS HYGIÈNE
@@ -1150,34 +1151,14 @@ export default function ProduitsHygiene() {
                                     {formatQtyDisplay(row.qte)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={
-                                      qteFocusRowId === row.id
-                                        ? row.qte
-                                        : toOptionalNumber(row.qte) != null
-                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
-                                          : ""
-                                    }
-                                    onFocus={() => setQteFocusRowId(row.id)}
-                                    onBlur={(e) => {
-                                      setQteFocusRowId(null);
-                                      const raw = e.target.value;
-                                      if (raw.trim() === "") {
-                                        updateRow(row.id, "qte", "");
-                                        return;
-                                      }
-                                      const n = resolvedQteFromString(raw);
-                                      if (n == null || !Number.isFinite(n)) {
-                                        updateRow(row.id, "qte", "");
-                                      } else {
-                                        updateRow(row.id, "qte", n.toFixed(2));
-                                      }
-                                    }}
-                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                  <QuantityInput
+                                    value={row.qte}
+                                    onChange={(value) => updateRow(row.id, "qte", value)}
+                                    isFocused={qteFocusRowId === row.id}
+                                    onFocusChange={(focused) => setQteFocusRowId(focused ? row.id : null)}
                                     placeholder="—"
                                     className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                    showFormattedDisplay={true}
                                   />
                                 )}
                               </td>
@@ -1395,34 +1376,14 @@ export default function ProduitsHygiene() {
                                     {formatQtyDisplay(row.qte)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={
-                                      qteFocusRowId === row.id
-                                        ? row.qte
-                                        : toOptionalNumber(row.qte) != null
-                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
-                                          : ""
-                                    }
-                                    onFocus={() => setQteFocusRowId(row.id)}
-                                    onBlur={(e) => {
-                                      setQteFocusRowId(null);
-                                      const raw = e.target.value;
-                                      if (raw.trim() === "") {
-                                        updateRow(row.id, "qte", "");
-                                        return;
-                                      }
-                                      const n = resolvedQteFromString(raw);
-                                      if (n == null || !Number.isFinite(n)) {
-                                        updateRow(row.id, "qte", "");
-                                      } else {
-                                        updateRow(row.id, "qte", n.toFixed(2));
-                                      }
-                                    }}
-                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                  <QuantityInput
+                                    value={row.qte}
+                                    onChange={(value) => updateRow(row.id, "qte", value)}
+                                    isFocused={qteFocusRowId === row.id}
+                                    onFocusChange={(focused) => setQteFocusRowId(focused ? row.id : null)}
                                     placeholder="—"
                                     className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                    showFormattedDisplay={true}
                                   />
                                 )}
                               </td>

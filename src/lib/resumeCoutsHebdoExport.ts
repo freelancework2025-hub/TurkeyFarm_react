@@ -74,7 +74,7 @@ export async function exportToExcel(params: ResumeCoutsHebdoExportParams): Promi
     currentRow++;
   };
 
-  const ws = workbook.addWorksheet("Résumé coûts", { views: [{ state: "frozen", ySplit: 10, activeCell: "A11", showGridLines: true }] });
+  const ws = workbook.addWorksheet("Résumé coûts", { views: [{ state: "frozen", ySplit: 6, activeCell: "A7", showGridLines: true }] });
   ws.columns = [
     { width: 28 },  // DESIGNATION
     { width: 16 },  // S1 / semaine

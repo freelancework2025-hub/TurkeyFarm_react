@@ -71,7 +71,7 @@ export async function exportToExcel(params: PlanningVaccinationExportParams): Pr
   };
 
   const ws = workbook.addWorksheet("Planning vaccination", {
-    views: [{ state: "frozen", ySplit: 10, activeCell: "A11", showGridLines: true }],
+    views: [{ state: "frozen", ySplit: 6, activeCell: "A7", showGridLines: true }],
   });
   ws.columns = [
     { width: 16 }, // Age / Note

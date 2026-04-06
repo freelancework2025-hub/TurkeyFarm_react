@@ -89,7 +89,20 @@ export async function exportToExcel(params: ReportingJournalierExportParams): Pr
   });
 
   const maxCols = Math.max(EFFECTIF_COLS.length, DAILY_COLS.length);
-  ws.columns = Array.from({ length: maxCols }, () => ({ width: 14 }));
+  
+  // Set specific column widths - give more space to DATE MISE EN PLACE and TRAITEMENT columns
+  ws.columns = Array.from({ length: maxCols }, (_, index) => {
+    // DATE MISE EN PLACE column (index 0) gets more space
+    if (index === 0) {
+      return { width: 20 };
+    }
+    // TRAITEMENT column (index 9 in REPORTING_DAILY_TABLE_HEADERS) gets more space
+    if (index === 9) {
+      return { width: 18 };
+    }
+    // Other columns keep default width
+    return { width: 14 };
+  });
 
   // Title
   ws.mergeCells(1, 1, 1, maxCols);

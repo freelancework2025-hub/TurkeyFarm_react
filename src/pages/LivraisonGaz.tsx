@@ -31,6 +31,7 @@ import { resolvedQteFromString } from "@/lib/depensesDiversShared";
 import { exportToExcel, exportToPdf } from "@/lib/livraisonGazExport";
 import { LIVRAISON_GAZ_TABLE_HEADERS, livraisonGazEffectiveMontantForTotal } from "@/lib/livraisonGazShared";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { QuantityInput } from "@/components/ui/QuantityInput";
 
 /**
  * FICHE DE SUIVI DES LIVRAISONS GAZ
@@ -1124,34 +1125,14 @@ export default function LivraisonGaz() {
                                 {formatQtyDisplay(videSanitaire.qte)}
                               </span>
                             ) : (
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={
-                                  qteFocusRowId === VS_QTE_FOCUS_ID
-                                    ? videSanitaire.qte
-                                    : toOptionalNumber(videSanitaire.qte) != null
-                                      ? formatGroupedNumber(toOptionalNumber(videSanitaire.qte)!, 2)
-                                      : ""
-                                }
-                                onFocus={() => setQteFocusRowId(VS_QTE_FOCUS_ID)}
-                                onBlur={(e) => {
-                                  setQteFocusRowId(null);
-                                  const raw = e.target.value;
-                                  if (raw.trim() === "") {
-                                    updateVideSanitaire("qte", "");
-                                    return;
-                                  }
-                                  const n = resolvedQteFromString(raw);
-                                  if (n == null || !Number.isFinite(n)) {
-                                    updateVideSanitaire("qte", "");
-                                  } else {
-                                    updateVideSanitaire("qte", n.toFixed(2));
-                                  }
-                                }}
-                                onChange={(e) => updateVideSanitaire("qte", e.target.value)}
+                              <QuantityInput
+                                value={videSanitaire.qte}
+                                onChange={(value) => updateVideSanitaire("qte", value)}
+                                isFocused={qteFocusRowId === VS_QTE_FOCUS_ID}
+                                onFocusChange={(focused) => setQteFocusRowId(focused ? VS_QTE_FOCUS_ID : null)}
                                 placeholder="—"
-                                className="w-full min-w-[7.5rem] tabular-nums text-center bg-transparent border-0 outline-none text-sm"
+                                className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                showFormattedDisplay={true}
                               />
                             )}
                           </td>
@@ -1267,34 +1248,14 @@ export default function LivraisonGaz() {
                                     {formatQtyDisplay(row.qte)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={
-                                      qteFocusRowId === row.id
-                                        ? row.qte
-                                        : toOptionalNumber(row.qte) != null
-                                          ? formatGroupedNumber(toOptionalNumber(row.qte)!, 2)
-                                          : ""
-                                    }
-                                    onFocus={() => setQteFocusRowId(row.id)}
-                                    onBlur={(e) => {
-                                      setQteFocusRowId(null);
-                                      const raw = e.target.value;
-                                      if (raw.trim() === "") {
-                                        updateRow(row.id, "qte", "");
-                                        return;
-                                      }
-                                      const n = resolvedQteFromString(raw);
-                                      if (n == null || !Number.isFinite(n)) {
-                                        updateRow(row.id, "qte", "");
-                                      } else {
-                                        updateRow(row.id, "qte", n.toFixed(2));
-                                      }
-                                    }}
-                                    onChange={(e) => updateRow(row.id, "qte", e.target.value)}
+                                  <QuantityInput
+                                    value={row.qte}
+                                    onChange={(value) => updateRow(row.id, "qte", value)}
+                                    isFocused={qteFocusRowId === row.id}
+                                    onFocusChange={(focused) => setQteFocusRowId(focused ? row.id : null)}
                                     placeholder="—"
                                     className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                    showFormattedDisplay={true}
                                   />
                                 )}
                               </td>

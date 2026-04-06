@@ -23,6 +23,7 @@ import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/li
 import { sortSemaines } from "@/utils/semaineAgeUtils";
 import { exportToExcel, exportToPdf } from "@/lib/sortiesFermeExport";
 import { formatGroupedNumber, toOptionalNumber } from "@/lib/formatResumeAmount";
+import { QuantityInput } from "@/components/ui/QuantityInput";
 import { resolvedQteFromString } from "@/lib/depensesDiversShared";
 import {
   SORTIES_FERME_TABLE_HEADERS,
@@ -1153,34 +1154,14 @@ export default function SortiesFerme() {
                                     {formatQtyDisplay(row.qte_brute_kg)}
                                   </span>
                                 ) : (
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={
-                                      qteFocusRowId === row.id
-                                        ? row.qte_brute_kg
-                                        : toOptionalNumber(row.qte_brute_kg) != null
-                                          ? formatGroupedNumber(toOptionalNumber(row.qte_brute_kg)!, 2)
-                                          : ""
-                                    }
-                                    onFocus={() => setQteFocusRowId(row.id)}
-                                    onBlur={(e) => {
-                                      setQteFocusRowId(null);
-                                      const raw = e.target.value;
-                                      if (raw.trim() === "") {
-                                        updateRow(row.id, "qte_brute_kg", "");
-                                        return;
-                                      }
-                                      const n = resolvedQteFromString(raw);
-                                      if (n == null) {
-                                        updateRow(row.id, "qte_brute_kg", "");
-                                      } else {
-                                        updateRow(row.id, "qte_brute_kg", n.toFixed(2));
-                                      }
-                                    }}
-                                    onChange={(e) => updateRow(row.id, "qte_brute_kg", e.target.value)}
+                                  <QuantityInput
+                                    value={row.qte_brute_kg}
+                                    onChange={(value) => updateRow(row.id, "qte_brute_kg", value)}
+                                    isFocused={qteFocusRowId === row.id}
+                                    onFocusChange={(focused) => setQteFocusRowId(focused ? row.id : null)}
                                     placeholder="—"
                                     className="w-full min-w-[7.5rem] tabular-nums text-center"
+                                    showFormattedDisplay={true}
                                   />
                                 )}
                               </td>
