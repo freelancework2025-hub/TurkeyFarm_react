@@ -1,6 +1,9 @@
 import AppLayout from "@/components/layout/AppLayout";
 import { useAuth } from "@/contexts/AuthContext";
+import { useProfileImageCache } from "@/contexts/ProfileImageContext";
 import { api, type UserResponse, type UserRequest, type RoleResponse, type FarmResponse } from "@/lib/api";
+import { useProfileImage } from "@/hooks/useProfileImage";
+import { uploadProfileImageWithCache, deleteProfileImageWithCache, normalizeUserKey } from "@/lib/profileImageUtils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { Plus, Pencil, Trash2, ShieldAlert, Camera, Loader2, User } from "lucide-react";
@@ -97,6 +100,7 @@ function useFarms(user: { id: number } | null, isUserManager: boolean) {
 export default function Utilisateurs() {
   const { user, isUserManager, isAdmin, loading: authLoading } = useAuth();
   const { toast } = useToast();
+  const { forceRefreshAll } = useProfileImageCache();
   const queryClient = useQueryClient();
   const { data: users = [], isLoading, error } = useUsers(isUserManager, user, authLoading);
   useRoles(user);
@@ -105,11 +109,15 @@ export default function Utilisateurs() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<UserResponse | null>(null);
-  const [profileImageRefreshKey, setProfileImageRefreshKey] = useState(0);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
   const createProfileFileRef = useRef<File | null>(null);
   const [createProfilePreview, setCreateProfilePreview] = useState<string | null>(null);
   const [uploadingProfile, setUploadingProfile] = useState(false);
+  const [deletingProfile, setDeletingProfile] = useState(false);
+  
+  // Read profile image directly from database for editing user (like Profile page)
+  const editingUserKey = editingUser ? normalizeUserKey(editingUser) : null;
+  const editingUserProfileImageUrl = useProfileImage(editingUserKey);
   const [form, setForm] = useState<UserRequest & { password?: string; selectedFarmIds?: number[] }>({
     username: "",
     password: "",
@@ -141,6 +149,32 @@ export default function Utilisateurs() {
     });
   };
 
+  const handleDeleteProfileImage = async () => {
+    if (!editingUser || !editingUserProfileImageUrl) return;
+    setDeletingProfile(true);
+    try {
+      await deleteProfileImageWithCache(editingUser);
+      
+      // Update the local editingUser state to reflect the deletion
+      setEditingUser({ ...editingUser, hasProfileImage: false });
+      
+      // Force refresh all profile images to ensure synchronization
+      forceRefreshAll();
+      
+      // Force immediate refresh of users list to update hasProfileImage flags
+      await queryClient.refetchQueries({ queryKey: ["users"] });
+      
+      toast({ title: "Photo supprimée" });
+    } catch (err) {
+      toast({
+        title: err instanceof Error ? err.message : "Erreur lors de la suppression de la photo",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingProfile(false);
+    }
+  };
+
   const isResponsableFerme = form.roleNames?.[0] === "RESPONSABLE_FERME";
 
   const createMutation = useMutation({
@@ -150,7 +184,11 @@ export default function Utilisateurs() {
       const file = createProfileFileRef.current;
       if (file && newUser?.id) {
         try {
-          await api.users.uploadProfileImage(newUser.id, file);
+          await uploadProfileImageWithCache(newUser, file);
+          
+          // Force refresh all profile images
+          forceRefreshAll();
+          
           toast({ title: "Utilisateur créé avec photo" });
         } catch (err) {
           toast({
@@ -343,7 +381,12 @@ export default function Utilisateurs() {
                 return (
                   <TableRow key={u.id}>
                     <TableCell>
-                      <UserAvatar userId={u.id} hasProfileImage={u.hasProfileImage} size="sm" />
+                      <UserAvatar 
+                        userId={u.id} 
+                        hasProfileImage={true} 
+                        size="sm" 
+                        user={{ id: u.id, email: u.email }} 
+                      />
                     </TableCell>
                     <TableCell className="font-medium">{u.username}</TableCell>
                     <TableCell>{u.displayName ?? "—"}</TableCell>
@@ -405,7 +448,12 @@ export default function Utilisateurs() {
               <div className="flex items-center gap-4 pb-2 border-b border-border">
                 {editingUser ? (
                   <>
-                    <UserAvatar userId={editingUser.id} hasProfileImage={editingUser.hasProfileImage} refreshKey={profileImageRefreshKey} size="lg" />
+                    <UserAvatar 
+                      userId={editingUser.id} 
+                      hasProfileImage={true} 
+                      size="lg" 
+                      user={{ id: editingUser.id, email: editingUser.email }} 
+                    />
                     <div>
                       <p className="text-sm font-medium">Photo de profil</p>
                       <input
@@ -418,9 +466,18 @@ export default function Utilisateurs() {
                           if (!file || !editingUser) return;
                           setUploadingProfile(true);
                           try {
-                            await api.users.uploadProfileImage(editingUser.id, file);
-                            setProfileImageRefreshKey((k) => k + 1);
-                            queryClient.invalidateQueries({ queryKey: ["users"] });
+                            // Upload the image
+                            const updatedUser = await uploadProfileImageWithCache(editingUser, file);
+                            
+                            // Update the local editingUser state with the response from server
+                            setEditingUser(updatedUser);
+                            
+                            // Force refresh all profile images to ensure synchronization
+                            forceRefreshAll();
+                            
+                            // Force immediate refresh of users list to update hasProfileImage flags
+                            await queryClient.refetchQueries({ queryKey: ["users"] });
+                            
                             toast({ title: "Photo mise à jour" });
                           } catch (err) {
                             toast({
@@ -433,16 +490,30 @@ export default function Utilisateurs() {
                           }
                         }}
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => profileFileInputRef.current?.click()}
-                        disabled={uploadingProfile}
-                      >
-                        {uploadingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
-                        {" "}Changer la photo
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => profileFileInputRef.current?.click()}
+                          disabled={uploadingProfile || deletingProfile}
+                        >
+                          {uploadingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+                          {" "}Changer la photo
+                        </Button>
+                        {editingUserProfileImageUrl && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleDeleteProfileImage}
+                            disabled={uploadingProfile || deletingProfile}
+                            className="text-destructive hover:text-destructive"
+                          >
+                            {deletingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </>
                 ) : (

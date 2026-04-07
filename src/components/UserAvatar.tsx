@@ -1,5 +1,6 @@
 import { User } from "lucide-react";
 import { useProfileImage } from "@/hooks/useProfileImage";
+import { normalizeUserKey } from "@/lib/profileImageUtils";
 
 interface UserAvatarProps {
   userId: number;
@@ -8,13 +9,26 @@ interface UserAvatarProps {
   refreshKey?: number;
   className?: string;
   size?: "sm" | "md" | "lg";
+  /** Optional user object for better key resolution */
+  user?: { id: number; email?: string };
 }
 
 const sizeClasses = { sm: "w-8 h-8", md: "w-10 h-10", lg: "w-12 h-12" };
 const iconSizes = { sm: "w-4 h-4", md: "w-5 h-5", lg: "w-6 h-6" };
 
-export function UserAvatar({ userId, hasProfileImage = true, refreshKey = 0, className = "", size = "md" }: UserAvatarProps) {
-  const profileImageUrl = useProfileImage(hasProfileImage ? userId : null, refreshKey);
+export function UserAvatar({ 
+  userId, 
+  hasProfileImage = true, 
+  refreshKey = 0, 
+  className = "", 
+  size = "md",
+  user
+}: UserAvatarProps) {
+  // Use consistent user key strategy: prefer email if available, otherwise use id
+  const userKey = user ? normalizeUserKey(user) : userId;
+  
+  // Only fetch if hasProfileImage is true to avoid unnecessary 404s
+  const profileImageUrl = useProfileImage(hasProfileImage ? userKey : null, refreshKey);
 
   return (
     <div

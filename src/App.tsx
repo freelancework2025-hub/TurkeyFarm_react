@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { ProfileImageProvider } from "@/contexts/ProfileImageContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import RoleRestrictedRoute from "@/components/RoleRestrictedRoute";
 import Auth from "./pages/Auth";
@@ -43,7 +44,8 @@ const App = () => (
         }}
       >
         <AuthProvider>
-          <Routes>
+          <ProfileImageProvider>
+            <Routes>
             <Route path="/" element={<Navigate to="/auth" replace />} />
             <Route path="/auth" element={<Auth />} />
             <Route
@@ -237,7 +239,8 @@ const App = () => (
               }
             />
             <Route path="*" element={<NotFound />} />
-          </Routes>
+            </Routes>
+          </ProfileImageProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

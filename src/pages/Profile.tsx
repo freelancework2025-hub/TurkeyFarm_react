@@ -3,7 +3,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import { useAuth } from "@/contexts/AuthContext";
 import { User, Mail, Phone, Building2, Shield, BadgeCheck, Camera, Loader2, Trash2 } from "lucide-react";
 import { useProfileImage } from "@/hooks/useProfileImage";
-import { api } from "@/lib/api";
+import { uploadProfileImageWithCache, deleteProfileImageWithCache, normalizeUserKey } from "@/lib/profileImageUtils";
 import { useToast } from "@/hooks/use-toast";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -16,20 +16,19 @@ const ROLE_LABELS: Record<string, string> = {
 export default function Profile() {
   const { user, selectedRole, selectedFarmName, allFarmsMode, hasFullAccess } = useAuth();
   const { toast } = useToast();
-  const [imageRefreshKey, setImageRefreshKey] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  /** Profile image API uses email as the canonical user key; falls back to numeric id if email is missing. */
-  const profileUserKey = user ? user.email?.trim() || user.id : null;
-  const profileImageUrl = useProfileImage(profileUserKey, imageRefreshKey);
+  
+  // Use consistent user key strategy
+  const profileUserKey = user ? normalizeUserKey(user) : null;
+  const profileImageUrl = useProfileImage(profileUserKey);
 
   const handleDeleteImage = async () => {
     if (!user || !profileImageUrl || profileUserKey === null) return;
     setDeleting(true);
     try {
-      await api.users.deleteProfileImage(profileUserKey);
-      setImageRefreshKey((k) => k + 1);
+      await deleteProfileImageWithCache(user);
       toast({ title: "Photo supprimée" });
     } catch {
       toast({ title: "Erreur lors de la suppression", variant: "destructive" });
@@ -98,12 +97,13 @@ export default function Profile() {
                         if (!file || !user) return;
                         setUploading(true);
                         try {
-                          const key = user.email?.trim() || user.id;
-                          await api.users.uploadProfileImage(key, file);
-                          setImageRefreshKey((k) => k + 1);
+                          await uploadProfileImageWithCache(user, file);
                           toast({ title: "Photo mise à jour" });
-                        } catch {
-                          /* API error — logged in backend only */
+                        } catch (err) {
+                          toast({
+                            title: err instanceof Error ? err.message : "Erreur lors de la mise à jour de la photo",
+                            variant: "destructive",
+                          });
                         } finally {
                           setUploading(false);
                           e.target.value = "";
