@@ -274,8 +274,17 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
         (list.some(row => row.mortaliteTransportCumul == null) || // Missing transport cumul
          (!isFirstWeek && list.every(row => row.mortaliteTransportCumul === 0))); // All zeros for non-S1 weeks
       
-      // If merged journalier/hebdo should be persisted OR transport cumul needs a backend pass
-      if ((needsPersistMergedWeek || needsTransportRecalculation) && (canCreate || canUpdate) && !effectiveReadOnly) {
+      // Check if cumulative values are inconsistent (potential backend calculation bug)
+      const needsCumulativeRecalculation = list.length > 0 && 
+        list.some((row, index, arr) => {
+          if (index === 0) return false; // Skip first row
+          const prevRow = arr[index - 1];
+          const expectedCumul = (prevRow.mortaliteCumul || 0) + (row.mortaliteNbre || 0);
+          return row.mortaliteCumul != null && row.mortaliteCumul !== expectedCumul;
+        });
+      
+      // If merged journalier/hebdo should be persisted OR transport cumul needs a backend pass OR cumulative values are wrong
+      if ((needsPersistMergedWeek || needsTransportRecalculation || needsCumulativeRecalculation) && (canCreate || canUpdate) && !effectiveReadOnly) {
         try {
           if (needsPersistMergedWeek) {
             const weekEffectifDepart =
@@ -303,6 +312,11 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
             await api.suiviTechniqueHebdo.getTransportCumul({ 
               farmId, lot, sex, batiment, semaine: semaineCanon, persist: true 
             });
+          } else if (needsCumulativeRecalculation) {
+            // Force recalculation of all cumulative values due to inconsistency
+            await api.suiviTechniqueHebdo.recalculateCumulative({ 
+              farmId, lot, sex, batiment, semaine: semaineCanon 
+            });
           }
           
           // Reload data to get the calculated transport cumulative values
@@ -318,7 +332,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
           setHasSavedEffectif(!!savedEffectif);
           return; // Skip the rest of the loading logic since we've already set the rows
         } catch (error) {
-          console.warn("Auto-recalculation of transport cumulative failed:", error);
+          console.warn("Auto-recalculation failed:", error);
         }
       }
       
@@ -997,6 +1011,19 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                       : "—";
                 const apiCumulParsed = row.mortaliteCumul.trim() === "" ? null : parseInt(row.mortaliteCumul, 10);
                 const compCumulParsed = comp?.mortaliteCumul ? parseInt(comp.mortaliteCumul, 10) : null;
+                
+                // Debug logging for cumulative values
+                if (row.recordDate === "2026-04-07") { // Day 6 from the user's example
+                  console.log("DEBUG Day 6 cumulative values:", {
+                    recordDate: row.recordDate,
+                    apiCumulRaw: row.mortaliteCumul,
+                    apiCumulParsed,
+                    compCumulRaw: comp?.mortaliteCumul,
+                    compCumulParsed,
+                    mortaliteNbre: row.mortaliteNbre
+                  });
+                }
+                
                 /** API may return 0 from uninitialized DB columns while client running cumul is correct */
                 const preferClientCumul =
                   apiCumulParsed === 0 &&

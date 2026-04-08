@@ -30,7 +30,8 @@ import { exportToExcel, exportToPdf } from "@/lib/fournisseursExport";
  * Permission matrix:
  * - ADMINISTRATEUR / RESPONSABLE_TECHNIQUE: full CRUD; can add/remove/modify any fournisseur columns,
  *   designation rows, or price cells; can delete any saved data.
- * - BACKOFFICE_EMPLOYER: read-only (isReadOnly); no add/save/remove.
+ * - BACKOFFICE_EMPLOYER: full CRUD access; can add/remove/modify any fournisseur columns,
+ *   designation rows, or price cells; can delete any saved data.
  * - RESPONSABLE_FERME: can add new fournisseur columns and fill them, add new designation rows, and save.
  *   Once a fournisseur or a designation row has saved data, they cannot modify or delete it; they can only
  *   add further columns or rows and save again.

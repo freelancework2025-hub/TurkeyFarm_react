@@ -41,7 +41,7 @@ type AuthState = {
  * |-------------------------|------|-------------|---------------------------|--------|--------|
  * | ADMINISTRATEUR          |  ✓   |     ✓       |            ✓              |   ✓    |   ✓    |
  * | RESPONSABLE_TECHNIQUE   |  ✓   |     ✓       |            ✓              |   ✓    |   ✓    |
- * | BACKOFFICE_EMPLOYER     |  ✓   |     ✗       |            ✗              |   ✗    |   ✗    |
+ * | BACKOFFICE_EMPLOYER     |  ✓   |     ✓       |            ✓              |   ✓    |   ✓    |
  * | RESPONSABLE_FERME       |  ✓   |     ✓       |            ✗              |   ✗    |   ✗    |
  */
 type AuthContextValue = AuthState & {
@@ -57,6 +57,8 @@ type AuthContextValue = AuthState & {
   isUserManager: boolean;
   /** @deprecated Use isUserManager. Kept for compatibility. */
   isAdmin: boolean;
+  /** True if user can manage users (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE only, excludes BACKOFFICE_EMPLOYER). */
+  canManageUsers: boolean;
   /** 
    * The selected farm ID for this session (from JWT).
    * All data access is filtered by this farm.
@@ -72,32 +74,32 @@ type AuthContextValue = AuthState & {
   
   /** 
    * True if user can CREATE new platform data records.
-   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME
+   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME, BACKOFFICE_EMPLOYER
    */
   canCreate: boolean;
 
   /**
    * True if user may add a new lot from the lot selector (Nouveau lot).
-   * Intended for the InfosSetup page only (Nouveau lot) — RT/Admin. Other pages list existing lots only.
+   * Intended for the InfosSetup page only (Nouveau lot) — RT/Admin/BACKOFFICE_EMPLOYER. Other pages list existing lots only.
    */
   canCreateNewLot: boolean;
   
   /** 
    * True if user can UPDATE existing platform data records.
-   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only
+   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, BACKOFFICE_EMPLOYER
    * RESPONSABLE_FERME cannot modify data after saving.
    */
   canUpdate: boolean;
   
   /** 
    * True if user can DELETE platform data records.
-   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME
+   * Allowed: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, BACKOFFICE_EMPLOYER, RESPONSABLE_FERME
    * Note: RESPONSABLE_FERME can only delete unsaved rows (handled at component level)
    */
   canDelete: boolean;
   
   /** 
-   * True if user has full CRUD access (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE).
+   * True if user has full CRUD access (ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, or BACKOFFICE_EMPLOYER).
    */
   hasFullAccess: boolean;
   
@@ -108,8 +110,8 @@ type AuthContextValue = AuthState & {
   canAccessAllFarms: boolean;
   
   /** 
-   * True if user is read-only (BACKOFFICE_EMPLOYER).
-   * Cannot create, update, or delete any data.
+   * @deprecated BACKOFFICE_EMPLOYER now has full CRUD access. This property is no longer accurate.
+   * Use specific permission properties instead.
    */
   isReadOnly: boolean;
   
@@ -341,38 +343,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   
   // ==================== Permission Calculations ====================
   
-  /** ADMINISTRATEUR or RESPONSABLE_TECHNIQUE have full access */
-  const hasFullAccess = isAdministrateur || isResponsableTechnique;
+  /** ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, or BACKOFFICE_EMPLOYER have full access */
+  const hasFullAccess = isAdministrateur || isResponsableTechnique || isBackofficeEmployer;
   
-  /** Can manage users (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE) */
+  /** Can manage users (ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, or BACKOFFICE_EMPLOYER) */
   const isUserManager = hasFullAccess;
   
+  /** Can manage users (ADMINISTRATEUR or RESPONSABLE_TECHNIQUE only, excludes BACKOFFICE_EMPLOYER) */
+  const canManageUsers = isAdministrateur || isResponsableTechnique;
+  
   /** 
-   * Can CREATE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME
-   * BACKOFFICE_EMPLOYER cannot create
+   * Can CREATE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME, BACKOFFICE_EMPLOYER
    */
-  const canCreate = hasFullAccess || isResponsableFerme;
+  const canCreate = hasFullAccess || isResponsableFerme || isBackofficeEmployer;
 
-  /** New lot registration in UI: RT and Admin only (RF / back-office use existing lots). */
-  const canCreateNewLot = hasFullAccess;
+  /** New lot registration in UI: RT, Admin, and BACKOFFICE_EMPLOYER (RF uses existing lots). */
+  const canCreateNewLot = hasFullAccess || isBackofficeEmployer;
   
   /** 
-   * Can UPDATE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE only
+   * Can UPDATE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, BACKOFFICE_EMPLOYER
    * RESPONSABLE_FERME cannot modify after saving
-   * BACKOFFICE_EMPLOYER is read-only
    */
-  const canUpdate = hasFullAccess;
+  const canUpdate = hasFullAccess || isBackofficeEmployer;
   
   /** 
-   * Can DELETE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, RESPONSABLE_FERME
+   * Can DELETE: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, BACKOFFICE_EMPLOYER, RESPONSABLE_FERME
    * RESPONSABLE_FERME can delete unsaved rows only (handled at component level)
    */
-  const canDelete = hasFullAccess || isResponsableFerme;
+  const canDelete = hasFullAccess || isResponsableFerme || isBackofficeEmployer;
   
   /** 
-   * Read-only: BACKOFFICE_EMPLOYER
+   * @deprecated BACKOFFICE_EMPLOYER now has full CRUD access. This is always false.
    */
-  const isReadOnly = isBackofficeEmployer;
+  const isReadOnly = false;
   
   /**
    * Can access all farms: ADMINISTRATEUR, RESPONSABLE_TECHNIQUE, BACKOFFICE_EMPLOYER
@@ -395,6 +398,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       isUserManager,
       isAdmin: isUserManager,
+      canManageUsers,
       selectedFarmId,
       selectedFarmName,
       farmId,
@@ -413,7 +417,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isResponsableTechnique,
     }),
     [
-      state, login, logout, isUserManager, selectedFarmId, selectedFarmName, farmId, farmName,
+      state, login, logout, isUserManager, canManageUsers, selectedFarmId, selectedFarmName, farmId, farmName,
       canCreate, canCreateNewLot, canUpdate, canDelete, hasFullAccess, canAccessAllFarms, isReadOnly,
       isResponsableFerme, isBackofficeEmployer, isAdministrateur, isResponsableTechnique
     ]

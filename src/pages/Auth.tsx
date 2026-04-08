@@ -271,9 +271,6 @@ export default function Auth() {
                 <div className="p-3 bg-primary/10 rounded-md border border-primary/20">
                   <p className="text-sm text-primary">
                     <strong>Mode toutes fermes:</strong> Vous aurez accès aux données de toutes les fermes.
-                    {selectedRole === 'BACKOFFICE_EMPLOYER' && (
-                      <span className="block mt-1 text-xs text-muted-foreground">(Lecture seule)</span>
-                    )}
                   </p>
                 </div>
               )}
@@ -331,7 +328,6 @@ export default function Auth() {
               {(selectedRole === 'ADMINISTRATEUR' || selectedRole === 'RESPONSABLE_TECHNIQUE' || selectedRole === 'BACKOFFICE_EMPLOYER') && !requiresFarm && (
                 <p className="text-xs text-center text-muted-foreground">
                   Vous accéderez aux données de <strong>toutes les fermes</strong>
-                  {selectedRole === 'BACKOFFICE_EMPLOYER' && ' (lecture seule)'}
                 </p>
               )}
             </form>

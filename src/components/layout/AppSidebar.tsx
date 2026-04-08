@@ -87,7 +87,7 @@ const NAV_SECTIONS_BASE = [
 export default function AppSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { logout, isUserManager, hasFullAccess, isBackofficeEmployer, user } = useAuth();
+  const { logout, canManageUsers, hasFullAccess, isBackofficeEmployer, user } = useAuth();
   const showEmployesLink = hasFullAccess || isBackofficeEmployer;
   const [openSections, setOpenSections] = useState<string[]>(["Suivi charge", "Suivi technique", "Suivi de sortie"]);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -99,7 +99,7 @@ export default function AppSidebar() {
   const navSections = NAV_SECTIONS_BASE.map((section) => {
     if ("requiresEmployesAccess" in section && section.requiresEmployesAccess && !showEmployesLink) return null;
     if (section.path !== undefined && section.path !== "/utilisateurs") return section;
-    if (section.path === "/utilisateurs" && !isUserManager) return null;
+    if (section.path === "/utilisateurs" && !canManageUsers) return null;
     if (!section.children) return section;
     const filteredChildren = section.children.filter((child: { label: string; path: string; rolesOnly?: readonly string[] }) => {
       if (!child.rolesOnly) return true;

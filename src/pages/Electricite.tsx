@@ -58,7 +58,7 @@ const ELECTRICITE_HEADER_CLASS = {
   "N° BR": "min-w-[90px]",
   QTE: "min-w-[128px] w-[8.5rem] !text-center",
   PRIX: "min-w-[80px] !text-center",
-  MONTANT: "min-w-[90px] !text-center",
+  MONTANT: "min-w-[90px] !text-center w-auto",
 } as const satisfies Record<(typeof ELECTRICITE_TABLE_HEADERS)[number], string>;
 
 interface ElectriciteRow {
@@ -944,8 +944,8 @@ export default function Electricite() {
                 )}
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="table-farm">
+              <div className="overflow-x-auto w-full">
+                <table className="table-farm w-full min-w-full">
                   <thead>
                     <tr>
                       {ELECTRICITE_TABLE_HEADERS.map((label) => (
@@ -964,7 +964,7 @@ export default function Electricite() {
                         </th>
                       ))}
                       <th className="w-9 min-w-0 max-w-9 shrink-0 !px-1" title="Enregistrer la ligne">✓</th>
-                      <th className="w-10"></th>
+                      <th className="w-14 max-w-14 shrink-0 !px-1"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1126,9 +1126,8 @@ export default function Electricite() {
                               <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                                 {formatGroupedNumber(weekTotal.montant, 2)}
                               </td>
-                              <td className="text-center" />
                               <td className="w-9 max-w-9 !px-1" />
-                              <td />
+                              <td className="w-14 max-w-14 shrink-0 !px-1" />
                             </tr>
                             <tr className="bg-muted/50">
                               <td colSpan={5} className="text-sm font-medium text-muted-foreground">
@@ -1144,9 +1143,8 @@ export default function Electricite() {
                               <td className="text-center tabular-nums whitespace-nowrap font-semibold">
                                 {formatGroupedNumber(cumulForSelectedSemaine.montant, 2)}
                               </td>
-                              <td className="text-center" />
                               <td className="w-9 max-w-9 !px-1" />
-                              <td />
+                              <td className="w-14 max-w-14 shrink-0 !px-1" />
                             </tr>
                           </>
                         )}

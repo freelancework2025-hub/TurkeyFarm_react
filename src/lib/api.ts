@@ -1113,6 +1113,21 @@ export const api = {
         token: token ?? getStoredToken(),
       });
     },
+    recalculateCumulative: (
+      params: { farmId: number; lot: string; sex: string; batiment: string; semaine: string },
+      token?: string | null
+    ) => {
+      const search = new URLSearchParams();
+      search.set("farmId", String(params.farmId));
+      search.set("lot", params.lot);
+      search.set("sex", params.sex);
+      search.set("batiment", params.batiment);
+      search.set("semaine", canonicalSemaine(params.semaine));
+      return apiFetch<void>(`/api/suivi-technique-hebdo/recalculate-cumulative?${search.toString()}`, {
+        method: "POST",
+        token: token ?? getStoredToken(),
+      });
+    },
   },
   /** Suivi de Production Hebdomadaire — REPORT (previous week total), VENTE, CONSO, AUTRE, TOTAL. Lot → Semaine → Batiment. */
   suiviProductionHebdo: {

@@ -118,7 +118,7 @@ export default function ProductionTrackingTable({ farmId, lot, semaine, sex, bat
   const totalNbre = (Number.isFinite(reportNbre) ? reportNbre : 0) + vN + cN + aN;
   const totalPoids = reportPoids + vP + cP + aP;
 
-  // Permission: RESPONSABLE_FERME can create but not update; BACKOFFICE_EMPLOYER read-only
+  // Permission: RESPONSABLE_FERME can create but not update; BACKOFFICE_EMPLOYER has full CRUD access
   const hasExistingRecord = data?.id != null;
   const canEditProduction = !isReadOnly && (hasExistingRecord ? canUpdate : canCreate);
 

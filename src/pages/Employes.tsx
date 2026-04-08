@@ -54,7 +54,7 @@ import { Label } from "@/components/ui/label";
 /**
  * Liste des employés — Nom, Prénom, Salaire. Global list, not tied to any farm.
  * ADMINISTRATEUR / RESPONSABLE_TECHNIQUE: full CRUD.
- * BACKOFFICE_EMPLOYER: read-only (link visible, page view only).
+ * BACKOFFICE_EMPLOYER: full CRUD access (same as RESPONSABLE_TECHNIQUE).
  */
 
 const EMPLOYES_HEADER_CLASS: Record<(typeof EMPLOYES_TABLE_HEADERS)[number], string> = {

@@ -32,8 +32,8 @@ const ROWS: MetricRow[] = [
   { key: "viabilite", label: "VIABILITÉ", unit: "%" },
 ];
 
-/** REEL computed by backend: Indice = CUMUL ALIMENT CONSOMMÉ (Suivi consommation) / POIDS VIF PRODUIT (STOCK); Viabilité = 100% − cumul mortalité % fin de semaine */
-const COMPUTED_REEL_KEYS: MetricKey[] = ["indiceConsommation", "viabilite"];
+/** REEL computed by backend: Indice = CUMUL ALIMENT CONSOMMÉ (Suivi consommation) / POIDS VIF PRODUIT (STOCK); Viabilité = 100% − cumul mortalité % fin de semaine; GMQ = POIDS MOYEN / âge en jours */
+const COMPUTED_REEL_KEYS: MetricKey[] = ["indiceConsommation", "viabilite", "gmq"];
 function isReelComputed(key: MetricKey): boolean {
   return COMPUTED_REEL_KEYS.includes(key);
 }
@@ -176,7 +176,7 @@ export default function PerformanceTrackingTable({
     poidsMoyenReel: parseOptional(reel.poidsMoyen),
     homogeneiteReel: parseOptional(reel.homogeneite),
     indiceConsommationReel: null,
-    gmqReel: parseOptional(reel.gmq),
+    gmqReel: null,
     viabiliteReel: null,
   });
 
@@ -326,9 +326,23 @@ export default function PerformanceTrackingTable({
                   </td>
                   <td className="align-middle border-l border-border text-center">
                     {isReelComputed(row.key) ? (
-                      <div className={ecartCell} title={row.key === "indiceConsommation" ? "Calculé automatiquement : CUMUL ALIMENT CONSOMMÉ (Suivi consommation) / POIDS VIF PRODUIT (STOCK)" : "100% − cumul mortalité % fin de semaine"}>
+                      <div className={ecartCell} title={
+                        row.key === "indiceConsommation" 
+                          ? "Calculé automatiquement : CUMUL ALIMENT CONSOMMÉ (Suivi consommation) / POIDS VIF PRODUIT (STOCK)" 
+                          : row.key === "viabilite"
+                          ? "Calculé automatiquement : 100% − cumul mortalité % fin de semaine"
+                          : row.key === "gmq"
+                          ? "Calculé automatiquement : POIDS MOYEN (g) / âge en jours"
+                          : "Calculé automatiquement"
+                      }>
                         {formatVal(
-                          row.key === "indiceConsommation" ? toNum(data?.indiceConsommationReel) : toNum(data?.viabiliteReel),
+                          row.key === "indiceConsommation" 
+                            ? toNum(data?.indiceConsommationReel) 
+                            : row.key === "viabilite"
+                            ? toNum(data?.viabiliteReel)
+                            : row.key === "gmq"
+                            ? toNum(data?.gmqReel)
+                            : null,
                           row.unit
                         )}
                       </div>

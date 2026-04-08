@@ -1068,7 +1068,7 @@ export default function ProduitsVeterinaires() {
                                       <Eraser className="w-4 h-4" />
                                     </button>
                                   )}
-                                  {(row.serverId == null || hasFullAccess) && (
+                                  {(row.serverId == null || hasFullAccess) && index >= MIN_TABLE_ROWS && (
                                     <button
                                       type="button"
                                       onClick={() => removeRow(row.id)}

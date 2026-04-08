@@ -98,13 +98,13 @@ function useFarms(user: { id: number } | null, isUserManager: boolean) {
 }
 
 export default function Utilisateurs() {
-  const { user, isUserManager, isAdmin, loading: authLoading } = useAuth();
+  const { user, canManageUsers, loading: authLoading } = useAuth();
   const { toast } = useToast();
   const { forceRefreshAll } = useProfileImageCache();
   const queryClient = useQueryClient();
-  const { data: users = [], isLoading, error } = useUsers(isUserManager, user, authLoading);
+  const { data: users = [], isLoading, error } = useUsers(canManageUsers, user, authLoading);
   useRoles(user);
-  const { data: farms = [], isLoading: farmsLoading, error: farmsError, refetch: refetchFarms } = useFarms(user, isUserManager);
+  const { data: farms = [], isLoading: farmsLoading, error: farmsError, refetch: refetchFarms } = useFarms(user, canManageUsers);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserResponse | null>(null);
@@ -320,7 +320,7 @@ export default function Utilisateurs() {
     }
   };
 
-  if (!isAdmin) {
+  if (!canManageUsers) {
     return (
       <AppLayout>
         <div className="page-header">
