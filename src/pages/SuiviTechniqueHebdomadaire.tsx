@@ -33,7 +33,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { api, type FarmResponse, type SetupInfoResponse, type LotWithStatusResponse, getStoredSelectedFarm } from "@/lib/api";
 import { isClosedLotBlockedForSession, type ClosedLotSessionContext } from "@/lib/lotAccess";
-import { exportToExcel, exportToPdf } from "@/lib/suiviTechniqueBatimentExport";
+import { exportWeeklyTrackingToExcel, exportWeeklyTrackingToPdf } from "@/lib/weeklyTrackingExportHelper";
 import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { QuantityInput } from "@/components/ui/QuantityInput";
 import { canonicalSemaine } from "@/lib/semaineCanonical";
@@ -166,6 +166,8 @@ export default function SuiviTechniqueHebdomadaire() {
   /** Dialog: delete all data for the active sex. */
   const [deleteSexDialogOpen, setDeleteSexDialogOpen] = useState(false);
   const [deleteSexLoading, setDeleteSexLoading] = useState(false);
+  /** Export functions from WeeklyTrackingTable */
+  const [weeklyTrackingExportFunctions, setWeeklyTrackingExportFunctions] = useState<any>(null);
 
   // Get unique buildings from setupInfo data, then add default batiments and extra batiments
   const allBatiments = useMemo(() => {
@@ -463,7 +465,11 @@ export default function SuiviTechniqueHebdomadaire() {
   const handleExportBatiment = useCallback(
     async (batiment: string, sex: string, format: "excel" | "pdf") => {
       if (!reportingFarmId || !lotParam.trim() || !selectedSemaine) return;
+      
+      // For now, use the old export method since we don't have access to the WeeklyTrackingTable display data here
+      // This will be updated when we refactor the batiment selection to include the display data
       try {
+        const { exportToExcel: oldExportToExcel, exportToPdf: oldExportToPdf } = await import("@/lib/suiviTechniqueBatimentExport");
         const params = {
           farmName: exportFarmName,
           farmId: reportingFarmId,
@@ -473,10 +479,10 @@ export default function SuiviTechniqueHebdomadaire() {
           sex,
         };
         if (format === "excel") {
-          await exportToExcel(params);
+          await oldExportToExcel(params);
           toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
         } else {
-          await exportToPdf(params);
+          await oldExportToPdf(params);
           toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
         }
       } catch {
@@ -978,16 +984,17 @@ export default function SuiviTechniqueHebdomadaire() {
                       <DropdownMenuContent align="start" className="min-w-[180px]">
                         <DropdownMenuItem
                           onClick={async () => {
-                            if (!reportingFarmId) return;
+                            if (!reportingFarmId || !weeklyTrackingExportFunctions) return;
                             try {
-                              await exportToExcel({
+                              const displayData = weeklyTrackingExportFunctions.getExportDisplayData();
+                              await exportWeeklyTrackingToExcel({
                                 farmName: exportFarmName,
                                 farmId: reportingFarmId,
                                 lot: lotParam,
                                 semaine: selectedSemaine,
                                 batiment: selectedBatiment,
                                 sex: TAB_TO_API_SEX[activeTab],
-                              });
+                              }, displayData);
                               toast({ title: "Export Excel", description: "Le fichier Excel a été téléchargé." });
                             } catch {
                               toast({ title: "Erreur", description: "Impossible de générer le fichier Excel.", variant: "destructive" });
@@ -1000,16 +1007,17 @@ export default function SuiviTechniqueHebdomadaire() {
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={async () => {
-                            if (!reportingFarmId) return;
+                            if (!reportingFarmId || !weeklyTrackingExportFunctions) return;
                             try {
-                              await exportToPdf({
+                              const displayData = weeklyTrackingExportFunctions.getExportDisplayData();
+                              await exportWeeklyTrackingToPdf({
                                 farmName: exportFarmName,
                                 farmId: reportingFarmId,
                                 lot: lotParam,
                                 semaine: selectedSemaine,
                                 batiment: selectedBatiment,
                                 sex: TAB_TO_API_SEX[activeTab],
-                              });
+                              }, displayData);
                               toast({ title: "Export PDF", description: "Le fichier PDF a été téléchargé." });
                             } catch {
                               toast({ title: "Erreur", description: "Impossible de générer le fichier PDF.", variant: "destructive" });
@@ -1122,6 +1130,7 @@ export default function SuiviTechniqueHebdomadaire() {
                     maleSetupInfo={getSetupInfoForBatimentSex(selectedBatiment, "Mâle")}
                     femelleSetupInfo={getSetupInfoForBatimentSex(selectedBatiment, "Femelle")}
                     forceWeeklyReadOnly={true}
+                    onWeeklyTrackingExportReady={setWeeklyTrackingExportFunctions}
                   />
                 </div>
               )}

@@ -16,6 +16,7 @@ import {
   SUIVI_HEBDO_SUBHEADER_LABEL,
   SUIVI_HEBDO_SUBHEADER_TH_CLASS,
   suiviHebdoTransportRowLabelColSpan,
+  getTransportMortaliteLabel,
 } from "@/lib/suiviTechniqueHebdomadaireShared";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -215,9 +216,13 @@ interface WeeklyTrackingTableProps {
    * regardless of role permissions. Useful when the table is treated as calculated-only.
    */
   forceReadOnly?: boolean;
+  /** Called when export functions are ready - provides access to export display data */
+  onExportReady?: (exportFunctions: {
+    getExportDisplayData: () => any;
+  }) => void;
 }
 
-export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batiment = "B1", effectifInitial, onSaveSuccess, forceReadOnly = false }: WeeklyTrackingTableProps) {
+export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batiment = "B1", effectifInitial, onSaveSuccess, forceReadOnly = false, onExportReady }: WeeklyTrackingTableProps) {
   const today = new Date().toISOString().split("T")[0];
   const { isReadOnly, canCreate, canUpdate, canDelete } = useAuth();
   const { toast } = useToast();
@@ -844,6 +849,68 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
     };
   }, [mortaliteTransportStartingPoint, effectifInitial]);
 
+  // Export data extraction function - provides display data for export
+  const getExportDisplayData = useCallback(() => {
+    // Format rows for export with computed values
+    const exportRows = rows.map(row => {
+      const comp = mortalityComputedByRowId.get(row.id);
+      
+      // Use computed values if available, otherwise use row values
+      const mortalitePct = row.mortalitePct.trim() !== "" 
+        ? row.mortalitePct 
+        : comp?.mortalitePct ? comp.mortalitePct.replace(".", ",") : "";
+      
+      const mortaliteCumul = row.mortaliteCumul.trim() !== "" 
+        ? row.mortaliteCumul 
+        : comp?.mortaliteCumul || "";
+      
+      const mortaliteCumulPct = row.mortaliteCumulPct.trim() !== "" 
+        ? row.mortaliteCumulPct 
+        : comp?.mortaliteCumulPct ? comp.mortaliteCumulPct.replace(".", ",") : "";
+
+      return {
+        id: row.id,
+        recordDate: row.recordDate,
+        ageJour: row.ageJour,
+        mortaliteNbre: row.mortaliteNbre,
+        mortalitePct: mortalitePct ? `${mortalitePct} %` : "",
+        mortaliteCumul: mortaliteCumul,
+        mortaliteCumulPct: mortaliteCumulPct ? `${mortaliteCumulPct} %` : "",
+        consoEauL: row.consoEauL,
+        tempMin: row.tempMin,
+        tempMax: row.tempMax,
+        vaccination: row.vaccination,
+        traitement: row.traitement,
+        observation: row.observation,
+      };
+    });
+
+    return {
+      rows: exportRows,
+      effectifDepart,
+      mortaliteTransportDisplay,
+      weeklyTotals,
+      totalCumulFooterDisplay,
+      effectifInitial,
+      setup: null, // Will be fetched by export function if needed
+    };
+  }, [
+    rows, 
+    mortalityComputedByRowId, 
+    effectifDepart, 
+    mortaliteTransportDisplay, 
+    weeklyTotals, 
+    totalCumulFooterDisplay, 
+    effectifInitial
+  ]);
+
+  // Expose export function for parent components
+  useEffect(() => {
+    if (onExportReady && !loading) {
+      onExportReady({ getExportDisplayData });
+    }
+  }, [onExportReady, getExportDisplayData, loading]);
+
   if (loading) {
     return (
       <div className="bg-card rounded-lg border border-border shadow-sm p-8 flex items-center justify-center gap-2 text-muted-foreground">
@@ -978,7 +1045,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                   colSpan={suiviHebdoTransportRowLabelColSpan()}
                   className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle"
                 >
-                  MORTALITE DU TRANSPORT
+                  {getTransportMortaliteLabel(semaineCanon)}
                 </td>
                 <td className="border-r border-border px-1 py-2 text-center tabular-nums align-middle bg-amber-100/80 dark:bg-amber-950/40">
                   {mortaliteTransportDisplay == null

@@ -109,3 +109,15 @@ export const SUIVI_HEBDO_PRIMARY_HEADER_GROUPS = [
 export function suiviHebdoTransportRowLabelColSpan(): number {
   return 4;
 }
+
+/**
+ * Get the appropriate label for the transport mortality row based on semaine.
+ * S1: "MORTALITE DU TRANSPORT"
+ * S2+: "report mortalité"
+ */
+export function getTransportMortaliteLabel(semaine: string): string {
+  const match = semaine.trim().match(/^S(\d+)$/i);
+  if (!match) return "MORTALITE DU TRANSPORT";
+  const weekNum = parseInt(match[1], 10);
+  return weekNum >= 2 ? "report mortalité" : "MORTALITE DU TRANSPORT";
+}

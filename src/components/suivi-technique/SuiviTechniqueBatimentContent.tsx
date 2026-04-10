@@ -24,6 +24,8 @@ export interface SuiviTechniqueBatimentContentProps {
   femelleSetupInfo?: SetupInfoResponse | null;
   /** Force Suivi Hebdomadaire table to be read-only for everyone. */
   forceWeeklyReadOnly?: boolean;
+  /** Called when WeeklyTrackingTable export functions are ready */
+  onWeeklyTrackingExportReady?: (exportFunctions: any) => void;
 }
 
 /**
@@ -44,6 +46,7 @@ export default function SuiviTechniqueBatimentContent({
   maleSetupInfo: propMaleSetupInfo,
   femelleSetupInfo: propFemelleSetupInfo,
   forceWeeklyReadOnly = false,
+  onWeeklyTrackingExportReady,
 }: SuiviTechniqueBatimentContentProps) {
   const [maleSetup, setMaleSetup] = useState<SuiviTechniqueSetupResponse | null>(null);
   const [femelleSetup, setFemelleSetup] = useState<SuiviTechniqueSetupResponse | null>(null);
@@ -100,6 +103,7 @@ export default function SuiviTechniqueBatimentContent({
             effectifInitial={getMaleEffectif()}
             onSaveSuccess={onRefreshStock}
             forceReadOnly={forceWeeklyReadOnly}
+            onExportReady={activeTab === "male" ? onWeeklyTrackingExportReady : undefined}
           />
           <ProductionTrackingTable
             farmId={farmId}
@@ -163,6 +167,7 @@ export default function SuiviTechniqueBatimentContent({
             effectifInitial={getFemelleEffectif()}
             onSaveSuccess={onRefreshStock}
             forceReadOnly={forceWeeklyReadOnly}
+            onExportReady={activeTab === "femelle" ? onWeeklyTrackingExportReady : undefined}
           />
           <ProductionTrackingTable
             farmId={farmId}

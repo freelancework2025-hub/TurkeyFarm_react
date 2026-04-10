@@ -15,6 +15,7 @@ import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import { mergeHebdoRowsWithDailyReports } from "@/lib/mergeDailyReportsIntoWeeklyHebdo";
 import { canonicalSemaine } from "@/lib/semaineCanonical";
 import { fetchMortaliteCumulFinSemainePrecedente, parseSemaineIndex } from "@/lib/mortalitePrevWeekCumul";
+import { sortSemaines } from "@/utils/semaineAgeUtils";
 import type { ResumeProductionHebdoExportParams } from "@/lib/resumeProductionHebdoExport";
 import {
   RESUME_PRODUCTION_WEEKLY_UI_DATE,
@@ -29,6 +30,7 @@ import {
   RESUME_PRODUCTION_TRANSPORT_LABEL_COLSPAN,
   RESUME_PRODUCTION_WEEKLY_TOTAL_LABEL_COLSPAN,
   getResumeProductionWeeklyTotalLabel,
+  getTransportMortaliteLabel,
   RESUME_PRODUCTION_LIVRAISON_TABLE_HEADERS,
   RESUME_PRODUCTION_LIVRAISON_HEADER_CLASS,
   RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL,
@@ -188,7 +190,7 @@ export default function WeeklyProductionSummaryContent({
     }
 
     const livraisonsPromise = api.livraisonsAliment
-      .list({ farmId, lot, sem: semaineCanon })
+      .list({ farmId, lot })
       .then((list) => setLivraisonsAlimentList(list ?? []))
       .catch(() => setLivraisonsAlimentList([]));
 
@@ -546,18 +548,22 @@ export default function WeeklyProductionSummaryContent({
     };
   }, [productionByKey, allBatiments]);
 
-  // EFFECTIF RESTANT FIN DE SEMAINE: computed from aggregated data so it matches Effectif départ and
-  // avoids double-counting when the backend chains effectif across bâtiments (B2 départ = B1 restant).
-  // Formula: effectif_départ (total) - mortalité (total) - sorties (vente + conso + autre).
+  // EFFECTIF RESTANT FIN DE SEMAINE: Prefer backend value from resume summary.
+  // Fallback calculation uses the SAME formula as backend:
+  // EFFECTIF RESTANT = Effectif mis en place - Cumul mortality (last row) - Total production (REPORT + VENTE + CONSO + AUTRE)
   const effectifRestantFinSemaineComputed = useMemo(() => {
-    const depart = totalEffectifDepart ?? 0;
-    const mortalite = weeklyTotals.totalMortality ?? 0;
-    const sorties =
-      (aggregatedProduction.venteNbre ?? 0) +
-      (aggregatedProduction.consoNbre ?? 0) +
-      (aggregatedProduction.autreNbre ?? 0);
-    return Math.max(0, depart - mortalite - sorties);
-  }, [totalEffectifDepart, weeklyTotals.totalMortality, aggregatedProduction.venteNbre, aggregatedProduction.consoNbre, aggregatedProduction.autreNbre]);
+    // Effectif mis en place: initial number of birds placed (sum across all batiments/sexes)
+    const effectifMisEnPlace = aggregatedSetup.effectifMisEnPlace ?? 0;
+    
+    // Cumul mortality (last row): cumulative mortality at end of week
+    const lastCumulMortality = totalMortaliteCumulFinSemaine ?? 0;
+    
+    // Total production: REPORT + VENTE + CONSO + AUTRE
+    const totalProductionNb = aggregatedProduction.totalNbre ?? 0;
+    
+    // Apply formula: Effectif mis en place - Cumul mortality - Total production
+    return Math.max(0, effectifMisEnPlace - lastCumulMortality - totalProductionNb);
+  }, [aggregatedSetup.effectifMisEnPlace, totalMortaliteCumulFinSemaine, aggregatedProduction.totalNbre]);
 
   // Stock for the chosen semaine: effectif restant computed; poids vif summed; stock aliment = sum of stock
   // for each sex in each activated batiment (batiment+sex with a setup record).
@@ -594,10 +600,30 @@ export default function WeeklyProductionSummaryContent({
     };
   }, [stockByKey, setups, allBatiments, effectifRestantFinSemaineComputed, effectifRestantFromBackend]);
 
-  /** Quantité livrée = sum of QTE for the selected semaine (from livraisons aliment) */
+  /** Quantité livrée cumulative = sum of QTE for all semaines up to and including the current semaine */
   const quantiteLivreeSemaine = useMemo(() => {
+    // Get all unique semaines from livraisons
+    const allSemaines = new Set(
+      livraisonsAlimentList
+        .map((r) => canonicalSemaine(r.sem ?? ""))
+        .filter((s) => s.trim() !== "")
+    );
+    
+    // Add current semaine to ensure it's in the sorted list (even if no data for this week)
+    allSemaines.add(semaineCanon);
+    
+    // Sort semaines (S1, S2, S3, ...)
+    const sortedSemaines = sortSemaines([...allSemaines]);
+    
+    // Find the index of current semaine (now guaranteed to exist)
+    const currentIndex = sortedSemaines.indexOf(semaineCanon);
+    
+    // Get all semaines up to and including current
+    const semainesUpToCurrent = sortedSemaines.slice(0, currentIndex + 1);
+    
+    // Sum QTE for all these semaines (will include previous weeks even if current week has no data)
     return livraisonsAlimentList
-      .filter((r) => canonicalSemaine(r.sem ?? "") === semaineCanon)
+      .filter((r) => semainesUpToCurrent.includes(canonicalSemaine(r.sem ?? "")))
       .reduce((sum, r) => sum + (Number(r.qte) || 0), 0);
   }, [livraisonsAlimentList, semaineCanon]);
 
@@ -823,7 +849,7 @@ export default function WeeklyProductionSummaryContent({
                   colSpan={RESUME_PRODUCTION_TRANSPORT_LABEL_COLSPAN}
                   className="border-r border-border px-2 py-2 text-center font-semibold text-foreground align-middle"
                 >
-                  {RESUME_PRODUCTION_TRANSPORT_ROW_LABEL}
+                  {getTransportMortaliteLabel(semaine)}
                 </td>
                 <td className="border-r border-border px-1 py-2 text-center tabular-nums align-middle bg-amber-100/80 dark:bg-amber-950/40">
                   {formatGroupedNumber(totalMortaliteTransportAllBatiments, 0)}

@@ -16,6 +16,7 @@ import {
   RESUME_PRODUCTION_TRANSPORT_ROW_LABEL,
   RESUME_PRODUCTION_LIVRAISON_TOTAL_LABEL,
   formatResumeProductionHebdoPct,
+  getTransportMortaliteLabel,
 } from "@/lib/resumeProductionHebdoShared";
 
 export interface ResumeProductionHebdoExportParams {
@@ -164,7 +165,7 @@ export async function exportToExcel(params: ResumeProductionHebdoExportParams): 
   currentRow++;
   const TRANSPORT_CUMUL_BG = "FFFEF9C4";
   ws.mergeCells(currentRow, 1, currentRow, 4);
-  ws.getCell(currentRow, 1).value = RESUME_PRODUCTION_TRANSPORT_ROW_LABEL;
+  ws.getCell(currentRow, 1).value = getTransportMortaliteLabel(semaine);
   ws.getCell(currentRow, 1).font = { bold: true };
   ws.getCell(currentRow, 1).alignment = { horizontal: "center", vertical: "middle" };
   for (let c = 1; c <= weeklyColCount; c++) {
@@ -372,17 +373,15 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
   doc.text(`3. Suivi hebdomadaire — Tous bâtiments — ${semaine}`, margin, y);
   y += 6;
   const weeklyHeaders = [...RESUME_PRODUCTION_WEEKLY_EXPORT_HEADERS];
-  const transportRowPdf: (string | number)[] = [
-    RESUME_PRODUCTION_TRANSPORT_ROW_LABEL,
+  const transportRowPdf: (string | number | { content: string; colSpan: number; styles: { halign: string; fontStyle: string } })[] = [
     "",
-    "",
-    "",
+    { content: getTransportMortaliteLabel(semaine), colSpan: 3, styles: { halign: 'center', fontStyle: 'bold' } },
     formatGroupedNumber(mortaliteTransportTousBatiments, 0),
     mortaliteTransportPct != null ? formatResumeProductionHebdoPct(mortaliteTransportPct) : "—",
     "—",
   ];
   const weeklyBody = [
-    transportRowPdf.map(String),
+    transportRowPdf,
     ...weeklyRows.map((r) => [
       r.recordDate,
       r.ageJour != null ? formatGroupedNumber(r.ageJour, 0) : "—",
@@ -417,7 +416,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
 
   autoTable(doc, {
     head: [weeklyHeaders],
-    body: weeklyBody.map((row) => row.map(String)),
+    body: weeklyBody,
     startY: y,
     margin: { left: margin, right: margin },
     theme: "grid",
@@ -425,6 +424,7 @@ export function exportToPdf(params: ResumeProductionHebdoExportParams): void {
     headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
     alternateRowStyles: { fillColor: [232, 230, 225] },
     didParseCell: (data) => {
+      // Bold and style the total row (last row)
       if (data.section === "body" && data.row.index === weeklyBody.length - 1) {
         (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fontStyle = "bold";
         (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fillColor = [216, 214, 208];

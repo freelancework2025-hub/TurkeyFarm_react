@@ -392,6 +392,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
     ["CONSOMME ALIMENT (kg)", formatVal(consumption?.consommationAlimentSemaine)],
     ["CUMUL ALIMENT CONSOMME", formatVal(consumption?.cumulAlimentConsomme)],
     ["INDICE EAU/ALIMENT", formatVal(consumption?.indiceEauAliment)],
+    ["CONSO ALIMENT Kg/J", consumption?.consommationAlimentSemaine != null ? formatVal(consumption.consommationAlimentSemaine / 7) : "—"],
   ];
   consoRows.forEach(([label, val], i) => addDataRow([label, val], i % 2 === 1));
   row++;
@@ -704,6 +705,7 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
         ["CONSOMME ALIMENT (kg)", formatVal(consumption.consommationAlimentSemaine)],
         ["CUMUL ALIMENT CONSOMME", formatVal(consumption.cumulAlimentConsomme)],
         ["INDICE EAU/ALIMENT", formatVal(consumption.indiceEauAliment)],
+        ["CONSO ALIMENT Kg/J", consumption.consommationAlimentSemaine != null ? formatVal(consumption.consommationAlimentSemaine / 7) : "—"],
       ]
     : [["—", "Aucune donnée"]];
   autoTable(doc, {
@@ -742,6 +744,591 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   });
   y = lastY() + 8;
 
+  doc.setFont("helvetica", "bold");
+  doc.text("7. Stock", margin, y);
+  y += 6;
+  const stockBody: [string, string][] = stock
+    ? [
+        ["Effectif restant fin de semaine", formatVal(stock.effectifRestantFinSemaine)],
+        ["Poids vif produit (kg)", formatVal(stock.poidsVifProduitKg)],
+        ["Stock aliment", formatVal(stock.stockAliment)],
+      ]
+    : [["—", "Aucune donnée"]];
+  autoTable(doc, {
+    head: [["INDICATEUR", "VALEUR"]],
+    body: stockBody,
+    startY: y,
+    margin: { left: margin, right: margin },
+    theme: "grid",
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [232, 230, 225] },
+  });
+
+  doc.save(`Suivi_Technique_${batiment}_${sex}_${safeFileName([lot, semaine])}.pdf`);
+}
+
+/**
+ * Type definition for display data from WeeklyTrackingTable component
+ */
+export interface WeeklyTrackingDisplayData {
+  rows: Array<{
+    id: string;
+    recordDate: string;
+    ageJour: string;
+    mortaliteNbre: string;
+    mortalitePct: string;
+    mortaliteCumul: string;
+    mortaliteCumulPct: string;
+    consoEauL: string;
+    tempMin: string;
+    tempMax: string;
+    vaccination: string;
+    traitement: string;
+    observation: string;
+  }>;
+  effectifDepart: string;
+  mortaliteTransportDisplay: {
+    cumul: number;
+    cumulPctDisplay: string;
+  } | null;
+  weeklyTotals: {
+    totalMortality: number;
+    totalWater: number;
+  };
+  totalCumulFooterDisplay: number;
+  effectifInitial?: number;
+  setup?: any;
+}
+
+/**
+ * Export WeeklyTrackingTable display data to Excel.
+ * Uses pre-computed display values from the component for weekly tracking (no recalculation).
+ * Fetches other tables (Production, Consumption, Performance, Stock) from API.
+ */
+export async function exportToExcelFromDisplayData(
+  params: SuiviTechniqueBatimentExportParams,
+  displayData: WeeklyTrackingDisplayData
+): Promise<void> {
+  const { farmName, farmId, lot, semaine, batiment, sex } = params;
+  const { rows, effectifDepart, mortaliteTransportDisplay, weeklyTotals, totalCumulFooterDisplay, setup } = displayData;
+
+  // Fetch other table data from API (these don't have calculation issues)
+  const [production, consumption, performance, stock] = await Promise.all([
+    api.suiviProductionHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+    api.suiviConsommationHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+    api.suiviPerformancesHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+    api.suiviStock.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+  ]);
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "ElevagePro";
+  const ws = workbook.addWorksheet("Suivi technique", { views: [{ state: "frozen", ySplit: 6, activeCell: "A7", showGridLines: true }] });
+  ws.columns = [
+    { width: 28 },
+    { width: 14 },
+    { width: 14 },
+    { width: 14 },
+    { width: 18 },
+    { width: 18 },
+    { width: 18 },
+    { width: 16 },
+    { width: 16 },
+    { width: 20 },
+    { width: 20 },
+    { width: 24 },
+  ];
+
+  let row = 1;
+  const addTitle = (text: string, colSpan = SUIVI_HEBDO_DATA_COLUMN_COUNT) => {
+    ws.mergeCells(row, 1, row, colSpan);
+    const cell = ws.getCell(row, 1);
+    cell.value = text;
+    cell.font = { size: 12, bold: true, color: { argb: HEADER_TEXT } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: HEADER_PRIMARY } };
+    cell.border = BORDERS_ALL;
+    cell.alignment = { horizontal: "left" };
+    row += 2;
+  };
+  const addInfoRow = (label: string, value: string | number) => {
+    ws.getCell(row, 1).value = label;
+    ws.getCell(row, 2).value = value;
+    for (let c = 1; c <= 2; c++) {
+      ws.getCell(row, c).border = BORDERS_ALL;
+      ws.getCell(row, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8E6E1" } };
+    }
+    row++;
+  };
+  const addTableHeader = (headers: string[]) => {
+    for (let c = 0; c < headers.length; c++) {
+      const cell = ws.getCell(row, c + 1);
+      cell.value = headers[c];
+      cell.font = { bold: true, color: { argb: HEADER_TEXT } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: HEADER_PRIMARY } };
+      cell.border = BORDERS_ALL;
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+    }
+    row++;
+  };
+  const addDataRow = (values: (string | number)[], isAlt = false) => {
+    for (let c = 0; c < values.length; c++) {
+      const cell = ws.getCell(row, c + 1);
+      cell.value = values[c];
+      cell.border = BORDERS_ALL;
+      if (isAlt) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
+    }
+    row++;
+  };
+
+  addTitle(`SUIVI TECHNIQUE HEBDOMADAIRE — ${batiment} — ${sex} — ${semaine}`);
+  addInfoRow("Ferme", farmName || "—");
+  addInfoRow("Lot", lot || "—");
+  addInfoRow("Semaine", semaine || "—");
+  row++;
+
+  if (setup) {
+    addTitle("1. Données mises en place — Configuration initiale");
+    addInfoRow("Type d'élevage", setup.typeElevage ?? "—");
+    addInfoRow("Date d'éclosion", setup.dateEclosion ?? "—");
+    addInfoRow("Heure de mise en place", setup.heureMiseEnPlace ?? "—");
+    addInfoRow("Date de mise en place", setup.dateMiseEnPlace ?? "—");
+    addInfoRow("Souche", setup.souche ?? "—");
+    addInfoRow(
+      "Effectif mis en place",
+      setup.effectifMisEnPlace != null ? formatGroupedNumber(setup.effectifMisEnPlace, 0) : "—"
+    );
+    addInfoRow("Fournisseur", setup.origineFournisseur ?? "—");
+    row++;
+  }
+
+  addTitle(`2. Effectif départ de ${semaine}`);
+  addInfoRow(
+    `Effectif départ de ${semaine}`,
+    effectifDepart && effectifDepart.trim() !== "" ? formatGroupedNumber(parseInt(effectifDepart, 10), 0) : "—"
+  );
+  row++;
+
+  addTitle(`3. Suivi hebdomadaire — ${sex} — ${semaine}`);
+  const hebdoHeaders = [...SUIVI_HEBDO_EXPORT_HEADERS];
+  addTableHeader(hebdoHeaders);
+
+  // Transport mortality row
+  const TRANSPORT_CUMUL_BG = "FFFEF9C4";
+  ws.mergeCells(row, 1, row, 4);
+  ws.getCell(row, 1).value = "MORTALITE DU TRANSPORT";
+  ws.getCell(row, 1).font = { bold: true };
+  ws.getCell(row, 1).alignment = { horizontal: "center", vertical: "middle" };
+  for (let c = 1; c <= SUIVI_HEBDO_DATA_COLUMN_COUNT; c++) {
+    ws.getCell(row, c).border = BORDERS_ALL;
+  }
+  ws.getCell(row, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: ROW_ALT } };
+  ws.getCell(row, 5).value = mortaliteTransportDisplay ? formatGroupedNumber(mortaliteTransportDisplay.cumul, 0) : "—";
+  ws.getCell(row, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TRANSPORT_CUMUL_BG } };
+  ws.getCell(row, 5).alignment = { horizontal: "center", vertical: "middle" };
+  ws.getCell(row, 6).value = mortaliteTransportDisplay?.cumulPctDisplay || "—";
+  ws.getCell(row, 6).alignment = { horizontal: "center", vertical: "middle" };
+  for (let c = 7; c <= SUIVI_HEBDO_DATA_COLUMN_COUNT; c++) {
+    ws.getCell(row, c).value = "";
+  }
+  row++;
+
+  // Data rows - use display data directly (already formatted)
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    addDataRow(
+      [
+        r.recordDate ?? "—",
+        r.ageJour || "—",
+        r.mortaliteNbre || "—",
+        r.mortalitePct || "—",
+        r.mortaliteCumul || "—",
+        r.mortaliteCumulPct || "—",
+        r.consoEauL || "—",
+        r.tempMin || "—",
+        r.tempMax || "—",
+        safeStr(r.vaccination),
+        safeStr(r.traitement),
+        safeStr(r.observation),
+      ],
+      i % 2 === 1
+    );
+  }
+
+  if (rows.length === 0) {
+    addDataRow(["Aucune donnée", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]);
+  }
+
+  // Total row
+  if (rows.length > 0) {
+    const effectifVal = effectifDepart && effectifDepart.trim() !== "" ? parseInt(effectifDepart, 10) : null;
+    const totalMortPct = effectifVal && effectifVal > 0 ? (weeklyTotals.totalMortality / effectifVal) * 100 : null;
+    const finalCumulPct = effectifVal && effectifVal > 0 ? (totalCumulFooterDisplay / effectifVal) * 100 : null;
+
+    ws.getCell(row, 1).value = `TOTAL ${semaine}`;
+    ws.getCell(row, 1).font = { bold: true };
+    ws.getCell(row, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
+    ws.getCell(row, 3).value = formatGroupedNumber(weeklyTotals.totalMortality, 0);
+    ws.getCell(row, 4).value = totalMortPct != null ? formatPctExport(totalMortPct) : "—";
+    ws.getCell(row, 5).value = formatGroupedNumber(totalCumulFooterDisplay, 0);
+    ws.getCell(row, 6).value = finalCumulPct != null ? formatPctExport(finalCumulPct) : "—";
+    ws.getCell(row, 7).value = formatGroupedNumber(weeklyTotals.totalWater, 2);
+    for (let c = 1; c <= hebdoHeaders.length; c++) {
+      ws.getCell(row, c).border = BORDERS_ALL;
+      if (c !== 1) ws.getCell(row, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
+    }
+    row++;
+  }
+  row++;
+
+  // Section 4: Production
+  addTitle("4. Suivi de la livraison — Production");
+  addTableHeader(["INDICATEUR", "NB", "POIDS (kg)"]);
+  const prodRows: [string, string, string][] = [
+    [
+      "REPORT",
+      production?.reportNbre != null ? formatGroupedNumber(production.reportNbre, 0) : "—",
+      production?.reportPoids != null ? formatGroupedNumber(Number(production.reportPoids), 2) : "—",
+    ],
+    [
+      "VENTE",
+      production?.venteNbre != null ? formatGroupedNumber(production.venteNbre, 0) : "—",
+      production?.ventePoids != null ? formatGroupedNumber(Number(production.ventePoids), 2) : "—",
+    ],
+    [
+      "CONSOMMATION employeur",
+      production?.consoNbre != null ? formatGroupedNumber(production.consoNbre, 0) : "—",
+      production?.consoPoids != null ? formatGroupedNumber(Number(production.consoPoids), 2) : "—",
+    ],
+    [
+      "AUTRE gratuit",
+      production?.autreNbre != null ? formatGroupedNumber(production.autreNbre, 0) : "—",
+      production?.autrePoids != null ? formatGroupedNumber(Number(production.autrePoids), 2) : "—",
+    ],
+    [
+      "TOTAL",
+      production?.totalNbre != null ? formatGroupedNumber(production.totalNbre, 0) : "—",
+      production?.totalPoids != null ? formatGroupedNumber(Number(production.totalPoids), 2) : "—",
+    ],
+  ];
+  prodRows.forEach(([label, nb, poids], i) => {
+    addDataRow([label, nb, poids], i % 2 === 1);
+    if (label === "TOTAL") {
+      ws.getCell(row - 1, 1).font = { bold: true };
+      ws.getCell(row - 1, 1).fill = ws.getCell(row - 1, 2).fill = ws.getCell(row - 1, 3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TOTAL_BG } };
+    }
+  });
+  row++;
+
+  // Section 5: Consumption
+  addTitle("5. Consommation");
+  addTableHeader(["INDICATEUR", "VALEUR"]);
+  const consoRows: [string, string][] = [
+    ["CONSOMME ALIMENT (kg)", formatVal(consumption?.consommationAlimentSemaine)],
+    ["CUMUL ALIMENT CONSOMME", formatVal(consumption?.cumulAlimentConsomme)],
+    ["INDICE EAU/ALIMENT", formatVal(consumption?.indiceEauAliment)],
+    ["CONSO ALIMENT Kg/J", consumption?.consommationAlimentSemaine != null ? formatVal(consumption.consommationAlimentSemaine / 7) : "—"],
+  ];
+  consoRows.forEach(([label, val], i) => addDataRow([label, val], i % 2 === 1));
+  row++;
+
+  // Section 6: Performance
+  addTitle("6. Performances");
+  addTableHeader(["INDICATEUR", "REEL", "NORME", "ÉCART"]);
+  const perfRows: [string, string, string, string][] = performance
+    ? [
+        ["POIDS MOYEN (g)", formatVal(performance.poidsMoyenReel, "g"), formatVal(performance.poidsMoyenNorme, "g"), formatVal(performance.poidsMoyenEcart, "g")],
+        ["HOMOGÉNÉITÉ (%)", formatVal(performance.homogeneiteReel, "%"), formatVal(performance.homogeneiteNorme, "%"), formatVal(performance.homogeneiteEcart, "%")],
+        ["INDICE DE CONSOMMATION", formatVal(performance.indiceConsommationReel), formatVal(performance.indiceConsommationNorme), formatVal(performance.indiceConsommationEcart)],
+        ["GMQ (g/jour)", formatVal(performance.gmqReel, "g/j"), formatVal(performance.gmqNorme, "g/j"), formatVal(performance.gmqEcart, "g/j")],
+        ["VIABILITÉ (%)", formatVal(performance.viabiliteReel, "%"), formatVal(performance.viabiliteNorme, "%"), formatVal(performance.viabiliteEcart, "%")],
+      ]
+    : [["—", "Aucune donnée", "—", "—"]];
+  perfRows.forEach((perfRow, i) => addDataRow(perfRow, i % 2 === 1));
+  row++;
+
+  // Section 7: Stock
+  addTitle("7. Stock");
+  addTableHeader(["INDICATEUR", "VALEUR"]);
+  const stockRows: [string, string][] = stock
+    ? [
+        ["Effectif restant fin de semaine", formatVal(stock.effectifRestantFinSemaine)],
+        ["Poids vif produit (kg)", formatVal(stock.poidsVifProduitKg)],
+        ["Stock aliment", formatVal(stock.stockAliment)],
+      ]
+    : [["—", "Aucune donnée"]];
+  stockRows.forEach(([label, val], i) => addDataRow([label, val], i % 2 === 1));
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Suivi_Technique_${batiment}_${sex}_${safeFileName([lot, semaine])}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export WeeklyTrackingTable display data to PDF.
+ * Uses pre-computed display values from the component for weekly tracking (no recalculation).
+ * Fetches other tables (Production, Consumption, Performance, Stock) from API.
+ */
+export async function exportToPdfFromDisplayData(
+  params: SuiviTechniqueBatimentExportParams,
+  displayData: WeeklyTrackingDisplayData
+): Promise<void> {
+  const { farmName, farmId, lot, semaine, batiment, sex } = params;
+  const { rows, effectifDepart, mortaliteTransportDisplay, weeklyTotals, totalCumulFooterDisplay, setup } = displayData;
+
+  // Fetch other table data from API (these don't have calculation issues)
+  const [production, consumption, performance, stock] = await Promise.all([
+    api.suiviProductionHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+    api.suiviConsommationHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+    api.suiviPerformancesHebdo.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+    api.suiviStock.get({ farmId, lot, semaine, sex, batiment }).catch(() => null),
+  ]);
+
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const margin = 12;
+  const pageWidth = (doc as { internal?: { pageSize?: { width: number } } }).internal?.pageSize?.width ?? 297;
+  const lastY = () => (doc as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY ?? 0;
+
+  doc.setFillColor(61, 46, 26);
+  doc.rect(0, 0, pageWidth, 18, "F");
+  doc.setTextColor(247, 246, 243);
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.text("SUIVI TECHNIQUE HEBDOMADAIRE", margin, 12);
+
+  doc.setFillColor(225, 224, 219);
+  doc.rect(0, 18, pageWidth, 10, "F");
+  doc.setTextColor(38, 36, 21);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text(`Ferme: ${farmName || "—"}  |  Lot: ${lot || "—"}  |  Semaine: ${semaine || "—"}  |  Bâtiment: ${batiment || "—"}  |  Sexe: ${sex || "—"}`, margin, 24);
+
+  let y = 32;
+  doc.setTextColor(0, 0, 0);
+
+  if (setup) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("1. Données mises en place — Configuration initiale", margin, y);
+    y += 6;
+    const setupBody: [string, string][] = [
+      ["Type d'élevage", setup.typeElevage ?? "—"],
+      ["Date d'éclosion", setup.dateEclosion ?? "—"],
+      ["Heure de mise en place", setup.heureMiseEnPlace ?? "—"],
+      ["Date de mise en place", setup.dateMiseEnPlace ?? "—"],
+      ["Souche", setup.souche ?? "—"],
+      ["Effectif mis en place", formatGroupedNumber(setup.effectifMisEnPlace, 0)],
+      ["Fournisseur", setup.origineFournisseur ?? "—"],
+    ];
+    autoTable(doc, {
+      head: [["CHAMP", "VALEUR"]],
+      body: setupBody,
+      startY: y,
+      margin: { left: margin, right: margin },
+      theme: "grid",
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [232, 230, 225] },
+    });
+    y = lastY() + 8;
+  }
+
+  doc.setFont("helvetica", "bold");
+  doc.text(
+    `2. Effectif départ de ${semaine}: ${effectifDepart && effectifDepart.trim() !== "" ? formatGroupedNumber(parseInt(effectifDepart, 10), 0) : "—"}`,
+    margin,
+    y
+  );
+  y += 8;
+
+  doc.setFont("helvetica", "bold");
+  doc.text(`3. Suivi hebdomadaire — ${sex} — ${semaine}`, margin, y);
+  y += 6;
+
+  const hebdoHeaders = [...SUIVI_HEBDO_EXPORT_HEADERS];
+  const transportRowPdf: string[] = [
+    "MORTALITE DU TRANSPORT",
+    "",
+    "",
+    "",
+    mortaliteTransportDisplay ? formatGroupedNumber(mortaliteTransportDisplay.cumul, 0) : "—",
+    mortaliteTransportDisplay?.cumulPctDisplay || "—",
+    "—",
+    "—",
+    "—",
+    "—",
+    "—",
+    "—",
+  ];
+
+  const hebdoBody: string[][] = [
+    transportRowPdf,
+    ...rows.map((r) => [
+      r.recordDate ?? "—",
+      r.ageJour || "—",
+      r.mortaliteNbre || "—",
+      r.mortalitePct || "—",
+      r.mortaliteCumul || "—",
+      r.mortaliteCumulPct || "—",
+      r.consoEauL || "—",
+      r.tempMin || "—",
+      r.tempMax || "—",
+      safeStr(r.vaccination),
+      safeStr(r.traitement),
+      safeStr(r.observation),
+    ]),
+  ];
+
+  if (rows.length === 0) {
+    hebdoBody.push(["Aucune donnée", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]);
+  } else {
+    const effectifVal = effectifDepart && effectifDepart.trim() !== "" ? parseInt(effectifDepart, 10) : null;
+    const totalMortPct = effectifVal && effectifVal > 0 ? (weeklyTotals.totalMortality / effectifVal) * 100 : null;
+    const finalCumulPct = effectifVal && effectifVal > 0 ? (totalCumulFooterDisplay / effectifVal) * 100 : null;
+
+    hebdoBody.push([
+      `TOTAL ${semaine}`,
+      "—",
+      formatGroupedNumber(weeklyTotals.totalMortality, 0),
+      totalMortPct != null ? formatPctExport(totalMortPct) : "—",
+      formatGroupedNumber(totalCumulFooterDisplay, 0),
+      finalCumulPct != null ? formatPctExport(finalCumulPct) : "—",
+      formatGroupedNumber(weeklyTotals.totalWater, 2),
+      "—",
+      "—",
+      "—",
+      "—",
+      "—",
+    ]);
+  }
+
+  autoTable(doc, {
+    head: [hebdoHeaders],
+    body: hebdoBody.map((row) => row.map(String)),
+    startY: y,
+    margin: { left: margin, right: margin },
+    theme: "grid",
+    styles: { fontSize: 7 },
+    headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [232, 230, 225] },
+    didParseCell: (data) => {
+      if (
+        data.section === "body" &&
+        rows.length > 0 &&
+        data.row.index === hebdoBody.length - 1
+      ) {
+        (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fontStyle = "bold";
+        (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fillColor = [216, 214, 208];
+      }
+    },
+  });
+  y = lastY() + 8;
+
+  // Section 4: Production
+  doc.setFont("helvetica", "bold");
+  doc.text("4. Suivi de la livraison — Production", margin, y);
+  y += 6;
+  const prodBody: [string, string, string][] = production
+    ? [
+        [
+          "REPORT",
+          production.reportNbre != null ? formatGroupedNumber(production.reportNbre, 0) : "—",
+          production.reportPoids != null ? formatGroupedNumber(Number(production.reportPoids), 2) : "—",
+        ],
+        [
+          "VENTE",
+          production.venteNbre != null ? formatGroupedNumber(production.venteNbre, 0) : "—",
+          production.ventePoids != null ? formatGroupedNumber(Number(production.ventePoids), 2) : "—",
+        ],
+        [
+          "CONSOMMATION employeur",
+          production.consoNbre != null ? formatGroupedNumber(production.consoNbre, 0) : "—",
+          production.consoPoids != null ? formatGroupedNumber(Number(production.consoPoids), 2) : "—",
+        ],
+        [
+          "AUTRE gratuit",
+          production.autreNbre != null ? formatGroupedNumber(production.autreNbre, 0) : "—",
+          production.autrePoids != null ? formatGroupedNumber(Number(production.autrePoids), 2) : "—",
+        ],
+        [
+          "TOTAL",
+          production.totalNbre != null ? formatGroupedNumber(production.totalNbre, 0) : "—",
+          production.totalPoids != null ? formatGroupedNumber(Number(production.totalPoids), 2) : "—",
+        ],
+      ]
+    : [["—", "Aucune donnée", "—"]];
+  autoTable(doc, {
+    head: [["INDICATEUR", "NB", "POIDS (kg)"]],
+    body: prodBody,
+    startY: y,
+    margin: { left: margin, right: margin },
+    theme: "grid",
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [232, 230, 225] },
+    didParseCell: (data) => {
+      if (data.section === "body" && data.row.index === prodBody.length - 1) {
+        (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fontStyle = "bold";
+        (data.cell.styles as { fontStyle?: string; fillColor?: number[] }).fillColor = [216, 214, 208];
+      }
+    },
+  });
+  y = lastY() + 8;
+
+  // Section 5: Consumption
+  doc.setFont("helvetica", "bold");
+  doc.text("5. Consommation", margin, y);
+  y += 6;
+  const consoBody: [string, string][] = consumption
+    ? [
+        ["CONSOMME ALIMENT (kg)", formatVal(consumption.consommationAlimentSemaine)],
+        ["CUMUL ALIMENT CONSOMME", formatVal(consumption.cumulAlimentConsomme)],
+        ["INDICE EAU/ALIMENT", formatVal(consumption.indiceEauAliment)],
+        ["CONSO ALIMENT Kg/J", consumption.consommationAlimentSemaine != null ? formatVal(consumption.consommationAlimentSemaine / 7) : "—"],
+      ]
+    : [["—", "Aucune donnée"]];
+  autoTable(doc, {
+    head: [["INDICATEUR", "VALEUR"]],
+    body: consoBody,
+    startY: y,
+    margin: { left: margin, right: margin },
+    theme: "grid",
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [232, 230, 225] },
+  });
+  y = lastY() + 8;
+
+  // Section 6: Performance
+  doc.setFont("helvetica", "bold");
+  doc.text("6. Performances", margin, y);
+  y += 6;
+  const perfBody: [string, string, string, string][] = performance
+    ? [
+        ["POIDS MOYEN (g)", formatVal(performance.poidsMoyenReel, "g"), formatVal(performance.poidsMoyenNorme, "g"), formatVal(performance.poidsMoyenEcart, "g")],
+        ["HOMOGÉNÉITÉ (%)", formatVal(performance.homogeneiteReel, "%"), formatVal(performance.homogeneiteNorme, "%"), formatVal(performance.homogeneiteEcart, "%")],
+        ["INDICE DE CONSOMMATION", formatVal(performance.indiceConsommationReel), formatVal(performance.indiceConsommationNorme), formatVal(performance.indiceConsommationEcart)],
+        ["GMQ (g/jour)", formatVal(performance.gmqReel, "g/j"), formatVal(performance.gmqNorme, "g/j"), formatVal(performance.gmqEcart, "g/j")],
+        ["VIABILITÉ (%)", formatVal(performance.viabiliteReel, "%"), formatVal(performance.viabiliteNorme, "%"), formatVal(performance.viabiliteEcart, "%")],
+      ]
+    : [["—", "Aucune donnée", "—", "—"]];
+  autoTable(doc, {
+    head: [["INDICATEUR", "REEL", "NORME", "ÉCART"]],
+    body: perfBody,
+    startY: y,
+    margin: { left: margin, right: margin },
+    theme: "grid",
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [61, 46, 26], textColor: [247, 246, 243], fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [232, 230, 225] },
+  });
+  y = lastY() + 8;
+
+  // Section 7: Stock
   doc.setFont("helvetica", "bold");
   doc.text("7. Stock", margin, y);
   y += 6;

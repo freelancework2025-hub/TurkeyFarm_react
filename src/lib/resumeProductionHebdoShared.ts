@@ -33,6 +33,18 @@ export const RESUME_PRODUCTION_WEEKLY_SUB_CUMUL = "CUMUL";
 
 export const RESUME_PRODUCTION_TRANSPORT_ROW_LABEL = "MORTALITE DU TRANSPORT";
 
+/**
+ * Get the appropriate label for the transport mortality row based on semaine.
+ * S1: "MORTALITE DU TRANSPORT"
+ * S2+: "report mortalité"
+ */
+export function getTransportMortaliteLabel(semaine: string): string {
+  const match = semaine.trim().match(/^S(\d+)$/i);
+  if (!match) return RESUME_PRODUCTION_TRANSPORT_ROW_LABEL;
+  const weekNum = parseInt(match[1], 10);
+  return weekNum >= 2 ? "report mortalité" : RESUME_PRODUCTION_TRANSPORT_ROW_LABEL;
+}
+
 export function getResumeProductionWeeklyTotalLabel(semaine: string): string {
   return `TOTAL ${semaine.trim() || "—"}`;
 }
