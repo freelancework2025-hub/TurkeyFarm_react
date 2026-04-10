@@ -435,6 +435,15 @@ export const api = {
       }),
     delete: (id: number, token?: string | null) =>
       apiFetch<void>(`/api/sorties/${id}`, { method: "DELETE", token: token ?? getStoredToken() }),
+    /**
+     * Synchronize Sortie data to SuiviProductionHebdo.
+     * Aggregates Sortie records by sex and type, then updates production tracking tables.
+     */
+    syncToProduction: (lot: string, semaine: string, token?: string | null) =>
+      apiFetch<SortieAggregationResult>(`/api/sorties/sync-to-production?lot=${encodeURIComponent(lot)}&semaine=${encodeURIComponent(semaine)}`, {
+        method: "POST",
+        token: token ?? getStoredToken(),
+      }),
   },
   /** Fournisseurs — Prix d'Aliment grid; optional farmId for Admin/RT/Backoffice */
   fournisseurs: {
@@ -1470,6 +1479,13 @@ export interface SortieResponse {
   version: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Result of syncing Sortie data to SuiviProductionHebdo */
+export interface SortieAggregationResult {
+  success: boolean;
+  message: string;
+  updatedRecords: number;
 }
 
 /** Fournisseurs — Prix d'Aliment grid */

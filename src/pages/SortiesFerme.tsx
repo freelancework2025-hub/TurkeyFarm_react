@@ -263,6 +263,7 @@ export default function SortiesFerme() {
   /** Qté brute: raw while focused, grouped when blurred (Livraisons Aliment). */
   const [qteFocusRowId, setQteFocusRowId] = useState<string | null>(null);
   const [newSemaineInput, setNewSemaineInput] = useState("");
+  const [syncing, setSyncing] = useState(false);
   const originalSavedRowsRef = useRef<Map<number, SortieRow>>(new Map());
   const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
@@ -612,12 +613,48 @@ export default function SortiesFerme() {
         );
         const merged: SortieRow = { ...row, serverId: created.id };
         originalSavedRowsRef.current.set(created.id, { ...merged });
+        
+        // Auto-sync to production after successful save (silent, no user notification)
+        if (pageFarmId) {
+          try {
+            const token = sessionStorage.getItem('elevagepro_token');
+            const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:7070';
+            await fetch(`${apiBase}/api/sorties/sync-to-production?lot=${encodeURIComponent(lotParam.trim())}&semaine=${encodeURIComponent(selectedSemaine)}&farmId=${pageFarmId}`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            });
+          } catch {
+            // Silent failure - sync happens in background
+          }
+        }
+        
         return;
       }
 
       await api.sorties.update(row.serverId, req, undefined);
       originalSavedRowsRef.current.set(row.serverId, { ...row });
       toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
+      
+      // Auto-sync to production after successful save (silent, no user notification)
+      if (pageFarmId) {
+        try {
+          const token = sessionStorage.getItem('elevagepro_token');
+          const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:7070';
+          await fetch(`${apiBase}/api/sorties/sync-to-production?lot=${encodeURIComponent(lotParam.trim())}&semaine=${encodeURIComponent(selectedSemaine)}&farmId=${pageFarmId}`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+        } catch {
+          // Silent failure - sync happens in background
+        }
+      }
+      
       loadSorties();
     } catch {
       toast({ title: "Erreur", description: "Impossible d'enregistrer la ligne.", variant: "destructive" });
@@ -694,6 +731,63 @@ export default function SortiesFerme() {
     canAccessAllFarms && isValidFarmId
       ? (farms.find((f) => f.id === pageFarmId)?.name ?? "Ferme")
       : (selectedFarmName ?? "Ferme");
+
+  const handleSyncToProduction = async () => {
+    if (!canCreate || !lotParam.trim() || !selectedSemaine) return;
+    if (!pageFarmId) {
+      toast({
+        title: "Erreur",
+        description: "Farm ID non disponible. Veuillez sélectionner une ferme.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setSyncing(true);
+    try {
+      // Call sync endpoint directly with farmId parameter
+      const token = sessionStorage.getItem('elevagepro_token');
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:7070';
+      const url = `${apiBase}/api/sorties/sync-to-production?lot=${encodeURIComponent(lotParam.trim())}&semaine=${encodeURIComponent(selectedSemaine)}&farmId=${pageFarmId}`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Sync failed');
+      }
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        toast({
+          title: "Synchronisation réussie",
+          description: result.message,
+        });
+      } else {
+        toast({
+          title: "Erreur de synchronisation",
+          description: result.message,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Impossible de synchroniser les données.";
+      toast({
+        title: "Erreur",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const handleExportExcel = async () => {
     if (!canShowExport || !lotParam.trim() || !selectedSemaine) return;
@@ -791,6 +885,35 @@ export default function SortiesFerme() {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+            </TooltipProvider>
+          )}
+          {canShowExport && canCreate && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleSyncToProduction}
+                    disabled={syncing}
+                    className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-gradient-to-r from-blue-500 to-blue-600 text-white text-sm font-medium hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+                  >
+                    {syncing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Synchronisation...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" />
+                        Synchroniser avec Production
+                      </>
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="font-medium max-w-xs">
+                  Synchroniser les données vers le tableau "Suivi de la livraison" dans Suivi Technique Hebdomadaire
+                </TooltipContent>
+              </Tooltip>
             </TooltipProvider>
           )}
         </div>

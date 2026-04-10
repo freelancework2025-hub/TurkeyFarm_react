@@ -444,7 +444,7 @@ export default function Utilisateurs() {
           </DialogHeader>
           <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
             <div className="overflow-y-auto flex-1 min-h-0 px-6 py-2 space-y-4">
-            {isUserManager && (
+            {canManageUsers && (
               <div className="flex items-center gap-4 pb-2 border-b border-border">
                 {editingUser ? (
                   <>
