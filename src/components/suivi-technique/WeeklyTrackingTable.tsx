@@ -288,14 +288,31 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
           return row.mortaliteCumul != null && row.mortaliteCumul !== expectedCumul;
         });
       
-      // If merged journalier/hebdo should be persisted OR transport cumul needs a backend pass OR cumulative values are wrong
-      if ((needsPersistMergedWeek || needsTransportRecalculation || needsCumulativeRecalculation) && (canCreate || canUpdate) && !effectiveReadOnly) {
+      // Auto-fix effectif_depart chain for S2+ (silent, automatic)
+      let correctedEffectifDepart: number | null = null;
+      if (!isFirstWeek && stockPrev?.effectifRestantFinSemaine != null && list.length > 0) {
+        const currentEffectif = list[0].effectifDepart;
+        const expectedEffectif = stockPrev.effectifRestantFinSemaine;
+        
+        if (currentEffectif != null && currentEffectif !== expectedEffectif) {
+          console.log(
+            `[Auto-fix] Effectif mismatch detected for ${semaineCanon}: ` +
+            `current=${currentEffectif}, expected=${expectedEffectif}. Auto-correcting...`
+          );
+          correctedEffectifDepart = expectedEffectif;
+        }
+      }
+      
+      // If merged journalier/hebdo should be persisted OR transport cumul needs a backend pass OR cumulative values are wrong OR effectif needs correction
+      if ((needsPersistMergedWeek || needsTransportRecalculation || needsCumulativeRecalculation || correctedEffectifDepart !== null) && (canCreate || canUpdate) && !effectiveReadOnly) {
         try {
-          if (needsPersistMergedWeek) {
-            const weekEffectifDepart =
-              list.find((rec) => rec.effectifDepart != null)?.effectifDepart ??
-              (!isFirstWeek && prevSem != null ? stockPrev?.effectifRestantFinSemaine ?? null : null) ??
-              (isFirstWeek && effectifInitial != null && effectifInitial > 0 ? effectifInitial : null);
+          if (needsPersistMergedWeek || correctedEffectifDepart !== null) {
+            // Use corrected effectif if available, otherwise calculate as before
+            const weekEffectifDepart = correctedEffectifDepart !== null
+              ? correctedEffectifDepart
+              : list.find((rec) => rec.effectifDepart != null)?.effectifDepart ??
+                (!isFirstWeek && prevSem != null ? stockPrev?.effectifRestantFinSemaine ?? null : null) ??
+                (isFirstWeek && effectifInitial != null && effectifInitial > 0 ? effectifInitial : null);
 
             const rowsToSave = mapped
               .filter((row) => row.recordDate?.trim())
@@ -311,6 +328,14 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
 
             if (rowsToSave.length > 0) {
               await saveHebdoRequestsSequentially(rowsToSave, farmId);
+              
+              // Console logs for debugging (can be removed in production)
+              if (correctedEffectifDepart !== null) {
+                console.log(`[Auto-fix] Effectif_depart corrected for ${semaineCanon}: ${correctedEffectifDepart}`);
+              }
+              if (needsPersistMergedWeek) {
+                console.log(`[Auto-sync] ${rowsToSave.length} daily report(s) synced for ${semaineCanon}`);
+              }
             }
           } else if (needsTransportRecalculation) {
             // Force recalculation of transport cumulative for existing data
@@ -337,7 +362,8 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
           setHasSavedEffectif(!!savedEffectif);
           return; // Skip the rest of the loading logic since we've already set the rows
         } catch (error) {
-          console.warn("Auto-recalculation failed:", error);
+          console.error("[Auto-fix] Error during automatic sync/correction:", error);
+          // Silent failure - don't show error to user
         }
       }
       
@@ -472,6 +498,28 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   useEffect(() => {
     load();
   }, [load]);
+
+  // Auto-sync polling: Check for new daily reports every 30 seconds
+  // This ensures data is always in sync without requiring manual refresh
+  useEffect(() => {
+    // Only poll if user has permissions and not in read-only mode
+    if (effectiveReadOnly || (!canCreate && !canUpdate)) return;
+
+    // Poll every 30 seconds
+    const pollInterval = setInterval(() => {
+      // Only poll if page is visible (not in background tab)
+      if (document.hidden) return;
+
+      // Trigger load which will run auto-sync if needed
+      // The load() function already has all the sync logic
+      load().catch((error) => {
+        console.error("[Auto-poll] Error during background sync:", error);
+      });
+    }, 30000); // 30 seconds
+
+    // Cleanup on unmount
+    return () => clearInterval(pollInterval);
+  }, [load, effectiveReadOnly, canCreate, canUpdate]);
 
   /**
    * Valeur « MORTALITE DU TRANSPORT » (offset) pour la semaine courante, **même bâtiment + sexe** que ce tableau:
