@@ -1192,6 +1192,7 @@ export default function Dashboard() {
                         value={costsSummary.effectifRestantFinSemaine ?? 0}
                         icon={TwoBirdsIcon}
                         animateValue
+                        status={(costsSummary.effectifRestantFinSemaine ?? 0) < 0 ? "danger" : "neutral"}
                       />
                     </MagicCard>
                   </div>

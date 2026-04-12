@@ -562,7 +562,8 @@ export default function WeeklyProductionSummaryContent({
     const totalProductionNb = aggregatedProduction.totalNbre ?? 0;
     
     // Apply formula: Effectif mis en place - Cumul mortality - Total production
-    return Math.max(0, effectifMisEnPlace - lastCumulMortality - totalProductionNb);
+    // Allow negative values to reflect data inconsistencies
+    return effectifMisEnPlace - lastCumulMortality - totalProductionNb;
   }, [aggregatedSetup.effectifMisEnPlace, totalMortaliteCumulFinSemaine, aggregatedProduction.totalNbre]);
 
   // Stock for the chosen semaine: effectif restant computed; poids vif summed; stock aliment = sum of stock

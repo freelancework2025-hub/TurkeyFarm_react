@@ -158,7 +158,9 @@ export default function StockTrackingTable({
               <td className="px-4 py-2.5 border-r border-border font-medium text-foreground">
                 EFFECTIF RESTANT FIN DE SEMAINE
               </td>
-              <td className="px-3 py-2.5 text-center tabular-nums text-foreground border-l border-border bg-muted/20">
+              <td className={`px-3 py-2.5 text-center tabular-nums border-l border-border bg-muted/20 ${
+                (data?.effectifRestantFinSemaine ?? 0) < 0 ? 'text-red-600 font-semibold' : 'text-foreground'
+              }`}>
                 {formatNumber(data?.effectifRestantFinSemaine ?? null)}
               </td>
             </tr>
