@@ -999,7 +999,7 @@ export default function InfosSetup() {
                         <th>Origine/Fournisseur</th>
                         <th>Date d'éclosion</th>
                         <th>Souche</th>
-                        {canFillSetupInfo ? <th className="w-10">Actions</th> : null}
+                        {canFillSetupInfo ? <th colSpan={2} className="w-10">Actions</th> : null}
                       </tr>
                     </thead>
                     <tbody>

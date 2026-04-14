@@ -1118,45 +1118,17 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
                 const readOnly = effectiveReadOnly || (saved && !canUpdate && !isPlaceholder);
                 const inputBase = "w-full bg-transparent border-0 outline-none px-1 py-1 text-sm focus:ring-1 focus:ring-ring rounded " + (readOnly ? "bg-muted/40 cursor-not-allowed" : "");
                 const comp = mortalityComputedByRowId.get(row.id);
-                const pctJourDisplay =
-                  row.mortalitePct.trim() !== ""
-                    ? `${row.mortalitePct.replace(".", ",")} %`
-                    : comp?.mortalitePct
-                      ? `${comp.mortalitePct.replace(".", ",")} %`
-                      : "—";
-                const apiCumulParsed = row.mortaliteCumul.trim() === "" ? null : parseInt(row.mortaliteCumul, 10);
-                const compCumulParsed = comp?.mortaliteCumul ? parseInt(comp.mortaliteCumul, 10) : null;
                 
-                // Debug logging for cumulative values
-                if (row.recordDate === "2026-04-07") { // Day 6 from the user's example
-                  console.log("DEBUG Day 6 cumulative values:", {
-                    recordDate: row.recordDate,
-                    apiCumulRaw: row.mortaliteCumul,
-                    apiCumulParsed,
-                    compCumulRaw: comp?.mortaliteCumul,
-                    compCumulParsed,
-                    mortaliteNbre: row.mortaliteNbre
-                  });
-                }
-                
-                /** API may return 0 from uninitialized DB columns while client running cumul is correct */
-                const preferClientCumul =
-                  apiCumulParsed === 0 &&
-                  compCumulParsed != null &&
-                  !Number.isNaN(compCumulParsed) &&
-                  compCumulParsed > 0;
-                const cumulDisplay =
-                  row.mortaliteCumul.trim() !== "" && !preferClientCumul
-                    ? formatIntCell(row.mortaliteCumul)
-                    : comp?.mortaliteCumul
-                      ? formatGroupedNumber(parseInt(comp.mortaliteCumul, 10) || 0, 0)
-                      : "—";
-                const pctCumulDisplay =
-                  row.mortaliteCumulPct.trim() !== "" && !preferClientCumul
-                    ? `${row.mortaliteCumulPct.replace(".", ",")} %`
-                    : comp?.mortaliteCumulPct
-                      ? `${comp.mortaliteCumulPct.replace(".", ",")} %`
-                      : "—";
+                // Always use client-side computed values for instant, synchronized display
+                const pctJourDisplay = comp?.mortalitePct
+                  ? `${comp.mortalitePct.replace(".", ",")} %`
+                  : "—";
+                const cumulDisplay = comp?.mortaliteCumul
+                  ? formatGroupedNumber(parseInt(comp.mortaliteCumul, 10) || 0, 0)
+                  : "—";
+                const pctCumulDisplay = comp?.mortaliteCumulPct
+                  ? `${comp.mortaliteCumulPct.replace(".", ",")} %`
+                  : "—";
                 return (
                   <tr
                     key={row.id}
