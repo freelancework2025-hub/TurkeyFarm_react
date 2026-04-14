@@ -605,6 +605,8 @@ export default function SortiesFerme() {
           return;
         }
         toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         setRows((prev) =>
           prev.map((r) =>
             r.id === row.id ? { ...r, serverId: created.id } : r
@@ -636,6 +638,8 @@ export default function SortiesFerme() {
       await api.sorties.update(row.serverId, req, undefined);
       originalSavedRowsRef.current.set(row.serverId, { ...row });
       toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
+      // Dispatch event to refresh price alert counter immediately
+      window.dispatchEvent(new CustomEvent('priceAlertChanged'));
       
       // Auto-sync to production after successful save (silent, no user notification)
       if (pageFarmId) {

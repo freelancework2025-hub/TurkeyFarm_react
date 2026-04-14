@@ -577,6 +577,8 @@ export default function DepensesDivers() {
           title: "Ligne mise à jour",
           description: `Le ${row.date} a été mis à jour.`,
         });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         loadMovements();
       } else {
         const created = await api.depensesDivers.create(req);
@@ -584,6 +586,8 @@ export default function DepensesDivers() {
           title: isVs ? "Vide sanitaire enregistré" : "Ligne enregistrée",
           description: `Le ${row.date} a été enregistré.`,
         });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         setRows((prev) =>
           prev.map((r) =>
             r.id === row.id

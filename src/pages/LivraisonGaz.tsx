@@ -617,6 +617,8 @@ export default function LivraisonGaz() {
         pageFarmId ?? undefined
       );
       toast({ title: "Vide sanitaire enregistré", description: "Les données du vide sanitaire ont été enregistrées." });
+      // Dispatch event to refresh price alert counter immediately
+      window.dispatchEvent(new CustomEvent('priceAlertChanged'));
       loadMovements();
     } catch {
       /* API error — logged in backend only */
@@ -674,10 +676,14 @@ export default function LivraisonGaz() {
       if (row.serverId != null) {
         await api.livraisonsGaz.update(row.serverId, req);
         toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         loadMovements();
       } else {
         const created = await api.livraisonsGaz.create(req);
         toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         setRows((prev) =>
           prev.map((r) =>
             r.id === row.id

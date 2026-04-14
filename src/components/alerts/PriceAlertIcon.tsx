@@ -51,6 +51,21 @@ export default function PriceAlertIcon() {
     return () => clearInterval(interval);
   }, [fetchCount, canViewAlerts]);
 
+  // Listen for custom event to refresh count immediately
+  useEffect(() => {
+    if (!canViewAlerts) return;
+
+    const handlePriceAlertChanged = () => {
+      fetchCount();
+    };
+
+    window.addEventListener('priceAlertChanged', handlePriceAlertChanged);
+
+    return () => {
+      window.removeEventListener('priceAlertChanged', handlePriceAlertChanged);
+    };
+  }, [fetchCount, canViewAlerts]);
+
   // Refresh count when dialog closes
   const handleDialogChange = (open: boolean) => {
     setDialogOpen(open);

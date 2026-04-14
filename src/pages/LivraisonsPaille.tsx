@@ -618,6 +618,8 @@ export default function LivraisonsPaille() {
         pageFarmId ?? undefined
       );
       toast({ title: "Vide sanitaire enregistré", description: "Les données du vide sanitaire ont été enregistrées." });
+      // Dispatch event to refresh price alert counter immediately
+      window.dispatchEvent(new CustomEvent('priceAlertChanged'));
       loadMovements();
     } catch {
       toast({
@@ -680,10 +682,14 @@ export default function LivraisonsPaille() {
       if (row.serverId != null) {
         await api.livraisonsPaille.update(row.serverId, req);
         toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         loadMovements();
       } else {
         const created = await api.livraisonsPaille.create(req);
         toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         setRows((prev) =>
           prev.map((r) =>
             r.id === row.id

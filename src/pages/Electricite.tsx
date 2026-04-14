@@ -607,9 +607,13 @@ export default function Electricite() {
       if (row.serverId != null) {
         await api.livraisonsElectricite.update(row.serverId, req);
         toast({ title: "Ligne mise à jour", description: `Le ${row.date} a été mis à jour.` });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
       } else {
         const created = await api.livraisonsElectricite.create(req);
         toast({ title: "Ligne enregistrée", description: `Le ${row.date} a été enregistré.` });
+        // Dispatch event to refresh price alert counter immediately
+        window.dispatchEvent(new CustomEvent('priceAlertChanged'));
         setRows((prev) =>
           prev.map((r) =>
             r.id === row.id

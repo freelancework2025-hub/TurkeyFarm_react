@@ -107,6 +107,9 @@ export default function PriceAlertList({ open, onOpenChange }: PriceAlertListPro
       
       // Refresh the list
       fetchAlerts(page);
+      
+      // Dispatch custom event to refresh the counter immediately
+      window.dispatchEvent(new CustomEvent('priceAlertChanged'));
     } catch (error) {
       console.error("Failed to confirm alert:", error);
       toast({
