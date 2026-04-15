@@ -99,6 +99,7 @@ export default function ResumeProductionHebdoPage() {
 
   const effectifRestantFinSemaine = toOptionalNumber(coutSummary?.effectifRestantFinSemaine);
   const totalNbreProduction = toOptionalNumber(coutSummary?.totalNbreProduction);
+  const poidsVifProduitKg = toOptionalNumber(coutSummary?.poidsVifProduitKg);
 
   const backUrl = farmId != null && lot && semaine
     ? `/suivi-technique-hebdomadaire?farmId=${farmId}&lot=${encodeURIComponent(lot)}&semaine=${encodeURIComponent(semaine)}`
@@ -210,6 +211,7 @@ export default function ResumeProductionHebdoPage() {
           farmName={farmName}
           effectifRestantFinSemaine={effectifRestantFinSemaine}
           totalNbreProduction={totalNbreProduction}
+          poidsVifProduitKg={poidsVifProduitKg}
           onExportParamsReady={handleExportParamsReady}
         />
       )}

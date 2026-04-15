@@ -135,7 +135,7 @@ function floatCloseEnough(a: number | null | undefined, b: number | null | undef
   return Math.abs(Number(a) - Number(b)) < 1e-5;
 }
 
-/** True when journalier should be written to DB: new unsaved merged lines, or saved lines still missing daily fields. */
+/** True when journalier should be written to DB: new unsaved merged lines, or saved lines still missing daily fields, or daily reports without hebdo rows. */
 function mergedWeekNeedsDbPersist(
   mapped: WeeklyRow[],
   list: SuiviTechniqueHebdoResponse[],
@@ -147,6 +147,21 @@ function mergedWeekNeedsDbPersist(
 
   const dailyWeek = dailyList.filter((d) => dailyReportMatchesSuiviContext(d, opts));
   if (dailyWeek.length === 0) return false;
+
+  // NEW CHECK: Detect daily reports without corresponding hebdo rows
+  // This fixes the "missing first day" issue - when daily report exists but hebdo row doesn't
+  const dailyDatesSet = new Set(dailyWeek.map(d => d.reportDate));
+  const savedDatesInMapped = new Set(
+    mapped
+      .filter(row => isSavedRow(row.id) && row.recordDate?.trim())
+      .map(row => row.recordDate)
+  );
+  const missingDates = [...dailyDatesSet].filter(date => !savedDatesInMapped.has(date));
+  
+  if (missingDates.length > 0) {
+    console.log(`[Auto-sync] Found ${missingDates.length} daily report(s) without hebdo rows:`, missingDates);
+    return true;
+  }
 
   const byDate = new Map<string, DailyReportResponse>();
   for (const d of dailyWeek) {
@@ -760,20 +775,11 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
   }, [rows]);
 
   /**
-   * S1 often has no `effectifDepart` in state until the user clicks « Enregistrer effectif », while S2+
-   * already get a positive effectif from stock. Use the setup effectif (placeholder) as fallback so
-   * % mortalité and cumuls match the behaviour of other semaines for display.
+   * Effectif mis en place from setup (InfosSetup) - used for mortality % calculations.
+   * This is the original number of birds placed at the start, NOT effectif départ.
+   * Formula: % Mortality = (Mortality NBRE / Effectif mis en place) × 100
    */
-  const effectifPourCalculMortalite = useMemo(() => {
-    const trimmed = effectifDepart?.trim() ?? "";
-    if (trimmed !== "") {
-      const n = parseInt(trimmed, 10);
-      if (!Number.isNaN(n) && n > 0) return n;
-      return null;
-    }
-    if (effectifInitial != null && effectifInitial > 0) return effectifInitial;
-    return null;
-  }, [effectifDepart, effectifInitial]);
+  const effectifMisEnPlace = effectifInitial;
 
   /**
    * NEW LOGIC: Starting point for cumul calculation
@@ -840,14 +846,16 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
 
   /**
    * NEW LOGIC - Computed mortality stats:
-   * - Mortalité % (Journée) = (Mortalité NBRE du jour / Effectif départ de la semaine) × 100
+   * - Mortalité % (Journée) = (Mortalité NBRE du jour / Effectif mis en place) × 100
    * - Mortalité CUMUL = sum of NBRE from day 1 to current day
    *   (For S1: starts from 0, first day's NBRE becomes the first cumul; for S2+: starts from previous week's end)
-   * - Mortalité % CUMUL = (Mortalité CUMUL / Effectif départ de la semaine) × 100
+   * - Mortalité % CUMUL = (Mortalité CUMUL / Effectif mis en place) × 100
+   * NOTE: Uses Effectif mis en place (effectifInitial), NOT Effectif départ
    */
   const mortalityComputedByRowId = useMemo(() => {
-    const effectif = effectifPourCalculMortalite;
-    if (effectif == null)
+    // Use Effectif mis en place for mortality % calculations (not effectif départ)
+    const effectif = effectifMisEnPlace;
+    if (effectif == null || effectif <= 0)
       return new Map<string, { mortalitePct: string; mortaliteCumul: string; mortaliteCumulPct: string }>();
 
     const withDate = rows.filter((r) => r.recordDate && r.recordDate.trim() !== "");
@@ -870,7 +878,7 @@ export default function WeeklyTrackingTable({ farmId, lot, semaine, sex, batimen
       });
     }
     return map;
-  }, [rows, effectifPourCalculMortalite, isFirstWeek, prevWeekEndCumulMortalite]);
+  }, [rows, effectifMisEnPlace, isFirstWeek, prevWeekEndCumulMortalite]);
 
   /**
    * NEW LOGIC - Ligne MORTALITE DU TRANSPORT (now shows the starting point):

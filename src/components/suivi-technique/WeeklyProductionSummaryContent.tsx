@@ -66,6 +66,8 @@ export interface WeeklyProductionSummaryContentProps {
   effectifRestantFinSemaine?: number | null;
   /** From getResumeSummary — report + vente + conso + autre (preferred over local computation) */
   totalNbreProduction?: number | null;
+  /** From getResumeSummary — POIDS VIF PRODUIT EN KG (preferred over local computation) */
+  poidsVifProduitKg?: number | null;
   /** Callback to pass export params to parent */
   onExportParamsReady?: (params: ResumeProductionHebdoExportParams) => void;
 }
@@ -88,6 +90,7 @@ export default function WeeklyProductionSummaryContent({
   farmName = "Ferme",
   effectifRestantFinSemaine: effectifRestantFromBackend,
   totalNbreProduction: totalNbreFromBackend,
+  poidsVifProduitKg: poidsVifProduitKgFromBackend,
   onExportParamsReady,
 }: WeeklyProductionSummaryContentProps) {
   const semaineCanon = useMemo(() => canonicalSemaine(semaine), [semaine]);
@@ -568,14 +571,21 @@ export default function WeeklyProductionSummaryContent({
 
   // Stock for the chosen semaine: effectif restant computed; poids vif summed; stock aliment = sum of stock
   // for each sex in each activated batiment (batiment+sex with a setup record).
+  // Uses backend-computed values when available (from getResumeSummary) for faster loading
   const aggregatedStock = useMemo(() => {
-    let poidsVifProduitKg = 0;
-    for (const batiment of allBatiments) {
-      for (const sex of SEXES) {
-        const s = stockByKey.get(key(batiment, sex));
-        if (s?.poidsVifProduitKg != null) poidsVifProduitKg += Number(s.poidsVifProduitKg);
-      }
-    }
+    // Use backend-computed poidsVif if available (avoids many individual stock API calls)
+    const poidsVif = poidsVifProduitKgFromBackend != null
+      ? Number(poidsVifProduitKgFromBackend)
+      : (() => {
+          let v = 0;
+          for (const batiment of allBatiments) {
+            for (const sex of SEXES) {
+              const s = stockByKey.get(key(batiment, sex));
+              if (s?.poidsVifProduitKg != null) v += Number(s.poidsVifProduitKg);
+            }
+          }
+          return v;
+        })();
     // Sum of stock aliment over each sex in each activated batiment (only batiment+sex with setup)
     let stockAlimentSum = 0;
     let hasAnyStock = false;
@@ -596,10 +606,10 @@ export default function WeeklyProductionSummaryContent({
       : effectifRestantFinSemaineComputed;
     return {
       effectifRestantFinSemaine: effectifRestant,
-      poidsVifProduitKg,
+      poidsVifProduitKg: poidsVif,
       stockAliment: stockAlimentFinal,
     };
-  }, [stockByKey, setups, allBatiments, effectifRestantFinSemaineComputed, effectifRestantFromBackend]);
+  }, [stockByKey, setups, allBatiments, effectifRestantFinSemaineComputed, effectifRestantFromBackend, poidsVifProduitKgFromBackend]);
 
   /** Quantité livrée cumulative = sum of QTE for all semaines up to and including the current semaine */
   const quantiteLivreeSemaine = useMemo(() => {
