@@ -986,7 +986,7 @@ export default function ProduitsVeterinaires() {
                                   onChange={(e) => updateRow(row.id, "supplier", e.target.value)}
                                   placeholder="—"
                                   disabled={rowReadOnly}
-                                  className="min-w-[100px] bg-transparent border-0 outline-none text-sm"
+                                  className="min-w-[54px] bg-transparent border-0 outline-none text-sm"
                                 />
                               </td>
                               <td>
@@ -1036,7 +1036,7 @@ export default function ProduitsVeterinaires() {
                                     value={row.prixPerUnit}
                                     onChange={(value) => updateRow(row.id, "prixPerUnit", value)}
                                     placeholder="—"
-                                    className="w-full min-w-[5.625rem] tabular-nums text-center"
+                                    className="w-full min-w-[4rem] tabular-nums text-center"
                                   />
                                 )}
                               </td>

@@ -13,6 +13,7 @@ import { formatGroupedNumber } from "@/lib/formatResumeAmount";
 import {
   SUIVI_HEBDO_DATA_COLUMN_COUNT,
   SUIVI_HEBDO_EXPORT_HEADERS,
+  getTransportMortaliteLabel,
 } from "@/lib/suiviTechniqueHebdomadaireShared";
 
 export interface SuiviTechniqueBatimentExportParams {
@@ -235,7 +236,7 @@ export async function exportToExcel(params: SuiviTechniqueBatimentExportParams):
   const transportPctExport = mortaliteTransportPctStr(mortaliteTransportStartingPoint, effectifDepart);
   const TRANSPORT_CUMUL_BG = "FFFEF9C4";
   ws.mergeCells(row, 1, row, 4);
-  ws.getCell(row, 1).value = "MORTALITE DU TRANSPORT";
+  ws.getCell(row, 1).value = getTransportMortaliteLabel(semaine);
   ws.getCell(row, 1).font = { bold: true };
   ws.getCell(row, 1).alignment = { horizontal: "center", vertical: "middle" };
   for (let c = 1; c <= SUIVI_HEBDO_DATA_COLUMN_COUNT; c++) {
@@ -521,7 +522,7 @@ export async function exportToPdf(params: SuiviTechniqueBatimentExportParams): P
   const mortaliteTransportStartingPointPdf = getMortaliteTransportStartingPoint(semaine, sortedHebdo, transportCumulPdf);
   const transportPctPdf = mortaliteTransportPctStr(mortaliteTransportStartingPointPdf, effectifDepart);
   const transportRowPdf: string[] = [
-    "MORTALITE DU TRANSPORT",
+    getTransportMortaliteLabel(semaine),
     "",
     "",
     "",
@@ -915,7 +916,7 @@ export async function exportToExcelFromDisplayData(
   // Transport mortality row
   const TRANSPORT_CUMUL_BG = "FFFEF9C4";
   ws.mergeCells(row, 1, row, 4);
-  ws.getCell(row, 1).value = "MORTALITE DU TRANSPORT";
+  ws.getCell(row, 1).value = getTransportMortaliteLabel(semaine);
   ws.getCell(row, 1).font = { bold: true };
   ws.getCell(row, 1).alignment = { horizontal: "center", vertical: "middle" };
   for (let c = 1; c <= SUIVI_HEBDO_DATA_COLUMN_COUNT; c++) {
@@ -1151,7 +1152,7 @@ export async function exportToPdfFromDisplayData(
 
   const hebdoHeaders = [...SUIVI_HEBDO_EXPORT_HEADERS];
   const transportRowPdf: string[] = [
-    "MORTALITE DU TRANSPORT",
+    getTransportMortaliteLabel(semaine),
     "",
     "",
     "",

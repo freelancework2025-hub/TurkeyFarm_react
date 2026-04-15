@@ -28,11 +28,11 @@ export const PRODUITS_VETERINAIRES_HEADER_CLASS: Record<ProduitsVeterinairesHead
   DATE: "min-w-[90px]",
   SEM: "min-w-[40px]",
   DÉSIGNATION: "min-w-[140px]",
-  FOURNISSEUR: "min-w-[90px]",
-  UG: "min-w-[40px] w-[3.5rem]",
+  FOURNISSEUR: "min-w-[54px]",
+  UG: "min-w-[48px] w-[4.25rem]",
   "N° BR": "min-w-[55px] w-[4.5rem]",
   QTE: "min-w-[180px] w-[11rem] !text-center",
-  PRIX: "min-w-[110px] !text-center",
+  PRIX: "min-w-[70px] w-[4rem] !text-center",
   MONTANT: "min-w-[120px] !text-center",
 };
 
